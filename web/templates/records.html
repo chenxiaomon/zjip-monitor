@@ -1,0 +1,59 @@
+{% extends "_base.html" %}
+
+{% block title %}登记记录 — 数智通监控{% endblock %}
+{% block page_title %}登记记录{% endblock %}
+
+{% block content %}
+<!-- Filters -->
+<div class="flex flex-wrap gap-2 mb-4" id="filter-bar">
+  <!-- Account filter -->
+  <a href="/records{% if filter_status %}?status={{ filter_status }}{% endif %}"
+     class="px-3 py-1 rounded-full text-xs transition-colors
+            {% if not filter_account %}bg-blue-600 text-white{% else %}bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200{% endif %}">
+    全部账号
+  </a>
+  {% for acc in accounts_list %}
+  <a href="/records?account={{ acc.username }}{% if filter_status %}&status={{ filter_status }}{% endif %}"
+     class="px-3 py-1 rounded-full text-xs transition-colors
+            {% if filter_account == acc.username %}bg-blue-600 text-white{% else %}bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200{% endif %}">
+    {{ acc.company }}
+  </a>
+  {% endfor %}
+</div>
+
+<!-- Status filter -->
+<div class="flex flex-wrap gap-1.5 mb-4">
+  <a href="/records{% if filter_account %}?account={{ filter_account }}{% endif %}"
+     class="px-2.5 py-0.5 rounded-full text-xs transition-colors
+            {% if filter_status is none %}bg-gray-800 dark:bg-gray-200 text-white dark:text-gray-900{% else %}bg-gray-100 dark:bg-gray-700 text-gray-500{% endif %}">
+    全部状态
+  </a>
+  {% for code, label in AUDIT_STATUS.items() %}
+  <a href="/records?status={{ code }}{% if filter_account %}&account={{ filter_account }}{% endif %}"
+     class="px-2.5 py-0.5 rounded-full text-xs transition-colors s-pill-{{ code }}
+            {% if filter_status == code %}ring-2 ring-offset-1 ring-blue-400{% endif %}">
+    {{ label }}
+  </a>
+  {% endfor %}
+</div>
+
+<!-- Table -->
+<div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+  <div class="px-4 py-2.5 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
+    <span class="text-xs text-gray-500 dark:text-gray-400">共 {{ total }} 条记录（点击行展开原始数据）</span>
+  </div>
+  <table class="w-full">
+    <thead>
+      <tr class="bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-700">
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">公司 / 账号</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">登记编号</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">数据名称</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">行业</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">申请时间</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">状态</th>
+      </tr>
+    </thead>
+    {% include "_partials/records_table.html" %}
+  </table>
+</div>
+{% endblock %}

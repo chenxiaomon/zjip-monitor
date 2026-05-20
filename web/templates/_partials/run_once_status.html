@@ -1,0 +1,22 @@
+<div id="run-once-status"
+     {% if run_once.status == 'running' %}
+     hx-get="/run-once/status"
+     hx-trigger="every 3s"
+     hx-swap="outerHTML"
+     {% endif %}
+     class="flex items-center gap-2 text-sm">
+  {% if run_once.status == 'running' %}
+  <span class="inline-block w-3 h-3 rounded-full bg-blue-500 animate-pulse"></span>
+  <span class="text-blue-600 dark:text-blue-400">巡检中，请稍候…</span>
+  {% elif run_once.status == 'done' %}
+  <span class="text-green-600 dark:text-green-400 flex items-center gap-1">
+    <i class="ti ti-circle-check text-base"></i>巡检完成
+  </span>
+  {% elif run_once.status == 'error' %}
+  <span class="text-red-500 flex items-center gap-1">
+    <i class="ti ti-circle-x text-base"></i>巡检失败：{{ run_once.msg }}
+  </span>
+  {% else %}
+  <span class="text-gray-400 text-xs">上次巡检：手动触发</span>
+  {% endif %}
+</div>

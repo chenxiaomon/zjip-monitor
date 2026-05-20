@@ -1,0 +1,33 @@
+<div id="login-section" class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-5">
+  <div class="flex items-center justify-between mb-4">
+    <h3 class="text-sm font-medium text-gray-700 dark:text-gray-200">登录参数</h3>
+    {% if saved %}<span class="text-xs text-green-600 dark:text-green-400"><i class="ti ti-check"></i> 已保存</span>{% endif %}
+  </div>
+  <form hx-post="/settings/login"
+        hx-target="#login-section"
+        hx-swap="outerHTML"
+        class="space-y-3">
+    <div class="flex items-center gap-4">
+      <label class="text-xs text-gray-500 dark:text-gray-400 w-32 flex-shrink-0">Token 有效期（小时）</label>
+      <input type="number" name="token_max_age_hours" value="{{ login.get('token_max_age_hours', 8) }}"
+             min="1" max="72"
+             class="w-24 px-3 py-1.5 text-xs rounded border border-gray-200 dark:border-gray-600
+                    bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100
+                    focus:outline-none focus:ring-1 focus:ring-blue-500">
+    </div>
+    <label class="flex items-center gap-2 cursor-pointer">
+      <input type="checkbox" name="headless" value="on" {% if login.get('headless', True) %}checked{% endif %}
+             class="w-4 h-4 rounded accent-blue-600">
+      <span class="text-xs text-gray-700 dark:text-gray-200">无头模式（headless browser）</span>
+    </label>
+    <div class="text-xs text-gray-400 dark:text-gray-500">
+      浏览器：{{ login.get('browser', 'chromium') }}（只读）
+    </div>
+    <div class="pt-1">
+      <button type="submit"
+              class="px-4 py-1.5 text-xs rounded bg-blue-600 hover:bg-blue-700 text-white transition-colors cursor-pointer">
+        保存参数
+      </button>
+    </div>
+  </form>
+</div>

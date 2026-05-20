@@ -1,0 +1,57 @@
+<div id="changes-section"
+     class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden"
+     hx-get="/partials/changes{% if filter_account %}?account={{ filter_account }}{% endif %}"
+     hx-trigger="sse:update"
+     hx-swap="outerHTML">
+  {% if rows %}
+  <table class="w-full text-sm">
+    <thead>
+      <tr class="bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-700">
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 w-28">时间</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 w-28">公司</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">申请号</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">名称</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">变更</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100 dark:divide-gray-700/50">
+      {% for row in rows %}
+      <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors">
+        <td class="px-4 py-2.5 font-mono text-xs text-gray-400 dark:text-gray-500 whitespace-nowrap">
+          {{ row.timestamp | fmt_time }}
+        </td>
+        <td class="px-4 py-2.5 text-xs text-gray-600 dark:text-gray-300 truncate max-w-28" title="{{ row.company }}">
+          {{ row.company[:8] }}{% if row.company|length > 8 %}…{% endif %}
+        </td>
+        <td class="px-4 py-2.5 font-mono text-xs text-gray-400 dark:text-gray-500 whitespace-nowrap">
+          {{ row.reg_no[:14] if row.reg_no else '—' }}
+        </td>
+        <td class="px-4 py-2.5 text-xs text-gray-600 dark:text-gray-300 max-w-xs truncate" title="{{ row.name }}">
+          {{ row.name[:30] if row.name else '—' }}
+        </td>
+        <td class="px-4 py-2.5">
+          {% if row.type == 'changed' %}
+          <div class="flex items-center gap-1 flex-wrap">
+            <span class="px-1.5 py-0.5 rounded-full text-xs s-pill-{{ row.old_status_code }}">{{ row.old_status }}</span>
+            <span class="text-gray-300 dark:text-gray-600 text-xs">→</span>
+            <span class="px-1.5 py-0.5 rounded-full text-xs s-pill-{{ row.new_status_code }}">{{ row.new_status }}</span>
+          </div>
+          {% elif row.type == 'added' %}
+          <div class="flex items-center gap-1">
+            <span class="text-xs text-green-600 dark:text-green-400 font-medium">新增</span>
+            {% if row.new_status_code %}<span class="px-1.5 py-0.5 rounded-full text-xs s-pill-{{ row.new_status_code }}">{{ row.new_status }}</span>{% endif %}
+          </div>
+          {% else %}
+          <span class="text-xs text-red-500 font-medium">消失</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="px-5 py-12 text-center text-sm text-gray-400 dark:text-gray-500">
+    {% if filter_account %}该账号暂无变更记录{% else %}暂无变更记录{% endif %}
+  </div>
+  {% endif %}
+</div>

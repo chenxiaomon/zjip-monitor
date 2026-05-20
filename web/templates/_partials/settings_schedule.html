@@ -1,0 +1,50 @@
+<template id="cron-tpl">
+  <div class="flex gap-2">
+    <input type="text" name="crons" placeholder="0 9 * * *"
+           class="flex-1 px-3 py-1.5 font-mono text-xs rounded border border-gray-200 dark:border-gray-600
+                  bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100
+                  focus:outline-none focus:ring-1 focus:ring-blue-500">
+    <button type="button" onclick="this.parentElement.remove()"
+            class="px-2 text-gray-300 hover:text-red-400 transition-colors cursor-pointer">
+      <i class="ti ti-x text-sm"></i>
+    </button>
+  </div>
+</template>
+
+<div id="schedule-section" class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-5">
+  <div class="flex items-center justify-between mb-4">
+    <h3 class="text-sm font-medium text-gray-700 dark:text-gray-200">巡检计划（Asia/Shanghai）</h3>
+    {% if saved %}<span class="text-xs text-green-600 dark:text-green-400"><i class="ti ti-check"></i> 已保存</span>{% endif %}
+  </div>
+  <form hx-post="/settings/schedule"
+        hx-target="#schedule-section"
+        hx-swap="outerHTML"
+        class="space-y-2">
+    <div id="cron-list" class="space-y-2">
+      {% for cron in crons %}
+      <div class="flex gap-2">
+        <input type="text" name="crons" value="{{ cron }}"
+               placeholder="0 9 * * *"
+               class="flex-1 px-3 py-1.5 font-mono text-xs rounded border border-gray-200 dark:border-gray-600
+                      bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100
+                      focus:outline-none focus:ring-1 focus:ring-blue-500">
+        <button type="button" onclick="this.parentElement.remove()"
+                class="px-2 text-gray-300 hover:text-red-400 transition-colors cursor-pointer">
+          <i class="ti ti-x text-sm"></i>
+        </button>
+      </div>
+      {% endfor %}
+    </div>
+    <button type="button"
+            onclick="document.getElementById('cron-list').appendChild(document.getElementById('cron-tpl').content.cloneNode(true))"
+            class="text-xs text-blue-600 dark:text-blue-400 hover:underline cursor-pointer">
+      + 添加时间点
+    </button>
+    <div class="pt-2">
+      <button type="submit"
+              class="px-4 py-1.5 text-xs rounded bg-blue-600 hover:bg-blue-700 text-white transition-colors cursor-pointer">
+        保存计划
+      </button>
+    </div>
+  </form>
+</div>

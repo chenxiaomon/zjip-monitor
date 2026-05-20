@@ -1,0 +1,64 @@
+{% extends "_base.html" %}
+
+{% block title %}设置 — 数智通监控{% endblock %}
+{% block page_title %}设置{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+  <!-- Left column -->
+  <div class="space-y-4">
+    {% include "_partials/settings_schedule.html" %}
+    {% include "_partials/settings_login.html" %}
+  </div>
+
+  <!-- Right column -->
+  <div class="space-y-4">
+
+    <!-- Status code mapping -->
+    <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-5">
+      <h3 class="text-sm font-medium text-gray-700 dark:text-gray-200 mb-4">状态码映射（只读）</h3>
+      <table class="w-full">
+        <thead>
+          <tr class="border-b border-gray-100 dark:border-gray-700">
+            <th class="py-1.5 text-left text-xs font-medium text-gray-400 dark:text-gray-500">状态码</th>
+            <th class="py-1.5 text-left text-xs font-medium text-gray-400 dark:text-gray-500">含义</th>
+            <th class="py-1.5 text-left text-xs font-medium text-gray-400 dark:text-gray-500">颜色</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-50 dark:divide-gray-700/50">
+          {% for code, label in AUDIT_STATUS.items() %}
+          <tr>
+            <td class="py-2 font-mono text-xs text-gray-500 dark:text-gray-400">{{ code }}</td>
+            <td class="py-2 text-sm text-gray-700 dark:text-gray-200">{{ label }}</td>
+            <td class="py-2">
+              <span class="px-2 py-0.5 rounded-full text-xs s-pill-{{ code }}">{{ label }}</span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Scraper settings (read-only) -->
+    <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-5">
+      <h3 class="text-sm font-medium text-gray-700 dark:text-gray-200 mb-4">爬虫参数（只读）</h3>
+      <dl class="space-y-2">
+        <div class="flex justify-between text-xs">
+          <dt class="text-gray-500 dark:text-gray-400">每页记录数</dt>
+          <dd class="font-mono text-gray-700 dark:text-gray-200">{{ scraper.get('page_size', 50) }}</dd>
+        </div>
+        <div class="flex justify-between text-xs">
+          <dt class="text-gray-500 dark:text-gray-400">请求超时（秒）</dt>
+          <dd class="font-mono text-gray-700 dark:text-gray-200">{{ scraper.get('request_timeout_seconds', 30) }}</dd>
+        </div>
+        <div class="flex justify-between text-xs">
+          <dt class="text-gray-500 dark:text-gray-400">平台地址</dt>
+          <dd class="font-mono text-gray-700 dark:text-gray-200 truncate max-w-48">{{ cfg.get('base_url', '—') }}</dd>
+        </div>
+      </dl>
+    </div>
+
+  </div>
+</div>
+{% endblock %}

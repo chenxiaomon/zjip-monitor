@@ -1,0 +1,19 @@
+{% extends "_base.html" %}
+
+{% block title %}报表 — 数智通监控{% endblock %}
+{% block page_title %}报表{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-4">
+  <div id="gen-status" class="text-sm text-gray-400">{{ reports|length }} 份报表</div>
+  <button hx-post="/reports/generate"
+          hx-target="#gen-status"
+          hx-swap="outerHTML"
+          class="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md
+                 bg-blue-600 hover:bg-blue-700 text-white transition-colors cursor-pointer">
+    <i class="ti ti-refresh text-base"></i>生成新报表
+  </button>
+</div>
+
+{% include "_partials/reports_list.html" %}
+{% endblock %}

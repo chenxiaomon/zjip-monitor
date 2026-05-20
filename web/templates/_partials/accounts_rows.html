@@ -1,0 +1,7 @@
+{% for row in rows %}
+{% include "_partials/account_row.html" %}
+{% else %}
+<tr>
+  <td colspan="7" class="px-4 py-8 text-center text-sm text-gray-400 dark:text-gray-500">暂无账号数据</td>
+</tr>
+{% endfor %}

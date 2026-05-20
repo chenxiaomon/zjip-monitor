@@ -1,0 +1,56 @@
+{% extends "_base.html" %}
+
+{% block title %}账号 — 数智通监控{% endblock %}
+{% block page_title %}账号{% endblock %}
+
+{% block content %}
+<!-- Toolbar -->
+<div class="flex items-center justify-between mb-4">
+  <div id="run-once-status-wrapper" hx-ext="sse" sse-connect="/sse">
+    {% include "_partials/run_once_status.html" %}
+  </div>
+  <div class="flex items-center gap-2">
+    <button hx-get="/accounts/new-form"
+            hx-target="#modal-container"
+            hx-swap="innerHTML"
+            class="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md
+                   bg-green-600 hover:bg-green-700 text-white transition-colors cursor-pointer">
+      <i class="ti ti-plus text-base"></i>新增账号
+    </button>
+    <button hx-post="/run-once"
+            hx-target="#run-once-status"
+            hx-swap="outerHTML"
+            {% if run_once.status == 'running' %}disabled{% endif %}
+            class="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md
+                   bg-blue-600 hover:bg-blue-700 text-white transition-colors
+                   disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">
+      <i class="ti ti-player-play text-base"></i>立即巡检全部
+    </button>
+  </div>
+</div>
+
+<!-- Account table -->
+<div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+  <table class="w-full">
+    <thead>
+      <tr class="bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-700">
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">公司 / 联系人</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">账号</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">Token 状态</th>
+        <th class="px-4 py-2.5 text-right text-xs font-medium text-gray-500 dark:text-gray-400">记录数</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">最后巡检</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">操作</th>
+      </tr>
+    </thead>
+    <tbody id="account-tbody"
+           hx-get="/accounts/rows"
+           hx-trigger="accountSaved from:body"
+           hx-swap="innerHTML">
+      {% include "_partials/accounts_rows.html" %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Modal container (injected by HTMX) -->
+<div id="modal-container"></div>
+{% endblock %}

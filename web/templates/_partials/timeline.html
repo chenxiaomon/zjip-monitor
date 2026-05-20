@@ -1,0 +1,58 @@
+<div id="timeline-section"
+     class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg"
+     hx-get="/partials/timeline"
+     hx-trigger="sse:update"
+     hx-swap="outerHTML">
+  <div class="px-5 py-3 border-b border-gray-100 dark:border-gray-700">
+    <span class="text-sm font-medium text-gray-700 dark:text-gray-200">近 24 小时变更</span>
+  </div>
+  {% if events %}
+  <ul class="divide-y divide-gray-50 dark:divide-gray-700/50">
+    {% for event in events %}
+    {% set has_changes = event.changed|length + event.added|length + event.removed|length %}
+    {% if has_changes %}
+    <li class="flex gap-4 px-5 py-3">
+      <div class="w-14 flex-shrink-0 font-mono text-xs text-gray-400 dark:text-gray-500 pt-0.5">
+        {{ event.timestamp | fmt_time_short }}
+      </div>
+      <div class="flex-1 min-w-0">
+        <div class="text-sm text-gray-700 dark:text-gray-200 truncate mb-1.5">
+          {{ event.company }}
+        </div>
+        <!-- Status changes -->
+        {% for c in event.changed[:3] %}
+        <div class="flex items-center gap-1 flex-wrap mb-1">
+          <span class="font-mono text-xs text-gray-400 truncate max-w-32">{{ c.reg_no }}</span>
+          <span class="px-1.5 py-0.5 rounded-full text-xs s-pill-{{ c.old_status_code }}">{{ c.old_status }}</span>
+          <span class="text-gray-300 dark:text-gray-600 text-xs">→</span>
+          <span class="px-1.5 py-0.5 rounded-full text-xs s-pill-{{ c.new_status_code }}">{{ c.new_status }}</span>
+        </div>
+        {% endfor %}
+        {% if event.changed|length > 3 %}
+        <div class="text-xs text-gray-400">… 共 {{ event.changed|length }} 条变更</div>
+        {% endif %}
+        <!-- Added -->
+        {% for a in event.added[:2] %}
+        <div class="flex items-center gap-1 flex-wrap mb-1">
+          <span class="text-xs text-green-600 dark:text-green-400">新增</span>
+          <span class="text-xs text-gray-600 dark:text-gray-300 truncate max-w-40">{{ a.dataRegName[:20] }}</span>
+        </div>
+        {% endfor %}
+        {% if event.added|length > 2 %}
+        <div class="text-xs text-gray-400">… 共新增 {{ event.added|length }} 条</div>
+        {% endif %}
+        <!-- Removed -->
+        {% for r in event.removed[:1] %}
+        <div class="text-xs text-red-500">消失：{{ r.get('dataRegName','')[:20] }}</div>
+        {% endfor %}
+      </div>
+    </li>
+    {% endif %}
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="px-5 py-8 text-center text-sm text-gray-400 dark:text-gray-500">
+    暂无变更记录
+  </div>
+  {% endif %}
+</div>

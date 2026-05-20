@@ -1,0 +1,43 @@
+<div id="account-grid-section"
+     class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6"
+     hx-get="/partials/account-grid"
+     hx-trigger="sse:update"
+     hx-swap="outerHTML">
+  {% for snap in account_snapshots %}
+  <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 relative">
+    <!-- Status dot -->
+    {% if snap.dot == 'red' %}
+    <span class="absolute top-3 right-3 w-2.5 h-2.5 rounded-full bg-red-500"></span>
+    {% elif snap.dot == 'amber' %}
+    <span class="absolute top-3 right-3 w-2.5 h-2.5 rounded-full bg-amber-400"></span>
+    {% else %}
+    <span class="absolute top-3 right-3 w-2.5 h-2.5 rounded-full bg-green-500"></span>
+    {% endif %}
+    <!-- Company & account -->
+    <div class="pr-6">
+      <div class="text-sm font-medium text-gray-800 dark:text-gray-100 mb-0.5">{{ snap.account.company }}</div>
+      <div class="font-mono text-xs text-gray-400 dark:text-gray-500 mb-3">{{ snap.account.username }}</div>
+    </div>
+    <!-- Status pills -->
+    {% if snap.status_counts %}
+    <div class="flex flex-wrap gap-1.5 mb-3">
+      {% for code in [1,2,3,5,6,7,11] %}
+      {% if snap.status_counts.get(code, 0) > 0 %}
+      <span class="px-2 py-0.5 rounded-full text-xs s-pill-{{ code }}">
+        {{ AUDIT_STATUS[code] }}×{{ snap.status_counts[code] }}
+      </span>
+      {% endif %}
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="text-xs text-gray-400 dark:text-gray-500 mb-3">暂无数据</div>
+    {% endif %}
+    <!-- Last check time -->
+    <div class="text-xs text-gray-400 dark:text-gray-500">
+      最后巡检：{{ snap.last_check | fmt_time }}
+    </div>
+  </div>
+  {% else %}
+  <div class="col-span-2 text-center text-sm text-gray-400 py-8">暂无账号数据</div>
+  {% endfor %}
+</div>

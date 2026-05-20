@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}数智通监控{% endblock %}</title>
+  <script>
+    (function(){var s=localStorage.getItem('dark'),m=window.matchMedia('(prefers-color-scheme:dark)').matches;if(s==='1'||(s===null&&m))document.documentElement.classList.add('dark');})();
+  </script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class'}</script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3/tabler-icons.min.css">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js"></script>
+</head>
+<body class="bg-gray-50 dark:bg-gray-900 flex h-screen overflow-hidden font-sans">
+
+  <!-- Sidebar -->
+  <nav class="w-44 flex-shrink-0 bg-gray-100 dark:bg-gray-800 flex flex-col border-r border-gray-200 dark:border-gray-700">
+    <div class="px-4 py-5">
+      <span class="text-sm font-medium text-gray-700 dark:text-gray-200 flex items-center gap-2">
+        <i class="ti ti-database text-blue-500"></i>数智通监控
+      </span>
+    </div>
+    <ul class="flex-1 px-2 space-y-0.5">
+      {% set nav = [
+        ('/', 'ti-layout-dashboard', '仪表盘'),
+        ('/accounts', 'ti-users', '账号'),
+        ('/records', 'ti-file-text', '登记记录'),
+        ('/changes', 'ti-history', '变更历史'),
+        ('/notify', 'ti-bell', '通知'),
+        ('/reports', 'ti-report-analytics', '报表'),
+        ('/settings', 'ti-settings', '设置'),
+      ] %}
+      {% for href, icon, label in nav %}
+      {% set active = request.url.path == href %}
+      <li>
+        <a href="{{ href }}"
+           class="flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors
+                  {% if active %}bg-blue-600 text-white{% else %}text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700{% endif %}">
+          <i class="ti {{ icon }} text-base"></i>{{ label }}
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
+  </nav>
+
+  <!-- Main -->
+  <div class="flex-1 flex flex-col overflow-hidden min-w-0">
+    <!-- Top bar -->
+    <header class="h-12 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-5 flex-shrink-0">
+      <h1 class="text-sm font-medium text-gray-700 dark:text-gray-200">{% block page_title %}{% endblock %}</h1>
+      <button onclick="toggleDark()" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" title="切换暗色模式">
+        <i class="ti ti-sun-moon text-lg"></i>
+      </button>
+    </header>
+    <!-- Content -->
+    <main class="flex-1 overflow-auto p-6">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+
+  <script>
+    function toggleDark(){
+      document.documentElement.classList.toggle('dark');
+      localStorage.setItem('dark',document.documentElement.classList.contains('dark')?'1':'0');
+    }
+  </script>
+</body>
+</html>

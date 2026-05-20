@@ -1,0 +1,16 @@
+/* Status pill classes: background and text color per dataRegAuditStatus code */
+.s-pill-1  { background: #E6F1FB; color: #0C447C; }  /* 待审核 */
+.s-pill-2  { background: #FAEEDA; color: #854F0B; }  /* 待补正 */
+.s-pill-3  { background: #EEEDFE; color: #3C3489; }  /* 公示中 */
+.s-pill-5  { background: #F1EFE8; color: #444441; }  /* 主动撤回 */
+.s-pill-6  { background: #FCEBEB; color: #791F1F; }  /* 不予登记 */
+.s-pill-7  { background: #EAF3DE; color: #27500A; }  /* 登记成功 */
+.s-pill-11 { background: #F1EFE8; color: #444441; }  /* 视为撤回 */
+
+.dark .s-pill-1  { background: #1e3a5c; color: #93c5fd; }
+.dark .s-pill-2  { background: #452d10; color: #fbbf24; }
+.dark .s-pill-3  { background: #2e2760; color: #c4b5fd; }
+.dark .s-pill-5  { background: #252524; color: #9ca3af; }
+.dark .s-pill-6  { background: #3f1010; color: #f87171; }
+.dark .s-pill-7  { background: #1a3810; color: #86efac; }
+.dark .s-pill-11 { background: #252524; color: #9ca3af; }

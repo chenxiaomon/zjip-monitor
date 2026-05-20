@@ -1,0 +1,27 @@
+# 敏感文件
+.env
+config/accounts.enc
+config/accounts.yaml
+config/settings.yaml
+!config/settings.yaml.example
+
+# 运行时数据
+data/*
+!data/.gitkeep
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+.mypy_cache/
+.pytest_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp

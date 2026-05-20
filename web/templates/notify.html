@@ -1,0 +1,54 @@
+{% extends "_base.html" %}
+
+{% block title %}通知 — 数智通监控{% endblock %}
+{% block page_title %}通知{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+  <!-- Left: Channel config -->
+  <div class="space-y-4">
+    <h2 class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">渠道配置</h2>
+    {% for channel in ['dingtalk', 'wechat', 'email'] %}
+    {% set ch_cfg = cfg.get(channel, {}) %}
+    {% include "_partials/notify_channel.html" %}
+    {% endfor %}
+  </div>
+
+  <!-- Right: Push log -->
+  <div>
+    <h2 class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">推送记录（近 30 天有变更）</h2>
+    <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+      {% if push_log %}
+      <ul class="divide-y divide-gray-50 dark:divide-gray-700/50">
+        {% for event in push_log %}
+        <li class="px-4 py-3 flex items-start gap-3">
+          <div class="flex-shrink-0 w-28 font-mono text-xs text-gray-400 dark:text-gray-500 pt-0.5">
+            {{ event.timestamp | fmt_time }}
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="text-sm text-gray-700 dark:text-gray-200 truncate">{{ event.company }}</div>
+            <div class="text-xs text-gray-400 mt-0.5">
+              {% set parts = [] %}
+              {% if event.changed %}{% set _ = parts.append("状态变更 " ~ event.changed|length ~ " 条") %}{% endif %}
+              {% if event.added %}{% set _ = parts.append("新增 " ~ event.added|length ~ " 条") %}{% endif %}
+              {% if event.removed %}{% set _ = parts.append("消失 " ~ event.removed|length ~ " 条") %}{% endif %}
+              {{ parts | join("；") }}
+            </div>
+          </div>
+          {% if any_enabled %}
+          <span class="flex-shrink-0 px-2 py-0.5 text-xs rounded-full bg-green-50 dark:bg-green-950/40 text-green-600 dark:text-green-400">已发送</span>
+          {% else %}
+          <span class="flex-shrink-0 px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-400">未启用</span>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <div class="py-10 text-center text-sm text-gray-400 dark:text-gray-500">暂无推送记录</div>
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+{% endblock %}

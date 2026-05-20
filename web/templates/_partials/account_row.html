@@ -1,0 +1,74 @@
+{% set u = row.account.username %}
+{% set task = row.task %}
+<tr id="row-{{ u }}"
+    {% if task.status == 'pending' %}
+    hx-get="/accounts/{{ u }}/token-status"
+    hx-trigger="every 2s"
+    hx-swap="outerHTML"
+    {% endif %}
+    class="hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors border-b border-gray-100 dark:border-gray-700/50">
+  <!-- 公司 -->
+  <td class="px-4 py-3 text-sm text-gray-800 dark:text-gray-100">
+    {{ row.account.company }}
+    {% if row.account.contact %}
+    <div class="text-xs text-gray-400 dark:text-gray-500">{{ row.account.contact }}</div>
+    {% endif %}
+  </td>
+  <!-- 账号 -->
+  <td class="px-4 py-3 font-mono text-xs text-gray-500 dark:text-gray-400">{{ u }}</td>
+  <!-- Token 状态 -->
+  <td class="px-4 py-3">
+    {% if task.status == 'pending' %}
+    <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs bg-gray-100 dark:bg-gray-700 text-gray-500">
+      <span class="w-1.5 h-1.5 rounded-full bg-gray-400 animate-pulse"></span>重登中…
+    </span>
+    {% elif task.status == 'error' %}
+    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400"
+          title="{{ task.msg }}">
+      <i class="ti ti-alert-circle text-sm"></i>重登失败
+    </span>
+    {% else %}
+    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs {{ row.token_status.css }}">
+      {{ row.token_status.label }}
+    </span>
+    {% endif %}
+  </td>
+  <!-- 记录数 -->
+  <td class="px-4 py-3 text-sm text-gray-600 dark:text-gray-300 text-right tabular-nums">
+    {{ row.record_count }}
+  </td>
+  <!-- 最后巡检 -->
+  <td class="px-4 py-3 text-xs text-gray-400 dark:text-gray-500 font-mono whitespace-nowrap">
+    {{ row.last_check | fmt_time }}
+  </td>
+  <!-- 操作 -->
+  <td class="px-4 py-3">
+    <div class="flex items-center gap-1.5">
+      {% if task.status == 'pending' %}
+      <button disabled
+              class="px-2.5 py-1 text-xs rounded border border-gray-200 dark:border-gray-600 text-gray-300 cursor-not-allowed">
+        重登中
+      </button>
+      {% else %}
+      <button hx-post="/accounts/{{ u }}/relogin"
+              hx-target="#row-{{ u }}"
+              hx-swap="outerHTML"
+              class="px-2.5 py-1 text-xs rounded border border-gray-200 dark:border-gray-600
+                     text-gray-600 dark:text-gray-300
+                     hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors cursor-pointer">
+        重登
+      </button>
+      <button hx-post="/accounts/{{ u }}/delete"
+              hx-target="#row-{{ u }}"
+              hx-swap="delete"
+              hx-confirm="确认删除账号 {{ u }}？此操作不可恢复。"
+              class="flex items-center gap-1 px-2.5 py-1 text-xs rounded border
+                     border-red-200 dark:border-red-800
+                     text-red-500 dark:text-red-400
+                     hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors cursor-pointer">
+        <i class="ti ti-trash text-sm"></i>删除
+      </button>
+      {% endif %}
+    </div>
+  </td>
+</tr>

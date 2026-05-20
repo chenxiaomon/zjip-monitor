@@ -1,0 +1,19 @@
+<div id="reports-list" class="grid gap-3">
+  {% for r in reports %}
+  <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-5 py-3.5 flex items-center justify-between">
+    <div>
+      <div class="text-sm font-medium text-gray-800 dark:text-gray-100">{{ r.datetime }}</div>
+      <div class="font-mono text-xs text-gray-400 dark:text-gray-500 mt-0.5">{{ r.filename }} · {{ r.size }}</div>
+    </div>
+    <a href="/reports/view/{{ r.filename }}" target="_blank"
+       class="flex items-center gap-1 px-3 py-1.5 text-xs rounded-md
+              border border-gray-200 dark:border-gray-600
+              text-gray-600 dark:text-gray-300
+              hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+      <i class="ti ti-external-link text-sm"></i>查看
+    </a>
+  </div>
+  {% else %}
+  <div class="py-10 text-center text-sm text-gray-400 dark:text-gray-500">暂无报表，点击"生成报表"运行一次全量巡检</div>
+  {% endfor %}
+</div>

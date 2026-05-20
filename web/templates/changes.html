@@ -1,0 +1,26 @@
+{% extends "_base.html" %}
+
+{% block title %}变更历史 — 数智通监控{% endblock %}
+{% block page_title %}变更历史{% endblock %}
+
+{% block content %}
+<!-- Account filter bar -->
+<div class="flex flex-wrap gap-2 mb-4">
+  <a href="/changes"
+     class="px-3 py-1 rounded-full text-xs transition-colors
+            {% if not filter_account %}bg-blue-600 text-white{% else %}bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600{% endif %}">
+    全部账号
+  </a>
+  {% for acc in accounts_list %}
+  <a href="/changes?account={{ acc.username }}"
+     class="px-3 py-1 rounded-full text-xs transition-colors
+            {% if filter_account == acc.username %}bg-blue-600 text-white{% else %}bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600{% endif %}">
+    {{ acc.company }}
+  </a>
+  {% endfor %}
+</div>
+
+<div hx-ext="sse" sse-connect="/sse">
+  {% include "_partials/changes_list.html" %}
+</div>
+{% endblock %}

@@ -1,0 +1,13 @@
+{% extends "_base.html" %}
+
+{% block title %}仪表盘 — 数智通监控{% endblock %}
+{% block page_title %}仪表盘{% endblock %}
+
+{% block content %}
+<div hx-ext="sse" sse-connect="/sse">
+  {% include "_partials/metric_cards.html" %}
+  <h2 class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">账号状态</h2>
+  {% include "_partials/account_grid.html" %}
+  {% include "_partials/timeline.html" %}
+</div>
+{% endblock %}

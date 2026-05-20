@@ -1,0 +1,28 @@
+<tbody id="records-tbody">
+  {% for r in rows %}
+  <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors border-b border-gray-100 dark:border-gray-700/50 cursor-pointer"
+      onclick="var j=document.getElementById('json-{{ r.reg_no | e }}');j.classList.toggle('hidden')">
+    <td class="px-4 py-2.5 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap">
+      {{ r.company[:8] }}{% if r.company|length > 8 %}…{% endif %}
+      <div class="font-mono text-gray-400 dark:text-gray-500">{{ r.username }}</div>
+    </td>
+    <td class="px-4 py-2.5 font-mono text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">{{ r.reg_no }}</td>
+    <td class="px-4 py-2.5 text-xs text-gray-700 dark:text-gray-200 max-w-56 truncate" title="{{ r.name }}">{{ r.name }}</td>
+    <td class="px-4 py-2.5 text-xs text-gray-400 dark:text-gray-500 whitespace-nowrap">{{ r.industry or '—' }}</td>
+    <td class="px-4 py-2.5 font-mono text-xs text-gray-400 dark:text-gray-500 whitespace-nowrap">{{ r.apply_date }}</td>
+    <td class="px-4 py-2.5">
+      <span class="px-2 py-0.5 rounded-full text-xs s-pill-{{ r.status_code }}">{{ r.status_label }}</span>
+    </td>
+  </tr>
+  <!-- JSON expand row -->
+  <tr id="json-{{ r.reg_no | e }}" class="hidden">
+    <td colspan="6" class="px-4 py-3 bg-gray-50 dark:bg-gray-900/50 border-b border-gray-100 dark:border-gray-700/50">
+      <pre class="text-xs text-gray-600 dark:text-gray-300 overflow-auto max-h-56 whitespace-pre-wrap">{{ r._raw | tojson }}</pre>
+    </td>
+  </tr>
+  {% else %}
+  <tr>
+    <td colspan="6" class="px-4 py-10 text-center text-sm text-gray-400 dark:text-gray-500">暂无记录数据</td>
+  </tr>
+  {% endfor %}
+</tbody>

@@ -1,0 +1,9 @@
+accounts:
+  - company: "公司A示例"
+    username: "your_account_1"
+    password: "your_password_1"
+    contact: "张三"
+  - company: "公司B示例"
+    username: "your_account_2"
+    password: "your_password_2"
+    contact: "李四"

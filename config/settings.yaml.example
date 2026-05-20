@@ -1,0 +1,35 @@
+base_url: "https://www.zjip.org.cn"
+
+scraper:
+  page_size: 50
+  request_timeout_seconds: 30
+
+login:
+  token_max_age_hours: 8
+  headless: true
+  browser: "chromium"
+
+schedule:
+  crons:
+    - "0 9 * * *"
+    - "0 18 * * *"
+
+notify:
+  dingtalk:
+    enabled: false
+    webhook: "https://oapi.dingtalk.com/robot/send?access_token=YOUR_TOKEN"
+    secret: "YOUR_SIGNING_SECRET"
+
+  wechat:
+    enabled: false
+    webhook: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=YOUR_KEY"
+
+  email:
+    enabled: false
+    smtp_host: "smtp.example.com"
+    smtp_port: 465
+    smtp_user: "sender@example.com"
+    smtp_password: "your_password"
+    from_addr: "sender@example.com"
+    to_addrs: "recipient1@example.com,recipient2@example.com"
+    use_tls: true
