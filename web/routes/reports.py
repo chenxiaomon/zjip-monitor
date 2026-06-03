@@ -37,7 +37,7 @@ def _list_reports() -> list[dict]:
     return result
 
 
-async def _do_generate() -> None:
+async def _generate_report_async() -> None:
     _gen_status["status"] = "running"
     loop = asyncio.get_event_loop()
     try:
@@ -60,16 +60,16 @@ def reports_page(request: Request) -> HTMLResponse:
 
 @router.get("/reports/view/{filename}")
 def view_report(filename: str) -> FileResponse:
-    path = _REPORTS_DIR / filename
-    if not path.exists() or not path.suffix == ".html":
+    resolved = (_REPORTS_DIR / filename).resolve()
+    if not resolved.is_relative_to(_REPORTS_DIR.resolve()) or resolved.suffix != ".html" or not resolved.exists():
         return HTMLResponse("报表不存在", status_code=404)
-    return FileResponse(path, media_type="text/html")
+    return FileResponse(resolved, media_type="text/html")
 
 
 @router.post("/reports/generate", response_class=HTMLResponse)
 async def generate_report(request: Request) -> HTMLResponse:
     if _gen_status.get("status") != "running":
-        asyncio.create_task(_do_generate())
+        asyncio.create_task(_generate_report_async())
     return templates.TemplateResponse(
         request,
         "_partials/report_gen_status.html",

@@ -4,6 +4,21 @@
 {% block page_title %}仪表盘{% endblock %}
 
 {% block content %}
+<div class="flex gap-2 mb-4">
+  <a href="/"
+     class="px-3 py-1 rounded-full text-xs transition-colors
+            {% if not filter_year %}bg-blue-600 text-white{% else %}bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600{% endif %}">
+    全部年份
+  </a>
+  {% for y in [2025, 2026] %}
+  <a href="/?year={{ y }}"
+     class="px-3 py-1 rounded-full text-xs transition-colors
+            {% if filter_year == y %}bg-blue-600 text-white{% else %}bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600{% endif %}">
+    {{ y }}
+  </a>
+  {% endfor %}
+</div>
+
 <div hx-ext="sse" sse-connect="/sse">
   {% include "_partials/metric_cards.html" %}
   <h2 class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">账号状态</h2>

@@ -48,7 +48,7 @@ def read_events(
             if ts < cutoff:
                 continue
         except ValueError:
-            pass
+            continue
         events.append(event)
         if len(events) >= limit:
             break

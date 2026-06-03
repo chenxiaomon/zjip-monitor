@@ -13,7 +13,7 @@ from fastapi import Form
 
 from src.config_loader import Account, ConfigError, load_accounts, save_accounts
 from src.login import get_token
-from src.main import run_all
+from src.main import run_all, scan_account_and_notify
 from web.deps import templates
 from web.services.session import _SESSIONS_DIR, _safe_name, get_session, token_status
 from web.services.snapshot import get_latest_snapshot
@@ -25,6 +25,9 @@ _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="accounts")
 
 # Per-account relogin task state: username → {"status": "pending|ok|error", "msg": ""}
 _tasks: dict[str, dict[str, str]] = {}
+
+# Per-account single scan state: username → "idle|running|done|error"
+_scan_tasks: dict[str, str] = {}
 
 # Global run-once state
 _run_once: dict[str, str] = {"status": "idle", "msg": ""}
@@ -47,9 +50,10 @@ def _build_rows(accounts_list=None) -> list[dict]:
         rows.append({
             "account": acc,
             "token_status": token_status(session),
-            "record_count": snap["record_count"] if snap else 0,
+            "record_count": snap.get("record_count", 0) if snap else 0,
             "last_check": snap.get("snapshot_time") if snap else None,
             "task": _tasks.get(acc.username, {}),
+            "scan_task": _scan_tasks.get(acc.username, "idle"),
         })
     return rows
 
@@ -58,7 +62,7 @@ def _build_rows(accounts_list=None) -> list[dict]:
 # Background tasks
 # ---------------------------------------------------------------------------
 
-async def _do_relogin(username: str, password: str) -> None:
+async def _relogin_async(username: str, password: str) -> None:
     loop = asyncio.get_event_loop()
     try:
         await loop.run_in_executor(
@@ -70,7 +74,7 @@ async def _do_relogin(username: str, password: str) -> None:
         _tasks[username] = {"status": "error", "msg": str(exc)[:80]}
 
 
-async def _do_run_once() -> None:
+async def _scan_cycle_async() -> None:
     loop = asyncio.get_event_loop()
     _run_once["status"] = "running"
     _run_once["msg"] = ""
@@ -81,6 +85,17 @@ async def _do_run_once() -> None:
     except Exception as exc:
         _run_once["status"] = "error"
         _run_once["msg"] = str(exc)[:80]
+
+
+async def _scan_one_async(username: str, account: Account) -> None:
+    _scan_tasks[username] = "running"
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(_executor, lambda: scan_account_and_notify(account))
+        _scan_tasks[username] = "done"
+        await broadcast(json.dumps({"type": "update"}))
+    except Exception:
+        _scan_tasks[username] = "error"
 
 
 # ---------------------------------------------------------------------------
@@ -108,13 +123,13 @@ async def relogin(request: Request, username: str) -> HTMLResponse:
         return HTMLResponse(f'<tr id="row-{username}"><td colspan="7" class="px-4 py-2 text-red-500 text-sm">账号不存在</td></tr>')
 
     _tasks[username] = {"status": "pending", "msg": ""}
-    asyncio.create_task(_do_relogin(username, acc.password))
+    asyncio.create_task(_relogin_async(username, acc.password))
 
     snap = get_latest_snapshot(acc.company)
     row = {
         "account": acc,
         "token_status": token_status(get_session(username)),
-        "record_count": snap["record_count"] if snap else 0,
+        "record_count": snap.get("record_count", 0) if snap else 0,
         "last_check": snap.get("snapshot_time") if snap else None,
         "task": {"status": "pending", "msg": ""},
     }
@@ -139,7 +154,7 @@ def token_status_poll(request: Request, username: str) -> HTMLResponse:
     row = {
         "account": acc,
         "token_status": token_status(get_session(username)),
-        "record_count": snap["record_count"] if snap else 0,
+        "record_count": snap.get("record_count", 0) if snap else 0,
         "last_check": snap.get("snapshot_time") if snap else None,
         "task": _tasks.get(username, {}),
     }
@@ -150,10 +165,58 @@ def token_status_poll(request: Request, username: str) -> HTMLResponse:
     )
 
 
+@router.post("/accounts/{username}/scan", response_class=HTMLResponse)
+async def scan_account(request: Request, username: str) -> HTMLResponse:
+    try:
+        accounts_list = load_accounts()
+    except ConfigError:
+        accounts_list = []
+    acc = next((a for a in accounts_list if a.username == username), None)
+    if acc is None:
+        return HTMLResponse(f'<tr id="row-{username}"><td colspan="7" class="px-4 py-2 text-red-500 text-sm">账号不存在</td></tr>')
+
+    if _scan_tasks.get(username) != "running":
+        _scan_tasks[username] = "running"
+        asyncio.create_task(_scan_one_async(username, acc))
+
+    snap = get_latest_snapshot(acc.company)
+    row = {
+        "account": acc,
+        "token_status": token_status(get_session(username)),
+        "record_count": snap.get("record_count", 0) if snap else 0,
+        "last_check": snap.get("snapshot_time") if snap else None,
+        "task": _tasks.get(username, {}),
+        "scan_task": "running",
+    }
+    return templates.TemplateResponse(request, "_partials/account_row.html", {"row": row})
+
+
+@router.get("/accounts/{username}/scan-status", response_class=HTMLResponse)
+def scan_status_poll(request: Request, username: str) -> HTMLResponse:
+    try:
+        accounts_list = load_accounts()
+    except ConfigError:
+        accounts_list = []
+    acc = next((a for a in accounts_list if a.username == username), None)
+    if acc is None:
+        return HTMLResponse(f'<tr id="row-{username}"></tr>')
+
+    snap = get_latest_snapshot(acc.company)
+    row = {
+        "account": acc,
+        "token_status": token_status(get_session(username)),
+        "record_count": snap.get("record_count", 0) if snap else 0,
+        "last_check": snap.get("snapshot_time") if snap else None,
+        "task": _tasks.get(username, {}),
+        "scan_task": _scan_tasks.get(username, "idle"),
+    }
+    return templates.TemplateResponse(request, "_partials/account_row.html", {"row": row})
+
+
 @router.post("/run-once", response_class=HTMLResponse)
 async def run_once_trigger(request: Request) -> HTMLResponse:
     if _run_once.get("status") != "running":
-        asyncio.create_task(_do_run_once())
+        asyncio.create_task(_scan_cycle_async())
     return templates.TemplateResponse(
         request,
         "_partials/run_once_status.html",
@@ -234,12 +297,28 @@ async def add_account(
 
     # Auto-trigger first login for the new account
     _tasks[username] = {"status": "pending", "msg": ""}
-    asyncio.create_task(_do_relogin(username, password))
+    asyncio.create_task(_relogin_async(username, password))
 
     # Success: clear modal and trigger tbody refresh
     response = HTMLResponse("")
     response.headers["HX-Trigger"] = "accountSaved"
     return response
+
+
+@router.get("/accounts/{username}/password", response_class=HTMLResponse)
+def reveal_password(request: Request, username: str) -> HTMLResponse:
+    try:
+        accounts_list = load_accounts()
+    except ConfigError:
+        return HTMLResponse("—")
+    acc = next((a for a in accounts_list if a.username == username), None)
+    if acc is None:
+        return HTMLResponse("—")
+    return templates.TemplateResponse(
+        request,
+        "_partials/account_password.html",
+        {"password": acc.password, "username": username},
+    )
 
 
 @router.get("/accounts/rows", response_class=HTMLResponse)

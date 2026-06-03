@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi.templating import Jinja2Templates
 
 _HERE = Path(__file__).parent
+_SHANGHAI_TZ = timezone(timedelta(hours=8))
 
 templates = Jinja2Templates(directory=_HERE / "templates")
 
@@ -32,7 +33,7 @@ def _fmt_time(ts_str: str | None) -> str:
         dt = datetime.fromisoformat(ts_str)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        local = dt + timedelta(hours=8)
+        local = dt.astimezone(_SHANGHAI_TZ)
         return local.strftime("%m-%d %H:%M")
     except Exception:
         return ts_str[:16]
@@ -46,7 +47,7 @@ def _fmt_time_short(ts_str: str | None) -> str:
         dt = datetime.fromisoformat(ts_str)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        local = dt + timedelta(hours=8)
+        local = dt.astimezone(_SHANGHAI_TZ)
         return local.strftime("%H:%M")
     except Exception:
         return ts_str[11:16] if len(ts_str) >= 16 else "—"

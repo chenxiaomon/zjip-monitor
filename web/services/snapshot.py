@@ -43,3 +43,35 @@ def get_all_latest_snapshots() -> list[dict]:
         except Exception:
             pass
     return results
+
+
+def list_snapshot_dates() -> list[str]:
+    """Return all dates (YYYY-MM-DD) that have at least one snapshot, newest first."""
+    if not _SNAPSHOTS_DIR.exists():
+        return []
+    dates: set[str] = set()
+    for f in _SNAPSHOTS_DIR.glob("*.json"):
+        m = _DATE_RE.match(f.stem)
+        if m:
+            dates.add(m.group(2)[:10])
+    return sorted(dates, reverse=True)
+
+
+def get_snapshots_by_date(date_str: str) -> list[dict]:
+    """Return each company's latest snapshot from the given date (YYYY-MM-DD)."""
+    if not _SNAPSHOTS_DIR.exists():
+        return []
+    by_company: dict[str, Path] = {}
+    for f in _SNAPSHOTS_DIR.glob("*.json"):
+        m = _DATE_RE.match(f.stem)
+        if m and m.group(2).startswith(date_str):
+            company = m.group(1)
+            if company not in by_company or f.name > by_company[company].name:
+                by_company[company] = f
+    results = []
+    for path in by_company.values():
+        try:
+            results.append(json.loads(path.read_text(encoding="utf-8")))
+        except Exception:
+            pass
+    return results

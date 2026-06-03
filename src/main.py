@@ -12,6 +12,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
@@ -125,7 +126,7 @@ def load_latest_snapshot(company: str) -> dict | None:
 # Per-account processing
 # ---------------------------------------------------------------------------
 
-def process_account(account: Account) -> dict | None:
+def scan_account_and_notify(account: Account) -> dict | None:
     """Login, fetch, and snapshot one account.
 
     Returns:
@@ -212,7 +213,7 @@ def _run_serial(accounts: list[Account]) -> list[dict]:
     results: list[dict] = []
     for i, account in enumerate(accounts):
         logger.info(f"── Account {i + 1}/{len(accounts)}: {account.company} ──")
-        results.append(process_account(account))
+        results.append(scan_account_and_notify(account))
         if i < len(accounts) - 1:
             delay = random.uniform(2.0, 5.0)
             logger.debug(f"Sleeping {delay:.1f}s before next account…")
@@ -227,19 +228,19 @@ async def _run_concurrent(accounts: list[Account], max_workers: int = 3) -> list
 
     async def _one(account: Account) -> dict:
         async with semaphore:
-            return await loop.run_in_executor(None, process_account, account)
+            return await loop.run_in_executor(None, scan_account_and_notify, account)
 
     return list(await asyncio.gather(*[_one(a) for a in accounts]))
 
 
-def run_all(*, force_login: bool = False) -> list[dict]:
+def run_all(*, force_login: bool = False) -> dict[str, Any]:
     """Process all accounts. Serial for ≤10; asyncio concurrent for >10.
 
     Args:
         force_login: Bypass token cache for every account.
 
     Returns:
-        List of per-account result dicts.
+        Dict with keys: results (list of per-account dicts), report_path (str | None).
     """
     try:
         accounts = load_accounts()

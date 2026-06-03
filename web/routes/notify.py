@@ -13,6 +13,20 @@ router = APIRouter()
 
 _CHANNELS = ("dingtalk", "wechat", "email")
 
+# Fields that must not be echoed back in POST response HTML.
+_SECRET_FIELDS: dict[str, tuple[str, ...]] = {
+    "dingtalk": ("webhook", "secret"),
+    "wechat": ("webhook",),
+    "email": ("smtp_password",),
+}
+
+
+def _redact_for_display(channel: str, ch_cfg: dict) -> dict:
+    masked = dict(ch_cfg)
+    for field in _SECRET_FIELDS.get(channel, ()):
+        masked.pop(field, None)
+    return masked
+
 
 def _notify_ctx() -> dict:
     cfg = load_settings().get("notify", {})
@@ -48,7 +62,7 @@ def save_dingtalk(
     save_settings(data)
     return templates.TemplateResponse(
         request, "_partials/notify_channel.html",
-        {"channel": "dingtalk", "ch_cfg": data["notify"]["dingtalk"], "saved": True},
+        {"channel": "dingtalk", "ch_cfg": _redact_for_display("dingtalk", data["notify"]["dingtalk"]), "saved": True},
     )
 
 
@@ -64,7 +78,7 @@ def save_wechat(
     save_settings(data)
     return templates.TemplateResponse(
         request, "_partials/notify_channel.html",
-        {"channel": "wechat", "ch_cfg": data["notify"]["wechat"], "saved": True},
+        {"channel": "wechat", "ch_cfg": _redact_for_display("wechat", data["notify"]["wechat"]), "saved": True},
     )
 
 
@@ -95,5 +109,5 @@ def save_email(
     save_settings(data)
     return templates.TemplateResponse(
         request, "_partials/notify_channel.html",
-        {"channel": "email", "ch_cfg": data["notify"]["email"], "saved": True},
+        {"channel": "email", "ch_cfg": _redact_for_display("email", data["notify"]["email"]), "saved": True},
     )

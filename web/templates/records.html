@@ -37,6 +37,30 @@
   {% endfor %}
 </div>
 
+<!-- Date range filter -->
+<form class="flex flex-wrap items-center gap-2 mb-4"
+      hx-get="/partials/records-table"
+      hx-target="#records-tbody"
+      hx-swap="outerHTML"
+      hx-trigger="change">
+  <input type="hidden" name="account" value="{{ filter_account or '' }}">
+  <input type="hidden" name="status" value="{{ filter_status if filter_status is not none else '' }}">
+  <label class="text-xs text-gray-500 dark:text-gray-400">申请时间</label>
+  <input type="date" name="start_date" value="{{ start_date }}"
+         class="px-2 py-1 text-xs rounded border border-gray-200 dark:border-gray-600
+                bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300
+                focus:outline-none focus:ring-1 focus:ring-blue-400">
+  <span class="text-xs text-gray-400">至</span>
+  <input type="date" name="end_date" value="{{ end_date }}"
+         class="px-2 py-1 text-xs rounded border border-gray-200 dark:border-gray-600
+                bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300
+                focus:outline-none focus:ring-1 focus:ring-blue-400">
+  {% if start_date or end_date %}
+  <a href="/records{% if filter_account %}?account={{ filter_account }}{% endif %}{% if filter_status %}&status={{ filter_status }}{% endif %}"
+     class="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors">清除</a>
+  {% endif %}
+</form>
+
 <!-- Table -->
 <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
   <div class="px-4 py-2.5 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">

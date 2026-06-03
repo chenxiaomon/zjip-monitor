@@ -1,6 +1,6 @@
 <div id="account-grid-section"
      class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6"
-     hx-get="/partials/account-grid"
+     hx-get="/partials/account-grid{% if filter_year %}?year={{ filter_year }}{% endif %}"
      hx-trigger="sse:update"
      hx-swap="outerHTML">
   {% for snap in account_snapshots %}
