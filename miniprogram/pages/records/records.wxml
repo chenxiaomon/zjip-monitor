@@ -1,0 +1,26 @@
+<view class="page">
+
+  <view wx:if="{{loading}}" class="loading">
+    <text>加载中...</text>
+  </view>
+
+  <block wx:else>
+    <view class="summary">共 {{total}} 条记录（2026 年）</view>
+
+    <view
+      wx:for="{{records}}"
+      wx:key="reg_no"
+      class="record-card"
+    >
+      <view class="record-header">
+        <text class="reg-no">{{item.reg_no}}</text>
+        <text class="pill" style="{{item.pillStyle}}">{{item.status_label}}</text>
+      </view>
+      <text class="record-name">{{item.name || '—'}}</text>
+      <text class="apply-date">申请时间：{{item.apply_date}}</text>
+    </view>
+
+    <view wx:if="{{records.length === 0}}" class="empty">暂无记录</view>
+  </block>
+
+</view>

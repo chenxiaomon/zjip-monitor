@@ -1,0 +1,61 @@
+.page {
+  padding: 24rpx;
+}
+
+.loading {
+  text-align: center;
+  padding: 80rpx 0;
+  color: #999;
+}
+
+.summary {
+  font-size: 24rpx;
+  color: #888;
+  margin-bottom: 20rpx;
+}
+
+.record-card {
+  background: #fff;
+  border-radius: 16rpx;
+  padding: 28rpx;
+  margin-bottom: 16rpx;
+}
+
+.record-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12rpx;
+}
+
+.reg-no {
+  font-family: monospace;
+  font-size: 24rpx;
+  color: #888;
+}
+
+.pill {
+  font-size: 22rpx;
+  padding: 4rpx 16rpx;
+  border-radius: 100rpx;
+}
+
+.record-name {
+  font-size: 28rpx;
+  font-weight: 500;
+  color: #222;
+  display: block;
+  margin-bottom: 12rpx;
+}
+
+.apply-date {
+  font-size: 22rpx;
+  color: #bbb;
+  display: block;
+}
+
+.empty {
+  text-align: center;
+  color: #bbb;
+  padding: 80rpx 0;
+}

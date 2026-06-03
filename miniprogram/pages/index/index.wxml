@@ -1,0 +1,61 @@
+<view class="page">
+
+  <!-- Loading -->
+  <view wx:if="{{loading}}" class="loading">
+    <text>加载中...</text>
+  </view>
+
+  <block wx:else>
+    <!-- Metric cards -->
+    <view class="metrics">
+      <view class="metric-card">
+        <text class="metric-label">登记总数</text>
+        <text class="metric-value">{{totalRecords}}</text>
+      </view>
+      <view class="metric-card">
+        <text class="metric-label">登记成功</text>
+        <text class="metric-value">{{successCount}}</text>
+      </view>
+      <view class="metric-card amber">
+        <text class="metric-label amber-label">待补正</text>
+        <text class="metric-value amber-value">{{pendingCorrection}}</text>
+      </view>
+    </view>
+
+    <!-- Account list -->
+    <view class="section-title">账号状态</view>
+    <view
+      wx:for="{{accounts}}"
+      wx:key="company"
+      class="account-card"
+      bindtap="onTapAccount"
+      data-company="{{item.company}}"
+    >
+      <!-- Dot -->
+      <view class="dot dot-{{item.dot}}"></view>
+
+      <!-- Company name -->
+      <text class="company-name">{{item.company}}</text>
+
+      <!-- Status pills -->
+      <view class="pills" wx:if="{{item.pills.length > 0}}">
+        <text
+          wx:for="{{item.pills}}"
+          wx:for-item="pill"
+          wx:key="code"
+          class="{{pill.cls}}"
+        >{{pill.label}}×{{pill.count}}</text>
+      </view>
+      <text wx:else class="no-data">暂无数据</text>
+
+      <!-- Last check -->
+      <text class="last-check">最后巡检：{{item.last_check}}</text>
+
+      <!-- Arrow -->
+      <text class="arrow">›</text>
+    </view>
+
+    <view wx:if="{{accounts.length === 0}}" class="empty">暂无账号数据</view>
+  </block>
+
+</view>

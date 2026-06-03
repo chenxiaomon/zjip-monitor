@@ -14,7 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
-from web.routes import accounts, changes, dashboard, notify, records, reports, settings, view
+from web.routes import accounts, api, changes, dashboard, notify, records, reports, settings, view
 from web.sse import router as sse_router, start_watcher
 
 _HERE = Path(__file__).parent
@@ -52,7 +52,8 @@ async def _basic_auth(request: Request, call_next) -> Response:  # type: ignore[
         except Exception:
             pass
     if (request.url.path == "/view" or request.url.path.startswith("/view/")
-            or request.url.path.startswith("/static/")):
+            or request.url.path.startswith("/static/")
+            or request.url.path in {"/api/status", "/api/records"}):
         return await call_next(request)
     if authed:
         return await call_next(request)
@@ -74,3 +75,4 @@ app.include_router(notify.router)
 app.include_router(reports.router)
 app.include_router(settings.router)
 app.include_router(view.router)
+app.include_router(api.router)
