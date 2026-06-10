@@ -1,0 +1,58 @@
+<div id="view-content"
+     hx-get="/view/partial"
+     hx-trigger="every 5m"
+     hx-swap="outerHTML">
+
+  <!-- Metric cards -->
+  <div class="grid grid-cols-3 gap-4 mb-6">
+    <div class="bg-gray-100 dark:bg-gray-800 rounded-xl p-5">
+      <div class="text-xs text-gray-500 dark:text-gray-400 mb-2">登记总数</div>
+      <div class="text-2xl font-medium text-gray-800 dark:text-gray-100">{{ total_records }}</div>
+    </div>
+    <div class="bg-gray-100 dark:bg-gray-800 rounded-xl p-5">
+      <div class="text-xs text-gray-500 dark:text-gray-400 mb-2">登记成功</div>
+      <div class="text-2xl font-medium text-gray-800 dark:text-gray-100">{{ success_count }}</div>
+    </div>
+    <div class="bg-amber-50 dark:bg-amber-950/40 rounded-xl p-5">
+      <div class="text-xs text-amber-700 dark:text-amber-400 mb-2">待补正</div>
+      <div class="text-2xl font-medium text-amber-800 dark:text-amber-300">{{ pending_correction }}</div>
+    </div>
+  </div>
+
+  <!-- Account grid -->
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+    {% for card in account_cards %}
+    <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 relative">
+      {% if card.dot == 'red' %}
+      <span class="absolute top-3 right-3 w-2.5 h-2.5 rounded-full bg-red-500"></span>
+      {% elif card.dot == 'amber' %}
+      <span class="absolute top-3 right-3 w-2.5 h-2.5 rounded-full bg-amber-400"></span>
+      {% else %}
+      <span class="absolute top-3 right-3 w-2.5 h-2.5 rounded-full bg-green-500"></span>
+      {% endif %}
+      <div class="pr-6 mb-3">
+        <div class="text-sm font-medium text-gray-800 dark:text-gray-100">{{ card.company }}</div>
+      </div>
+      {% if card.status_counts %}
+      <div class="flex flex-wrap gap-1.5 mb-3">
+        {% for code in [1,2,3,5,6,7,11] %}
+        {% if card.status_counts.get(code, 0) > 0 %}
+        <span class="px-2 py-0.5 rounded-full text-xs s-pill-{{ code }}">
+          {{ AUDIT_STATUS[code] }}×{{ card.status_counts[code] }}
+        </span>
+        {% endif %}
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="text-xs text-gray-400 dark:text-gray-500 mb-3">暂无数据</div>
+      {% endif %}
+      <div class="text-xs text-gray-400 dark:text-gray-500">
+        最后巡检：{{ card.last_check | fmt_time }}
+      </div>
+    </div>
+    {% else %}
+    <div class="col-span-2 text-center text-sm text-gray-400 py-8">暂无数据</div>
+    {% endfor %}
+  </div>
+
+</div>

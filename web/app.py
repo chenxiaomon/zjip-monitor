@@ -11,7 +11,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
-from fastapi.responses import Response
+from fastapi.responses import RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from web.routes import accounts, api, changes, dashboard, notify, records, reports, settings, view
@@ -53,7 +53,7 @@ async def _basic_auth(request: Request, call_next) -> Response:  # type: ignore[
             pass
     if (request.url.path == "/view" or request.url.path.startswith("/view/")
             or request.url.path.startswith("/static/")
-            or request.url.path in {"/api/status", "/api/records"}):
+            or request.url.path in {"/api/status", "/api/records", "/favicon.ico", "/view/partial"}):
         return await call_next(request)
     if authed:
         return await call_next(request)
@@ -65,6 +65,11 @@ async def _basic_auth(request: Request, call_next) -> Response:  # type: ignore[
 
 
 app.mount("/static", StaticFiles(directory=_HERE / "static"), name="static")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> RedirectResponse:
+    return RedirectResponse(url="/static/favicon.svg")
 
 app.include_router(sse_router)
 app.include_router(dashboard.router)

@@ -30,8 +30,7 @@ def _is_2026(ms: int | None) -> bool:
     return datetime.fromtimestamp(ms / 1000, tz=_SHANGHAI_TZ).year == 2026
 
 
-@router.get("/", response_class=HTMLResponse)
-def view_page(request: Request) -> HTMLResponse:
+def _build_ctx() -> dict:
     account_cards: list[dict] = []
     total_records = 0
     success_count = 0
@@ -58,15 +57,22 @@ def view_page(request: Request) -> HTMLResponse:
         success_count += status_counts.get(7, 0)
         pending_correction += status_counts.get(2, 0)
 
-    return templates.TemplateResponse(
-        request,
-        "view.html",
-        {
-            "account_cards": account_cards,
-            "total_records": total_records,
-            "success_count": success_count,
-            "pending_correction": pending_correction,
-            "STATUS_COLORS": STATUS_COLORS,
-            "AUDIT_STATUS": AUDIT_STATUS,
-        },
-    )
+    return {
+        "account_cards": account_cards,
+        "total_records": total_records,
+        "success_count": success_count,
+        "pending_correction": pending_correction,
+        "STATUS_COLORS": STATUS_COLORS,
+        "AUDIT_STATUS": AUDIT_STATUS,
+    }
+
+
+@router.get("/", response_class=HTMLResponse)
+def view_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "view.html", _build_ctx())
+
+
+@router.get("/partial", response_class=HTMLResponse)
+def view_partial(request: Request) -> HTMLResponse:
+    """HTMX polling target — returns only the dynamic content region."""
+    return templates.TemplateResponse(request, "_partials/view_content.html", _build_ctx())
