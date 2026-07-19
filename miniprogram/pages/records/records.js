@@ -1,13 +1,23 @@
 const app = getApp()
 
 const STATUS_COLORS = {
-  1:  { bg: '#E6F1FB', color: '#0C447C' },
-  2:  { bg: '#FAEEDA', color: '#854F0B' },
-  3:  { bg: '#EEEDFE', color: '#3C3489' },
-  5:  { bg: '#F1EFE8', color: '#444441' },
-  6:  { bg: '#FCEBEB', color: '#791F1F' },
-  7:  { bg: '#EAF3DE', color: '#27500A' },
-  11: { bg: '#F1EFE8', color: '#444441' },
+  1:  { bg: '#E6F1FB', color: '#0C447C' },  // 待审核
+  2:  { bg: '#FAEEDA', color: '#854F0B' },  // 待补正
+  3:  { bg: '#EEEDFE', color: '#3C3489' },  // 公示中
+  4:  { bg: '#FAEEDA', color: '#854F0B' },  // 异议
+  5:  { bg: '#F1EFE8', color: '#444441' },  // 主动撤回
+  6:  { bg: '#FCEBEB', color: '#791F1F' },  // 不予登记
+  7:  { bg: '#EAF3DE', color: '#27500A' },  // 登记成功
+  8:  { bg: '#F1EFE8', color: '#444441' },  // 终止登记
+  9:  { bg: '#F1EFE8', color: '#444441' },  // 登记撤销
+  10: { bg: '#F1EFE8', color: '#444441' },  // 未续展失效
+  11: { bg: '#F1EFE8', color: '#444441' },  // 视为撤回
+  12: { bg: '#E6F1FB', color: '#0C447C' },  // 待审核
+  13: { bg: '#EAF3DE', color: '#27500A' },  // 续展登记
+  14: { bg: '#FCEBEB', color: '#791F1F' },  // 批量登记失败
+  15: { bg: '#F1EFE8', color: '#444441' },  // 撤回审查
+  16: { bg: '#F1EFE8', color: '#444441' },  // 撤回补正
+  17: { bg: '#EEEDFE', color: '#3C3489' },  // 待发证
 }
 
 Page({

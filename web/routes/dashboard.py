@@ -19,7 +19,8 @@ _SHANGHAI_TZ = timezone(timedelta(hours=8))
 
 
 def _account_dot(status_counts: dict[int, int]) -> str:
-    if status_counts.get(6, 0) > 0:
+    # 不予登记 / 异议 需紧急处理 → 红；待补正 → 橙
+    if status_counts.get(6, 0) > 0 or status_counts.get(4, 0) > 0:
         return "red"
     if status_counts.get(2, 0) > 0:
         return "amber"

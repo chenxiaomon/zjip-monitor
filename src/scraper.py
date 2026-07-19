@@ -20,16 +20,26 @@ from urllib3.util.retry import Retry
 
 from .exceptions import ScraperError, TokenExpiredError
 
-# Verified against live DOM + API responses across 4 real accounts (2026-05-19):
-# Cross-referenced dataRegAuditStatus codes with actual UI labels on /dregister page.
+# Full status map extracted from the platform frontend bundle (2026-07):
+# all 17 dataRegAuditStatus codes with their official UI labels.
 AUDIT_STATUS: dict[int, str] = {
     1: "待审核",
     2: "待补正",
     3: "公示中",
+    4: "异议",
     5: "主动撤回",
     6: "不予登记",
     7: "登记成功",
+    8: "终止登记",
+    9: "登记撤销",
+    10: "未续展失效",
     11: "视为撤回",
+    12: "待审核",
+    13: "续展登记",
+    14: "批量登记失败",
+    15: "撤回审查",
+    16: "撤回补正",
+    17: "待发证",
 }
 
 

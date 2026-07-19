@@ -25,15 +25,33 @@ def spawn(coro: Coroutine) -> asyncio.Task:
     task.add_done_callback(_bg_tasks.discard)
     return task
 
-# Status pill colors per dataRegAuditStatus code
+# Status pill colors per dataRegAuditStatus code (all 17 statuses).
+# Palette groups: blue=审核中, orange=需处理, purple=公示/发证, green=成功,
+# red=驳回/失败, gray=撤回/终止/失效.
+_C_BLUE = {"bg": "#E6F1FB", "text": "#0C447C"}
+_C_ORANGE = {"bg": "#FAEEDA", "text": "#854F0B"}
+_C_PURPLE = {"bg": "#EEEDFE", "text": "#3C3489"}
+_C_GREEN = {"bg": "#EAF3DE", "text": "#27500A"}
+_C_RED = {"bg": "#FCEBEB", "text": "#791F1F"}
+_C_GRAY = {"bg": "#F1EFE8", "text": "#444441"}
 STATUS_COLORS: dict[int, dict[str, str]] = {
-    1:  {"bg": "#E6F1FB", "text": "#0C447C"},
-    2:  {"bg": "#FAEEDA", "text": "#854F0B"},
-    3:  {"bg": "#EEEDFE", "text": "#3C3489"},
-    5:  {"bg": "#F1EFE8", "text": "#444441"},
-    6:  {"bg": "#FCEBEB", "text": "#791F1F"},
-    7:  {"bg": "#EAF3DE", "text": "#27500A"},
-    11: {"bg": "#F1EFE8", "text": "#444441"},
+    1:  _C_BLUE,    # 待审核
+    2:  _C_ORANGE,  # 待补正
+    3:  _C_PURPLE,  # 公示中
+    4:  _C_ORANGE,  # 异议
+    5:  _C_GRAY,    # 主动撤回
+    6:  _C_RED,     # 不予登记
+    7:  _C_GREEN,   # 登记成功
+    8:  _C_GRAY,    # 终止登记
+    9:  _C_GRAY,    # 登记撤销
+    10: _C_GRAY,    # 未续展失效
+    11: _C_GRAY,    # 视为撤回
+    12: _C_BLUE,    # 待审核
+    13: _C_GREEN,   # 续展登记
+    14: _C_RED,     # 批量登记失败
+    15: _C_GRAY,    # 撤回审查
+    16: _C_GRAY,    # 撤回补正
+    17: _C_PURPLE,  # 待发证
 }
 
 

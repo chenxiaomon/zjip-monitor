@@ -31,10 +31,12 @@ from .scraper import _build_session, _load_settings
 _ROOT = Path(__file__).parent.parent
 _ATTACHMENTS_DIR = _ROOT / "data" / "attachments"
 
-# 通知书 exists for these audit statuses (frontend shows the block for
-# 待补正/公示/待发证/不予登记/登记成功)
-NOTIFY_STATUSES = {2, 3, 6, 7, 13}
-# 证书 only for 登记成功 / 待发证 (frontend enables the button for [7, 13])
+# 通知书 exists once a record leaves 待审核; query for any post-review status.
+# (待补正2/公示中3/异议4/不予登记6/登记成功7/终止登记8/登记撤销9/续展登记13/待发证17)
+# getNotification returns [] for records without notices, so being inclusive only
+# costs one deduplicated call per status transition and never misses a document.
+NOTIFY_STATUSES = {2, 3, 4, 6, 7, 8, 9, 13, 17}
+# 证书 only for 登记成功 / 续展登记 (frontend enables the 证书 button for [7, 13])
 CERT_STATUSES = {7, 13}
 
 _MANIFEST_NAME = ".sync.json"
