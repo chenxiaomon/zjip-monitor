@@ -18,6 +18,8 @@ rsync -az --progress \
   --exclude='.env' \
   --exclude='config/accounts.enc' \
   --exclude='config/accounts.yaml' \
+  --exclude='config/settings.yaml' \
+  --exclude='miniprogram/config.js' \
   --exclude='data/' \
   --exclude='logs/' \
   --exclude='.git/' \
