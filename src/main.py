@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -33,6 +34,9 @@ _ROOT = Path(__file__).parent.parent
 _SNAPSHOTS_DIR = _ROOT / "data" / "snapshots"
 _EVENTS_FILE = _ROOT / "data" / "events.jsonl"
 
+# Guards concurrent appends from the >10-account thread-pool path
+_EVENTS_LOCK = threading.Lock()
+
 
 def _append_event(account: str, company: str, diff: DiffResult, ts: datetime) -> None:
     """Append a diff event to data/events.jsonl and broadcast to web SSE if running."""
@@ -54,9 +58,10 @@ def _append_event(account: str, company: str, diff: DiffResult, ts: datetime) ->
         ],
         "removed": diff.removed,
     }
-    _EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with _EVENTS_FILE.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(event, ensure_ascii=False) + "\n")
+    with _EVENTS_LOCK:
+        _EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with _EVENTS_FILE.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +251,7 @@ def run_all(*, force_login: bool = False) -> dict[str, Any]:
         accounts = load_accounts()
     except ConfigError as exc:
         logger.error(f"Cannot load accounts: {exc}")
-        return []
+        return {"results": [], "report_path": None}
 
     run_time = datetime.now(timezone.utc)
 

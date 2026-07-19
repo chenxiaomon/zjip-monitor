@@ -1,4 +1,4 @@
-"""Public JSON API for the WeChat Mini Program — no authentication required."""
+"""JSON API for the WeChat Mini Program — requires X-API-Key header (or Basic Auth)."""
 
 from __future__ import annotations
 

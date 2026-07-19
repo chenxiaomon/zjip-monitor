@@ -22,6 +22,7 @@ Page({
   fetchStatus(done) {
     wx.request({
       url: app.globalData.apiBase + '/api/status',
+      header: { 'X-API-Key': app.globalData.apiKey },
       success: (res) => {
         const d = res.data
         const accounts = (d.accounts || []).map(acc => ({

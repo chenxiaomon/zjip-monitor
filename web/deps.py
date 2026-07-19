@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json as _json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Coroutine
 
 from fastapi.templating import Jinja2Templates
 
@@ -12,6 +14,16 @@ _HERE = Path(__file__).parent
 _SHANGHAI_TZ = timezone(timedelta(hours=8))
 
 templates = Jinja2Templates(directory=_HERE / "templates")
+
+# Keep strong references to fire-and-forget tasks so they aren't GC'd mid-run
+_bg_tasks: set[asyncio.Task] = set()
+
+
+def spawn(coro: Coroutine) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+    return task
 
 # Status pill colors per dataRegAuditStatus code
 STATUS_COLORS: dict[int, dict[str, str]] = {

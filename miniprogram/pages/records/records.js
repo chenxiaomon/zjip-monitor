@@ -34,6 +34,7 @@ Page({
       + (company ? '?company=' + encodeURIComponent(company) : '')
     wx.request({
       url,
+      header: { 'X-API-Key': app.globalData.apiKey },
       success: (res) => {
         const records = (res.data.records || []).map(r => ({
           ...r,

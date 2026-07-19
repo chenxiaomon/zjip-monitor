@@ -4,6 +4,8 @@ config/accounts.enc
 config/accounts.yaml
 config/settings.yaml
 !config/settings.yaml.example
+miniprogram/config.js
+miniprogram/project.private.config.json
 
 # 运行时数据
 data/*

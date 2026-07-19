@@ -11,7 +11,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
 from src.main import run_all
-from web.deps import templates
+from web.deps import spawn, templates
 
 router = APIRouter()
 
@@ -69,7 +69,7 @@ def view_report(filename: str) -> FileResponse:
 @router.post("/reports/generate", response_class=HTMLResponse)
 async def generate_report(request: Request) -> HTMLResponse:
     if _gen_status.get("status") != "running":
-        asyncio.create_task(_generate_report_async())
+        spawn(_generate_report_async())
     return templates.TemplateResponse(
         request,
         "_partials/report_gen_status.html",

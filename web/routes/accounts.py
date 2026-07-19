@@ -14,7 +14,7 @@ from fastapi import Form
 from src.config_loader import Account, ConfigError, load_accounts, save_accounts
 from src.login import get_token
 from src.main import run_all, scan_account_and_notify
-from web.deps import templates
+from web.deps import spawn, templates
 from web.services.session import _SESSIONS_DIR, _safe_name, get_session, token_status
 from web.services.snapshot import get_latest_snapshot
 from web.sse import broadcast
@@ -123,7 +123,7 @@ async def relogin(request: Request, username: str) -> HTMLResponse:
         return HTMLResponse(f'<tr id="row-{username}"><td colspan="7" class="px-4 py-2 text-red-500 text-sm">账号不存在</td></tr>')
 
     _tasks[username] = {"status": "pending", "msg": ""}
-    asyncio.create_task(_relogin_async(username, acc.password))
+    spawn(_relogin_async(username, acc.password))
 
     snap = get_latest_snapshot(acc.company)
     row = {
@@ -177,7 +177,7 @@ async def scan_account(request: Request, username: str) -> HTMLResponse:
 
     if _scan_tasks.get(username) != "running":
         _scan_tasks[username] = "running"
-        asyncio.create_task(_scan_one_async(username, acc))
+        spawn(_scan_one_async(username, acc))
 
     snap = get_latest_snapshot(acc.company)
     row = {
@@ -216,7 +216,7 @@ def scan_status_poll(request: Request, username: str) -> HTMLResponse:
 @router.post("/run-once", response_class=HTMLResponse)
 async def run_once_trigger(request: Request) -> HTMLResponse:
     if _run_once.get("status") != "running":
-        asyncio.create_task(_scan_cycle_async())
+        spawn(_scan_cycle_async())
     return templates.TemplateResponse(
         request,
         "_partials/run_once_status.html",
@@ -297,28 +297,12 @@ async def add_account(
 
     # Auto-trigger first login for the new account
     _tasks[username] = {"status": "pending", "msg": ""}
-    asyncio.create_task(_relogin_async(username, password))
+    spawn(_relogin_async(username, password))
 
     # Success: clear modal and trigger tbody refresh
     response = HTMLResponse("")
     response.headers["HX-Trigger"] = "accountSaved"
     return response
-
-
-@router.get("/accounts/{username}/password", response_class=HTMLResponse)
-def reveal_password(request: Request, username: str) -> HTMLResponse:
-    try:
-        accounts_list = load_accounts()
-    except ConfigError:
-        return HTMLResponse("—")
-    acc = next((a for a in accounts_list if a.username == username), None)
-    if acc is None:
-        return HTMLResponse("—")
-    return templates.TemplateResponse(
-        request,
-        "_partials/account_password.html",
-        {"password": acc.password, "username": username},
-    )
 
 
 @router.get("/accounts/rows", response_class=HTMLResponse)

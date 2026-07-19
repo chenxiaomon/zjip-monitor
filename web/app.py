@@ -11,8 +11,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from loguru import logger
 
 from web.routes import accounts, api, changes, dashboard, notify, records, reports, settings, view
 from web.sse import router as sse_router, start_watcher
@@ -22,6 +23,16 @@ load_dotenv(_HERE.parent / ".env")
 
 _WEB_USER = os.getenv("WEB_USER", "admin")
 _WEB_PASS = os.getenv("WEB_PASS", "changeme")
+_API_KEY = os.getenv("API_KEY", "")
+
+if (not os.getenv("WEB_PASS") or _WEB_PASS == "changeme") and os.getenv("WEB_ALLOW_DEFAULT_PASS") != "1":
+    raise RuntimeError(
+        "WEB_PASS 未设置或仍为默认值 changeme，拒绝启动；"
+        "请在 .env 中设置强口令，开发环境可设 WEB_ALLOW_DEFAULT_PASS=1 豁免"
+    )
+
+if not _API_KEY:
+    logger.warning("API_KEY 未配置，/api/* 仅接受 Basic Auth 访问（小程序将无法直连）")
 
 
 @asynccontextmanager
@@ -53,8 +64,14 @@ async def _basic_auth(request: Request, call_next) -> Response:  # type: ignore[
             pass
     if (request.url.path == "/view" or request.url.path.startswith("/view/")
             or request.url.path.startswith("/static/")
-            or request.url.path in {"/api/status", "/api/records", "/favicon.ico", "/view/partial"}):
+            or request.url.path == "/favicon.ico"):
         return await call_next(request)
+    if request.url.path.startswith("/api/"):
+        api_key = request.headers.get("X-API-Key", "")
+        key_ok = bool(_API_KEY) and secrets.compare_digest(api_key.encode(), _API_KEY.encode())
+        if key_ok or authed:
+            return await call_next(request)
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
     if authed:
         return await call_next(request)
     return Response(
