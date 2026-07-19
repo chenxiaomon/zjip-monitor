@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse
 from src.config_loader import ConfigError, load_accounts
 from src.scraper import AUDIT_STATUS, decode_status
 from web.deps import STATUS_COLORS, templates
+from web.services.attachments_svc import list_attachments
 from web.services.snapshot import get_latest_snapshot
 
 router = APIRouter()
@@ -65,10 +66,12 @@ def _build_records(
                 continue
             if end_ms and apply_ms and apply_ms > end_ms:
                 continue
+            reg_no = r.get("dataRegNo", "")
             rows.append({
                 "company": acc.company,
                 "username": acc.username,
-                "reg_no": r.get("dataRegNo", ""),
+                "reg_no": reg_no,
+                "attachments": list_attachments(acc.company, reg_no) if reg_no else [],
                 "name": r.get("dataRegName", ""),
                 "industry": r.get("dataRegIndustry", ""),
                 "data_type": r.get("dataRegDataType", ""),

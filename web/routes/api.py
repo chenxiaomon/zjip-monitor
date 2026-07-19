@@ -8,7 +8,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
 from src.scraper import AUDIT_STATUS, decode_status
-from web.deps import _fmt_time
+from web.deps import _fmt_time, detail_url
 from web.services.snapshot import get_all_latest_snapshots
 
 router = APIRouter(prefix="/api")
@@ -93,13 +93,15 @@ def api_records(
             code = r.get("dataRegAuditStatus")
             if status is not None and code != status:
                 continue
+            reg_no = r.get("dataRegNo", "")
             rows.append({
                 "company": snap_company,
-                "reg_no": r.get("dataRegNo", ""),
+                "reg_no": reg_no,
                 "name": r.get("dataRegName", ""),
                 "apply_date": _ms_to_date(r.get("dataRegApplyTime")),
                 "status_code": code,
                 "status_label": decode_status(code),
+                "detail_url": detail_url(reg_no) if reg_no else "",
             })
 
     rows.sort(key=lambda r: r["apply_date"], reverse=True)

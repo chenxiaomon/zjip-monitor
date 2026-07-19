@@ -23,8 +23,12 @@
         <td class="px-4 py-2.5 text-xs text-gray-600 dark:text-gray-300 truncate max-w-28" title="{{ row.company }}">
           {{ row.company[:8] }}{% if row.company|length > 8 %}…{% endif %}
         </td>
-        <td class="px-4 py-2.5 font-mono text-xs text-gray-400 dark:text-gray-500 whitespace-nowrap">
-          {{ row.reg_no[:14] if row.reg_no else '—' }}
+        <td class="px-4 py-2.5 font-mono text-xs whitespace-nowrap">
+          {% if row.reg_no %}
+          <a href="{{ detail_url(row.reg_no) }}" target="_blank" rel="noopener"
+             title="在官网打开详情页（需登录平台）"
+             class="text-blue-600 dark:text-blue-400 hover:underline">{{ row.reg_no[:14] }}</a>
+          {% else %}<span class="text-gray-400 dark:text-gray-500">—</span>{% endif %}
         </td>
         <td class="px-4 py-2.5 text-xs text-gray-600 dark:text-gray-300 max-w-xs truncate" title="{{ row.name }}">
           {{ row.name[:30] if row.name else '—' }}

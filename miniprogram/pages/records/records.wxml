@@ -11,6 +11,9 @@
       wx:for="{{records}}"
       wx:key="reg_no"
       class="record-card"
+      bindtap="onTapRecord"
+      data-url="{{item.detail_url}}"
+      data-regno="{{item.reg_no}}"
     >
       <view class="record-header">
         <text class="reg-no">{{item.reg_no}}</text>

@@ -69,6 +69,30 @@ def _tojson(v: object, indent: int = 2) -> str:
     return _json.dumps(v, ensure_ascii=False, indent=indent)
 
 
+def zjip_base_url() -> str:
+    """Platform base URL from config/settings.yaml (cached at first use)."""
+    global _zjip_base
+    if _zjip_base is None:
+        try:
+            import yaml
+
+            settings_file = _HERE.parent / "config" / "settings.yaml"
+            data = yaml.safe_load(settings_file.read_text(encoding="utf-8")) or {}
+            _zjip_base = data.get("base_url") or "https://www.zjip.org.cn"
+        except Exception:
+            _zjip_base = "https://www.zjip.org.cn"
+    return _zjip_base
+
+
+_zjip_base: str | None = None
+
+
+def detail_url(reg_no: str) -> str:
+    """Official per-record detail page on the zjip platform (login required)."""
+    return f"{zjip_base_url()}/dregister/detail/{reg_no}"
+
+
 templates.env.filters["fmt_time"] = _fmt_time
 templates.env.filters["fmt_time_short"] = _fmt_time_short
 templates.env.filters["tojson"] = _tojson
+templates.env.globals["detail_url"] = detail_url

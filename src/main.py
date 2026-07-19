@@ -17,6 +17,7 @@ from typing import Any
 
 from loguru import logger
 
+from .attachments import sync_attachments
 from .config_loader import Account, ConfigError, load_accounts
 from .differ import DiffResult, diff_snapshots
 from .exceptions import (
@@ -198,6 +199,15 @@ def scan_account_and_notify(account: Account) -> dict | None:
 
     # ── Append event to events.jsonl ───────────────────────────────────────
     _append_event(account.username, account.company, diff, fetch_time)
+
+    # ── Sync 通知书/证书 attachments (non-fatal) ────────────────────────────
+    try:
+        new_files = sync_attachments(token, account.company, records)
+        if new_files:
+            logger.info(f"[{account.company}] Downloaded {len(new_files)} attachment(s)")
+        result["attachments"] = [str(p) for p in new_files]
+    except Exception as exc:
+        logger.warning(f"[{account.company}] Attachment sync failed (non-fatal): {exc}")
 
     # Log status summary
     status_counts: dict[str, int] = {}

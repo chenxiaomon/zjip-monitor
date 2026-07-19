@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
-from web.routes import accounts, api, changes, dashboard, notify, records, reports, settings, view
+from web.routes import accounts, api, attachments, changes, dashboard, notify, records, reports, settings, view
 from web.sse import router as sse_router, start_watcher
 
 _HERE = Path(__file__).parent
@@ -98,3 +98,4 @@ app.include_router(reports.router)
 app.include_router(settings.router)
 app.include_router(view.router)
 app.include_router(api.router)
+app.include_router(attachments.router)

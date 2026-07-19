@@ -4,6 +4,10 @@ scraper:
   page_size: 50
   request_timeout_seconds: 30
 
+# 自动下载通知书/证书到 data/attachments/（状态变化时才请求，默认开启）
+attachments:
+  enabled: true
+
 login:
   token_max_age_hours: 8
   headless: true

@@ -58,4 +58,14 @@ Page({
     const c = STATUS_COLORS[code] || { bg: '#f0f0f0', color: '#666' }
     return `background:${c.bg};color:${c.color}`
   },
+
+  // 小程序无法直接打开外部网页：点卡片复制官网详情页链接，用户粘贴到浏览器打开
+  onTapRecord(e) {
+    const url = e.currentTarget.dataset.url
+    if (!url) return
+    wx.setClipboardData({
+      data: url,
+      success: () => wx.showToast({ title: '详情链接已复制', icon: 'success' }),
+    })
+  },
 })
