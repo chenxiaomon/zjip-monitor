@@ -3,7 +3,9 @@ accounts:
     username: "your_account_1"
     password: "your_password_1"
     contact: "张三"
+    group: "group_a"   # 分组 key，对应 settings.yaml 的 groups；留空 = 未分组
   - company: "公司B示例"
     username: "your_account_2"
     password: "your_password_2"
     contact: "李四"
+    group: "group_b"

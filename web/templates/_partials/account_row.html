@@ -19,6 +19,29 @@
     <div class="text-xs text-gray-400 dark:text-gray-500">{{ row.account.contact }}</div>
     {% endif %}
   </td>
+  <!-- 分组 -->
+  {% set is_admin = request.state.user.role == 'admin' if request.state.user else true %}
+  <td class="px-4 py-3">
+    {% if is_admin %}
+    <select name="group"
+            hx-post="/accounts/{{ u }}/group"
+            hx-trigger="change"
+            hx-target="#row-{{ u }}"
+            hx-swap="outerHTML"
+            class="text-xs rounded border border-gray-200 dark:border-gray-600
+                   bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300
+                   px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer">
+      <option value="" {% if not row.account.group %}selected{% endif %}>未分组</option>
+      {% for gkey, gname in get_groups().items() %}
+      <option value="{{ gkey }}" {% if row.account.group == gkey %}selected{% endif %}>{{ gname }}</option>
+      {% endfor %}
+    </select>
+    {% else %}
+    <span class="px-2 py-0.5 rounded-full text-xs bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400">
+      {{ row.account.group | group_label }}
+    </span>
+    {% endif %}
+  </td>
   <!-- 账号 -->
   <td class="px-4 py-3 text-xs text-gray-500 dark:text-gray-400">
     <span class="font-mono">{{ u }}</span>
@@ -82,7 +105,7 @@
         {% if scan_task == 'error' %}巡检失败{% else %}巡检{% endif %}
       </button>
       {% endif %}
-      {% if task.status != 'pending' %}
+      {% if task.status != 'pending' and is_admin %}
       <button hx-post="/accounts/{{ u }}/delete"
               hx-target="#row-{{ u }}"
               hx-swap="delete"

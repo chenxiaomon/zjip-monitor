@@ -25,6 +25,15 @@
       </span>
     </div>
     <ul class="flex-1 px-2 space-y-0.5">
+      {% set current_user = request.state.user %}
+      {% if current_user and current_user.role != 'admin' %}
+      {% set nav = [
+        ('/', 'ti-layout-dashboard', '仪表盘'),
+        ('/accounts', 'ti-users', '账号'),
+        ('/records', 'ti-file-text', '登记记录'),
+        ('/changes', 'ti-history', '变更历史'),
+      ] %}
+      {% else %}
       {% set nav = [
         ('/', 'ti-layout-dashboard', '仪表盘'),
         ('/accounts', 'ti-users', '账号'),
@@ -34,6 +43,7 @@
         ('/reports', 'ti-report-analytics', '报表'),
         ('/settings', 'ti-settings', '设置'),
       ] %}
+      {% endif %}
       {% for href, icon, label in nav %}
       {% set active = request.url.path == href %}
       <li>
@@ -52,9 +62,22 @@
     <!-- Top bar -->
     <header class="h-12 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-5 flex-shrink-0">
       <h1 class="text-sm font-medium text-gray-700 dark:text-gray-200">{% block page_title %}{% endblock %}</h1>
-      <button onclick="toggleDark()" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" title="切换暗色模式">
-        <i class="ti ti-sun-moon text-lg"></i>
-      </button>
+      <div class="flex items-center gap-3">
+        {% if current_user %}
+        <span class="flex items-center gap-1.5 text-xs text-gray-400 dark:text-gray-500">
+          <i class="ti ti-user text-sm"></i>{{ current_user.username }}
+          {% if current_user.role != 'admin' %}
+          <span class="px-1.5 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400">{{ current_user.group | group_label }}</span>
+          {% endif %}
+        </span>
+        {% endif %}
+        <button onclick="toggleDark()" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" title="切换暗色模式">
+          <i class="ti ti-sun-moon text-lg"></i>
+        </button>
+        <a href="/logout" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" title="退出登录">
+          <i class="ti ti-logout text-lg"></i>
+        </a>
+      </div>
     </header>
     <!-- Content -->
     <main class="flex-1 overflow-auto p-6">

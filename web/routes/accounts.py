@@ -14,7 +14,8 @@ from fastapi import Form
 from src.config_loader import Account, ConfigError, load_accounts, save_accounts
 from src.login import get_token
 from src.main import run_all, scan_account_and_notify
-from web.deps import spawn, templates
+from web.auth import require_admin, visible_accounts
+from web.deps import get_groups, spawn, templates
 from web.services.session import _SESSIONS_DIR, _safe_name, get_session, token_status
 from web.services.snapshot import get_latest_snapshot
 from web.sse import broadcast
@@ -37,12 +38,7 @@ _run_once: dict[str, str] = {"status": "idle", "msg": ""}
 # Data helpers
 # ---------------------------------------------------------------------------
 
-def _build_rows(accounts_list=None) -> list[dict]:
-    if accounts_list is None:
-        try:
-            accounts_list = load_accounts()
-        except ConfigError:
-            accounts_list = []
+def _build_rows(accounts_list) -> list[dict]:
     rows = []
     for acc in accounts_list:
         session = get_session(acc.username)
@@ -104,7 +100,7 @@ async def _scan_one_async(username: str, account: Account) -> None:
 
 @router.get("/accounts", response_class=HTMLResponse)
 def accounts_page(request: Request) -> HTMLResponse:
-    rows = _build_rows()
+    rows = _build_rows(visible_accounts(request))
     return templates.TemplateResponse(
         request,
         "accounts.html",
@@ -114,10 +110,7 @@ def accounts_page(request: Request) -> HTMLResponse:
 
 @router.post("/accounts/{username}/relogin", response_class=HTMLResponse)
 async def relogin(request: Request, username: str) -> HTMLResponse:
-    try:
-        accounts_list = load_accounts()
-    except ConfigError:
-        accounts_list = []
+    accounts_list = visible_accounts(request)
     acc = next((a for a in accounts_list if a.username == username), None)
     if acc is None:
         return HTMLResponse(f'<tr id="row-{username}"><td colspan="7" class="px-4 py-2 text-red-500 text-sm">账号不存在</td></tr>')
@@ -142,10 +135,7 @@ async def relogin(request: Request, username: str) -> HTMLResponse:
 
 @router.get("/accounts/{username}/token-status", response_class=HTMLResponse)
 def token_status_poll(request: Request, username: str) -> HTMLResponse:
-    try:
-        accounts_list = load_accounts()
-    except ConfigError:
-        accounts_list = []
+    accounts_list = visible_accounts(request)
     acc = next((a for a in accounts_list if a.username == username), None)
     if acc is None:
         return HTMLResponse(f'<tr id="row-{username}"></tr>')
@@ -167,10 +157,7 @@ def token_status_poll(request: Request, username: str) -> HTMLResponse:
 
 @router.post("/accounts/{username}/scan", response_class=HTMLResponse)
 async def scan_account(request: Request, username: str) -> HTMLResponse:
-    try:
-        accounts_list = load_accounts()
-    except ConfigError:
-        accounts_list = []
+    accounts_list = visible_accounts(request)
     acc = next((a for a in accounts_list if a.username == username), None)
     if acc is None:
         return HTMLResponse(f'<tr id="row-{username}"><td colspan="7" class="px-4 py-2 text-red-500 text-sm">账号不存在</td></tr>')
@@ -193,10 +180,7 @@ async def scan_account(request: Request, username: str) -> HTMLResponse:
 
 @router.get("/accounts/{username}/scan-status", response_class=HTMLResponse)
 def scan_status_poll(request: Request, username: str) -> HTMLResponse:
-    try:
-        accounts_list = load_accounts()
-    except ConfigError:
-        accounts_list = []
+    accounts_list = visible_accounts(request)
     acc = next((a for a in accounts_list if a.username == username), None)
     if acc is None:
         return HTMLResponse(f'<tr id="row-{username}"></tr>')
@@ -239,6 +223,7 @@ def run_once_status(request: Request) -> HTMLResponse:
 
 @router.get("/accounts/new-form", response_class=HTMLResponse)
 def new_account_form(request: Request) -> HTMLResponse:
+    require_admin(request)
     return templates.TemplateResponse(
         request, "_partials/account_form.html", {"error": None}
     )
@@ -251,11 +236,14 @@ async def add_account(
     username: str = Form(...),
     password: str = Form(...),
     contact: str = Form(""),
+    group: str = Form(""),
 ) -> HTMLResponse:
+    require_admin(request)
     company = company.strip()
     username = username.strip()
     password = password.strip()
     contact = contact.strip()
+    group = group.strip()
 
     error = None
     if not company:
@@ -264,6 +252,8 @@ async def add_account(
         error = "账号不能为空"
     elif not password:
         error = "密码不能为空"
+    elif group and group not in get_groups():
+        error = f"分组 {group} 不存在"
     else:
         try:
             existing = load_accounts()
@@ -284,7 +274,7 @@ async def add_account(
         accounts_list = load_accounts()
     except ConfigError:
         accounts_list = []
-    accounts_list.append(Account(company=company, username=username, password=password, contact=contact))
+    accounts_list.append(Account(company=company, username=username, password=password, contact=contact, group=group))
     try:
         save_accounts(accounts_list)
     except ConfigError as exc:
@@ -307,14 +297,46 @@ async def add_account(
 
 @router.get("/accounts/rows", response_class=HTMLResponse)
 def accounts_rows(request: Request) -> HTMLResponse:
-    rows = _build_rows()
+    rows = _build_rows(visible_accounts(request))
     return templates.TemplateResponse(
         request, "_partials/accounts_rows.html", {"rows": rows}
     )
 
 
+@router.post("/accounts/{username}/group", response_class=HTMLResponse)
+def set_account_group(request: Request, username: str, group: str = Form("")) -> HTMLResponse:
+    require_admin(request)
+    group = group.strip()
+    if group and group not in get_groups():
+        return HTMLResponse("分组不存在", status_code=400)
+    try:
+        accounts_list = load_accounts()
+    except ConfigError:
+        accounts_list = []
+    acc = next((a for a in accounts_list if a.username == username), None)
+    if acc is None:
+        return HTMLResponse(f'<tr id="row-{username}"><td colspan="7" class="px-4 py-2 text-red-500 text-sm">账号不存在</td></tr>')
+    acc.group = group
+    try:
+        save_accounts(accounts_list)
+    except ConfigError as exc:
+        return HTMLResponse(f"保存失败：{exc}", status_code=500)
+
+    snap = get_latest_snapshot(acc.company)
+    row = {
+        "account": acc,
+        "token_status": token_status(get_session(username)),
+        "record_count": snap.get("record_count", 0) if snap else 0,
+        "last_check": snap.get("snapshot_time") if snap else None,
+        "task": _tasks.get(username, {}),
+        "scan_task": _scan_tasks.get(username, "idle"),
+    }
+    return templates.TemplateResponse(request, "_partials/account_row.html", {"row": row})
+
+
 @router.post("/accounts/{username}/delete", response_class=HTMLResponse)
 def delete_account(request: Request, username: str) -> HTMLResponse:
+    require_admin(request)
     try:
         accounts_list = load_accounts()
     except ConfigError:

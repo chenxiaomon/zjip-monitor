@@ -7,8 +7,8 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 
-from src.config_loader import ConfigError, load_accounts
 from src.scraper import AUDIT_STATUS, decode_status
+from web.auth import visible_accounts
 from web.deps import STATUS_COLORS, templates
 from web.services.attachments_svc import list_attachments
 from web.services.snapshot import get_latest_snapshot
@@ -40,16 +40,12 @@ def _date_to_ms(date_str: str, end_of_day: bool = False) -> int | None:
 
 
 def _build_records(
+    accounts: list,
     account_filter: str | None,
     status_filter: int | None,
     start_ms: int | None = None,
     end_ms: int | None = None,
 ) -> tuple[list[dict], list]:
-    try:
-        accounts = load_accounts()
-    except ConfigError:
-        accounts = []
-
     rows: list[dict] = []
     for acc in accounts:
         if account_filter and acc.username != account_filter:
@@ -94,11 +90,8 @@ def _ctx(
 ) -> dict:
     start_ms = _date_to_ms(start_date) if start_date else None
     end_ms = _date_to_ms(end_date, end_of_day=True) if end_date else None
-    rows, accounts = _build_records(account, status, start_ms, end_ms)
-    try:
-        accounts_list = load_accounts()
-    except ConfigError:
-        accounts_list = []
+    accounts_list = visible_accounts(request)
+    rows, _ = _build_records(accounts_list, account, status, start_ms, end_ms)
     return {
         "rows": rows,
         "accounts_list": accounts_list,

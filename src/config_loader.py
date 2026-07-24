@@ -33,6 +33,7 @@ class Account:
     username: str
     password: str
     contact: str = ""
+    group: str = ""  # 分组 key（对应 settings.yaml groups；空 = 未分组）
 
     def __repr__(self) -> str:
         return f"Account(company={self.company!r}, username={self.username!r})"
@@ -97,6 +98,7 @@ def load_accounts() -> list[Account]:
             username=raw["username"],
             password=raw["password"],
             contact=raw.get("contact", ""),
+            group=raw.get("group", ""),
         ))
 
     logger.info(f"Loaded {len(accounts)} account(s) from accounts.enc")
@@ -121,6 +123,7 @@ def save_accounts(accounts: list[Account]) -> None:
                 "username": a.username,
                 "password": a.password,
                 "contact": a.contact,
+                "group": a.group,
             }
             for a in accounts
         ]

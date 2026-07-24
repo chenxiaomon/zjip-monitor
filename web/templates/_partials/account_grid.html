@@ -16,7 +16,14 @@
     <!-- Company & account -->
     <div class="pr-6">
       <div class="text-sm font-medium text-gray-800 dark:text-gray-100 mb-0.5">{{ snap.account.company }}</div>
-      <div class="font-mono text-xs text-gray-400 dark:text-gray-500 mb-3">{{ snap.account.username }}</div>
+      <div class="flex items-center gap-2 mb-3">
+        <span class="font-mono text-xs text-gray-400 dark:text-gray-500">{{ snap.account.username }}</span>
+        {% if request.state.user and request.state.user.role == 'admin' %}
+        <span class="px-1.5 py-0.5 rounded-full text-xs {% if snap.account.group %}bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400{% else %}bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500{% endif %}">
+          {{ snap.account.group | group_label }}
+        </span>
+        {% endif %}
+      </div>
     </div>
     <!-- Status pills -->
     {% if snap.status_counts %}

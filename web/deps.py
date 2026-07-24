@@ -110,7 +110,28 @@ def detail_url(reg_no: str) -> str:
     return f"{zjip_base_url()}/dregister/detail/{reg_no}"
 
 
+def get_groups() -> dict[str, str]:
+    """分组 key → 中文名，来自 config/settings.yaml（不缓存，改名即时生效）。"""
+    try:
+        import yaml
+
+        settings_file = _HERE.parent / "config" / "settings.yaml"
+        data = yaml.safe_load(settings_file.read_text(encoding="utf-8")) or {}
+        groups = data.get("groups") or {}
+        return {str(k): str(v) for k, v in groups.items()}
+    except Exception:
+        return {}
+
+
+def group_label(key: str | None) -> str:
+    if not key:
+        return "未分组"
+    return get_groups().get(key, key)
+
+
 templates.env.filters["fmt_time"] = _fmt_time
 templates.env.filters["fmt_time_short"] = _fmt_time_short
 templates.env.filters["tojson"] = _tojson
+templates.env.filters["group_label"] = group_label
 templates.env.globals["detail_url"] = detail_url
+templates.env.globals["get_groups"] = get_groups

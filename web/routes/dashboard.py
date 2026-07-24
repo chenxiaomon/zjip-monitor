@@ -7,8 +7,8 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from src.config_loader import ConfigError, load_accounts
 from src.scraper import AUDIT_STATUS
+from web.auth import allowed_usernames, visible_accounts
 from web.deps import STATUS_COLORS, templates
 from web.services.events import read_events
 from web.services.snapshot import get_latest_snapshot
@@ -33,11 +33,16 @@ def _apply_year(ms: int | None) -> int | None:
     return datetime.fromtimestamp(ms / 1000, tz=_SHANGHAI_TZ).year
 
 
-def _dashboard_ctx(year: int | None = None) -> dict:
-    try:
-        accounts = load_accounts()
-    except ConfigError:
-        accounts = []
+def _filtered_events(request: Request, hours: int = 24, limit: int = 50) -> list[dict]:
+    events = read_events(hours=hours, limit=limit)
+    allowed = allowed_usernames(request)
+    if allowed is None:
+        return events
+    return [e for e in events if e.get("account") in allowed]
+
+
+def _dashboard_ctx(request: Request, year: int | None = None) -> dict:
+    accounts = visible_accounts(request)
 
     account_snapshots = []
     for acc in accounts:
@@ -63,7 +68,7 @@ def _dashboard_ctx(year: int | None = None) -> dict:
     total_records = sum(s["total"] for s in account_snapshots)
     success_count = sum(s["status_counts"].get(7, 0) for s in account_snapshots)
     pending_correction = sum(s["status_counts"].get(2, 0) for s in account_snapshots)
-    events = read_events(hours=24, limit=50)
+    events = _filtered_events(request)
 
     return {
         "account_count": len(accounts),
@@ -80,22 +85,22 @@ def _dashboard_ctx(year: int | None = None) -> dict:
 
 @router.get("/", response_class=HTMLResponse)
 def dashboard_page(request: Request, year: int | None = None) -> HTMLResponse:
-    return templates.TemplateResponse(request, "dashboard.html", _dashboard_ctx(year))
+    return templates.TemplateResponse(request, "dashboard.html", _dashboard_ctx(request, year))
 
 
 @router.get("/partials/metrics", response_class=HTMLResponse)
 def partial_metrics(request: Request, year: int | None = None) -> HTMLResponse:
-    return templates.TemplateResponse(request, "_partials/metric_cards.html", _dashboard_ctx(year))
+    return templates.TemplateResponse(request, "_partials/metric_cards.html", _dashboard_ctx(request, year))
 
 
 @router.get("/partials/account-grid", response_class=HTMLResponse)
 def partial_account_grid(request: Request, year: int | None = None) -> HTMLResponse:
-    return templates.TemplateResponse(request, "_partials/account_grid.html", _dashboard_ctx(year))
+    return templates.TemplateResponse(request, "_partials/account_grid.html", _dashboard_ctx(request, year))
 
 
 @router.get("/partials/timeline", response_class=HTMLResponse)
 def partial_timeline(request: Request) -> HTMLResponse:
-    events = read_events(hours=24, limit=50)
+    events = _filtered_events(request)
     return templates.TemplateResponse(
         request,
         "_partials/timeline.html",

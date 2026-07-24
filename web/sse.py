@@ -14,6 +14,8 @@ from typing import AsyncGenerator
 from fastapi import APIRouter, Request
 from sse_starlette.sse import EventSourceResponse
 
+from web.auth import allowed_usernames
+
 _EVENTS_FILE = Path(__file__).parent.parent / "data" / "events.jsonl"
 
 router = APIRouter()
@@ -53,7 +55,22 @@ async def start_watcher() -> None:
                 await broadcast(line)
 
 
+def _visible_to(allowed: set[str] | None, data: str) -> bool:
+    """分组账号只收到自己组内账号的事件；无 account 字段的控制消息全员可见。"""
+    if allowed is None:
+        return True
+    try:
+        event = json.loads(data)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    account = event.get("account")
+    if account is None:
+        return True
+    return account in allowed
+
+
 async def _stream(request: Request) -> AsyncGenerator[dict, None]:
+    allowed = allowed_usernames(request)
     q: asyncio.Queue[str] = asyncio.Queue()
     _subscribers.add(q)
     try:
@@ -62,7 +79,8 @@ async def _stream(request: Request) -> AsyncGenerator[dict, None]:
                 break
             try:
                 data = await asyncio.wait_for(q.get(), timeout=25)
-                yield {"event": "update", "data": data}
+                if _visible_to(allowed, data):
+                    yield {"event": "update", "data": data}
             except asyncio.TimeoutError:
                 yield {"event": "ping", "data": ""}
     finally:

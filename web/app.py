@@ -1,4 +1,4 @@
-"""FastAPI entry point with HTTP Basic Auth, SSE, and static files."""
+"""FastAPI entry point with session-cookie auth, SSE, and static files."""
 
 from __future__ import annotations
 
@@ -15,7 +15,8 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
-from web.routes import accounts, api, attachments, changes, dashboard, notify, records, reports, settings, view
+from web import auth
+from web.routes import accounts, api, attachments, changes, dashboard, login, notify, records, reports, settings, view
 from web.sse import router as sse_router, start_watcher
 
 _HERE = Path(__file__).parent
@@ -49,36 +50,53 @@ async def _lifespan(app: FastAPI):  # type: ignore[type-arg]
 app = FastAPI(title="数智通监控", lifespan=_lifespan)
 
 
+# 管理员专属页面（分组账号访问返回 403）
+_ADMIN_ONLY_PREFIXES = ("/settings", "/notify", "/reports", "/run-once")
+
+
+def _basic_admin_ok(request: Request) -> bool:
+    """Basic Auth fallback with admin credentials (for scripts/curl)."""
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Basic "):
+        return False
+    try:
+        decoded = base64.b64decode(header[6:]).decode("utf-8")
+        username, _, password = decoded.partition(":")
+        user_ok = secrets.compare_digest(username.encode(), _WEB_USER.encode())
+        pass_ok = secrets.compare_digest(password.encode(), _WEB_PASS.encode())
+        return user_ok and pass_ok
+    except Exception:
+        return False
+
+
 @app.middleware("http")
-async def _basic_auth(request: Request, call_next) -> Response:  # type: ignore[return]
-    auth = request.headers.get("Authorization", "")
-    authed = False
-    if auth.startswith("Basic "):
-        try:
-            decoded = base64.b64decode(auth[6:]).decode("utf-8")
-            username, _, password = decoded.partition(":")
-            user_ok = secrets.compare_digest(username.encode(), _WEB_USER.encode())
-            pass_ok = secrets.compare_digest(password.encode(), _WEB_PASS.encode())
-            authed = user_ok and pass_ok
-        except Exception:
-            pass
-    if (request.url.path == "/view" or request.url.path.startswith("/view/")
-            or request.url.path.startswith("/static/")
-            or request.url.path == "/favicon.ico"):
+async def _auth_middleware(request: Request, call_next) -> Response:  # type: ignore[return]
+    path = request.url.path
+    # 公开路径：只读展示页、静态资源、登录/登出
+    if (path == "/view" or path.startswith("/view/")
+            or path.startswith("/static/")
+            or path in ("/favicon.ico", "/login", "/logout")):
         return await call_next(request)
-    if request.url.path.startswith("/api/"):
+    # 小程序 API：X-API-Key 或 Basic 管理员
+    if path.startswith("/api/"):
         api_key = request.headers.get("X-API-Key", "")
         key_ok = bool(_API_KEY) and secrets.compare_digest(api_key.encode(), _API_KEY.encode())
-        if key_ok or authed:
+        if key_ok or _basic_admin_ok(request):
             return await call_next(request)
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    if authed:
-        return await call_next(request)
-    return Response(
-        "Unauthorized",
-        status_code=401,
-        headers={"WWW-Authenticate": 'Basic realm="shuzhitong"'},
-    )
+    # 控制台：会话 cookie，Basic 管理员兜底
+    user = auth.user_from_cookie(request.cookies.get(auth.COOKIE_NAME))
+    if user is None and _basic_admin_ok(request):
+        user = auth.admin_user()
+    if user is None:
+        if request.headers.get("HX-Request"):
+            # 会话过期的 HTMX 轮询：让整页跳转登录页
+            return Response(status_code=401, headers={"HX-Redirect": "/login"})
+        return RedirectResponse(url="/login", status_code=302)
+    request.state.user = user
+    if user["role"] != "admin" and path.startswith(_ADMIN_ONLY_PREFIXES):
+        return Response("无权限", status_code=403)
+    return await call_next(request)
 
 
 app.mount("/static", StaticFiles(directory=_HERE / "static"), name="static")
@@ -88,6 +106,7 @@ app.mount("/static", StaticFiles(directory=_HERE / "static"), name="static")
 async def favicon() -> RedirectResponse:
     return RedirectResponse(url="/static/favicon.svg")
 
+app.include_router(login.router)
 app.include_router(sse_router)
 app.include_router(dashboard.router)
 app.include_router(changes.router)
