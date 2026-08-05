@@ -1,12 +1,57 @@
-"""Read and parse events from data/events.jsonl."""
+"""Read and parse events from data/events.jsonl.
+
+The parsed file is cached on (mtime, size) — the dashboard re-reads it on
+every render and the file only ever changes by appends or rotation.
+"""
 
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _EVENTS_FILE = Path(__file__).parent.parent.parent / "data" / "events.jsonl"
+
+_cache_lock = threading.Lock()
+# (mtime, size) → parsed events with pre-parsed timestamps, file order
+_cache: tuple[tuple[float, int], list[tuple[datetime | None, dict]]] | None = None
+
+
+def _load_parsed() -> list[tuple[datetime | None, dict]]:
+    global _cache
+    try:
+        st = _EVENTS_FILE.stat()
+    except OSError:
+        return []
+    key = (st.st_mtime, st.st_size)
+    with _cache_lock:
+        if _cache is not None and _cache[0] == key:
+            return _cache[1]
+    try:
+        lines = _EVENTS_FILE.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return []
+    parsed: list[tuple[datetime | None, dict]] = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        ts: datetime | None = None
+        try:
+            ts = datetime.fromisoformat(event.get("timestamp", ""))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+        except ValueError:
+            ts = None
+        parsed.append((ts, event))
+    with _cache_lock:
+        _cache = (key, parsed)
+    return parsed
 
 
 def read_events(
@@ -21,33 +66,12 @@ def read_events(
         hours:   Return only events from the last N hours.
         limit:   Max number of events to return.
     """
-    if not _EVENTS_FILE.exists():
-        return []
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-    try:
-        lines = _EVENTS_FILE.read_text(encoding="utf-8").splitlines()
-    except Exception:
-        return []
-
     events: list[dict] = []
-    for line in reversed(lines):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
+    for ts, event in reversed(_load_parsed()):
+        if ts is None or ts < cutoff:
             continue
         if account and event.get("account") != account:
-            continue
-        ts_str = event.get("timestamp", "")
-        try:
-            ts = datetime.fromisoformat(ts_str)
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
-            if ts < cutoff:
-                continue
-        except ValueError:
             continue
         events.append(event)
         if len(events) >= limit:

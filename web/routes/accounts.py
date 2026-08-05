@@ -4,25 +4,24 @@ from __future__ import annotations
 
 import asyncio
 import json
-from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from fastapi import Form
+from loguru import logger
 
+from src import control
 from src.config_loader import Account, ConfigError, load_accounts, save_accounts
 from src.login import get_token
-from src.main import run_all, scan_account_and_notify
+from src.main import run_all, run_single
 from web.auth import require_admin, visible_accounts
-from web.deps import get_groups, spawn, templates
+from web.deps import executor as _executor, get_groups, spawn, templates
 from web.services.session import _SESSIONS_DIR, _safe_name, get_session, token_status
 from web.services.snapshot import get_latest_snapshot
 from web.sse import broadcast
 
 router = APIRouter()
-
-_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="accounts")
 
 # Per-account relogin task state: username → {"status": "pending|ok|error", "msg": ""}
 _tasks: dict[str, dict[str, str]] = {}
@@ -30,8 +29,21 @@ _tasks: dict[str, dict[str, str]] = {}
 # Per-account single scan state: username → "idle|running|done|error"
 _scan_tasks: dict[str, str] = {}
 
-# Global run-once state
-_run_once: dict[str, str] = {"status": "idle", "msg": ""}
+
+def run_state_ctx() -> dict:
+    """Template context for the global run status, read from data/control/state.json.
+
+    Cross-process: also reflects (and can stop) runs started by the daemon or CLI.
+    """
+    state = control.read_state()
+    if not state:
+        return {"status": "idle", "msg": "", "progress": {}, "trigger": None}
+    return {
+        "status": state.get("status", "idle"),
+        "msg": state.get("error") or "",
+        "progress": state.get("progress") or {},
+        "trigger": state.get("trigger"),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -58,12 +70,25 @@ def _build_rows(accounts_list) -> list[dict]:
 # Background tasks
 # ---------------------------------------------------------------------------
 
+def _relogin_locked(username: str, password: str) -> None:
+    """Fresh browser login under the global run lock (avoids clashing with a scan)."""
+    ctx = control.try_acquire(kind="relogin", trigger="web")
+    if ctx is None:
+        raise RuntimeError("巡检进行中，请稍后再试")
+    try:
+        get_token(username, password, force_refresh=True)
+    except Exception as exc:
+        ctx.finish("error", error=str(exc)[:200])
+        raise
+    ctx.finish("done")
+
+
 async def _relogin_async(username: str, password: str) -> None:
     loop = asyncio.get_event_loop()
     try:
         await loop.run_in_executor(
             _executor,
-            lambda: get_token(username, password, force_refresh=True),
+            lambda: _relogin_locked(username, password),
         )
         _tasks[username] = {"status": "ok", "msg": ""}
     except Exception as exc:
@@ -71,27 +96,35 @@ async def _relogin_async(username: str, password: str) -> None:
 
 
 async def _scan_cycle_async() -> None:
+    # Run state lives in data/control/state.json (written by run_all itself);
+    # duplicate triggers are rejected by the global run lock inside run_all.
     loop = asyncio.get_event_loop()
-    _run_once["status"] = "running"
-    _run_once["msg"] = ""
     try:
-        await loop.run_in_executor(_executor, run_all)
-        _run_once["status"] = "done"
+        await loop.run_in_executor(_executor, lambda: run_all(trigger="web"))
         await broadcast(json.dumps({"type": "update"}))
     except Exception as exc:
-        _run_once["status"] = "error"
-        _run_once["msg"] = str(exc)[:80]
+        logger.error(f"run_all failed: {exc!r}")
 
 
 async def _scan_one_async(username: str, account: Account) -> None:
     _scan_tasks[username] = "running"
     loop = asyncio.get_event_loop()
+    status = "error"
     try:
-        await loop.run_in_executor(_executor, lambda: scan_account_and_notify(account))
-        _scan_tasks[username] = "done"
+        result = await loop.run_in_executor(
+            _executor, lambda: run_single(account, trigger="web")
+        )
+        if result.get("skipped"):
+            status = "idle"  # global lock busy — button reappears, user can retry
+        elif result.get("error"):
+            status = "error"
+        else:
+            status = "done"
         await broadcast(json.dumps({"type": "update"}))
-    except Exception:
-        _scan_tasks[username] = "error"
+    except Exception as exc:
+        logger.error(f"[{account.company}] Single scan failed: {exc!r}")
+    finally:
+        _scan_tasks[username] = status
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +137,7 @@ def accounts_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "accounts.html",
-        {"rows": rows, "run_once": _run_once},
+        {"rows": rows, "run_once": run_state_ctx()},
     )
 
 
@@ -199,12 +232,25 @@ def scan_status_poll(request: Request, username: str) -> HTMLResponse:
 
 @router.post("/run-once", response_class=HTMLResponse)
 async def run_once_trigger(request: Request) -> HTMLResponse:
-    if _run_once.get("status") != "running":
-        spawn(_scan_cycle_async())
+    # Always spawn; run_all's global file lock rejects duplicates race-free.
+    spawn(_scan_cycle_async())
     return templates.TemplateResponse(
         request,
         "_partials/run_once_status.html",
-        {"run_once": {"status": "running", "msg": ""}},
+        {"run_once": {"status": "running", "msg": "", "progress": {}, "trigger": "web"}},
+    )
+
+
+@router.post("/run-once/stop", response_class=HTMLResponse)
+async def run_once_stop(request: Request) -> HTMLResponse:
+    control.request_stop()
+    ctx = run_state_ctx()
+    if ctx["status"] == "running":
+        ctx["status"] = "stopping"
+    return templates.TemplateResponse(
+        request,
+        "_partials/run_once_status.html",
+        {"run_once": ctx},
     )
 
 
@@ -213,7 +259,7 @@ def run_once_status(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "_partials/run_once_status.html",
-        {"run_once": _run_once},
+        {"run_once": run_state_ctx()},
     )
 
 
@@ -246,6 +292,7 @@ async def add_account(
     group = group.strip()
 
     error = None
+    accounts_list: list[Account] = []
     if not company:
         error = "公司名称不能为空"
     elif not username:
@@ -256,11 +303,14 @@ async def add_account(
         error = f"分组 {group} 不存在"
     else:
         try:
-            existing = load_accounts()
-        except ConfigError:
-            existing = []
-        if any(a.username == username for a in existing):
-            error = f"账号 {username} 已存在"
+            accounts_list = load_accounts()
+        except ConfigError as exc:
+            # Never fall back to an empty list: save_accounts() overwrites the
+            # whole file, which would wipe every existing account.
+            error = f"账号库读取失败，拒绝写入：{exc}"
+        else:
+            if any(a.username == username for a in accounts_list):
+                error = f"账号 {username} 已存在"
 
     if error:
         return templates.TemplateResponse(
@@ -270,10 +320,6 @@ async def add_account(
             headers={"HX-Retarget": "#modal-container", "HX-Reswap": "innerHTML"},
         )
 
-    try:
-        accounts_list = load_accounts()
-    except ConfigError:
-        accounts_list = []
     accounts_list.append(Account(company=company, username=username, password=password, contact=contact, group=group))
     try:
         save_accounts(accounts_list)
@@ -311,8 +357,8 @@ def set_account_group(request: Request, username: str, group: str = Form("")) ->
         return HTMLResponse("分组不存在", status_code=400)
     try:
         accounts_list = load_accounts()
-    except ConfigError:
-        accounts_list = []
+    except ConfigError as exc:
+        return HTMLResponse(f"账号库读取失败，拒绝写入：{exc}", status_code=500)
     acc = next((a for a in accounts_list if a.username == username), None)
     if acc is None:
         return HTMLResponse(f'<tr id="row-{username}"><td colspan="7" class="px-4 py-2 text-red-500 text-sm">账号不存在</td></tr>')
@@ -339,18 +385,18 @@ def delete_account(request: Request, username: str) -> HTMLResponse:
     require_admin(request)
     try:
         accounts_list = load_accounts()
-    except ConfigError:
-        accounts_list = []
+    except ConfigError as exc:
+        return HTMLResponse(f"账号库读取失败，拒绝写入：{exc}", status_code=500)
     new_list = [a for a in accounts_list if a.username != username]
     if len(new_list) == len(accounts_list):
         return HTMLResponse(status_code=404)
     try:
         save_accounts(new_list)
-        _tasks.pop(username, None)
-        # Remove cached JWT token so it cannot be reused
-        session_file = _SESSIONS_DIR / f"{_safe_name(username)}.json"
-        if session_file.exists():
-            session_file.unlink()
-    except ConfigError:
-        pass
+    except ConfigError as exc:
+        return HTMLResponse(f"保存失败：{exc}", status_code=500)
+    _tasks.pop(username, None)
+    # Remove cached JWT token so it cannot be reused
+    session_file = _SESSIONS_DIR / f"{_safe_name(username)}.json"
+    if session_file.exists():
+        session_file.unlink()
     return HTMLResponse("")

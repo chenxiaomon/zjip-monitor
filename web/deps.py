@@ -4,16 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import json as _json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Coroutine
 
 from fastapi.templating import Jinja2Templates
 
+from src.settings_cache import get_settings
+
 _HERE = Path(__file__).parent
 _SHANGHAI_TZ = timezone(timedelta(hours=8))
 
 templates = Jinja2Templates(directory=_HERE / "templates")
+
+# Single shared pool for all blocking work (scans, relogins, report runs).
+# One instance so lifespan shutdown can cancel queued work in one place.
+executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="worker")
 
 # Keep strong references to fire-and-forget tasks so they aren't GC'd mid-run
 _bg_tasks: set[asyncio.Task] = set()
@@ -88,21 +95,8 @@ def _tojson(v: object, indent: int = 2) -> str:
 
 
 def zjip_base_url() -> str:
-    """Platform base URL from config/settings.yaml (cached at first use)."""
-    global _zjip_base
-    if _zjip_base is None:
-        try:
-            import yaml
-
-            settings_file = _HERE.parent / "config" / "settings.yaml"
-            data = yaml.safe_load(settings_file.read_text(encoding="utf-8")) or {}
-            _zjip_base = data.get("base_url") or "https://www.zjip.org.cn"
-        except Exception:
-            _zjip_base = "https://www.zjip.org.cn"
-    return _zjip_base
-
-
-_zjip_base: str | None = None
+    """Platform base URL from config/settings.yaml (mtime-cached)."""
+    return get_settings().get("base_url") or "https://www.zjip.org.cn"
 
 
 def detail_url(reg_no: str) -> str:
@@ -111,16 +105,9 @@ def detail_url(reg_no: str) -> str:
 
 
 def get_groups() -> dict[str, str]:
-    """分组 key → 中文名，来自 config/settings.yaml（不缓存，改名即时生效）。"""
-    try:
-        import yaml
-
-        settings_file = _HERE.parent / "config" / "settings.yaml"
-        data = yaml.safe_load(settings_file.read_text(encoding="utf-8")) or {}
-        groups = data.get("groups") or {}
-        return {str(k): str(v) for k, v in groups.items()}
-    except Exception:
-        return {}
+    """分组 key → 中文名，来自 config/settings.yaml（mtime 缓存，改名即时生效）。"""
+    groups = get_settings().get("groups") or {}
+    return {str(k): str(v) for k, v in groups.items()}
 
 
 def group_label(key: str | None) -> str:

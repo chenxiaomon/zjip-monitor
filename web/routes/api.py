@@ -25,10 +25,13 @@ def _account_dot(status_counts: dict[int, int]) -> str:
     return "green"
 
 
-def _is_2026(ms: int | None) -> bool:
+def _in_year(ms: int | None, year: int | None) -> bool:
+    """True if the ms-timestamp falls in `year`; no filter when year is None."""
+    if year is None:
+        return True
     if not ms:
         return False
-    return datetime.fromtimestamp(ms / 1000, tz=_SHANGHAI_TZ).year == 2026
+    return datetime.fromtimestamp(ms / 1000, tz=_SHANGHAI_TZ).year == year
 
 
 def _ms_to_date(ms: int | None) -> str:
@@ -39,8 +42,8 @@ def _ms_to_date(ms: int | None) -> str:
 
 
 @router.get("/status")
-def api_status() -> JSONResponse:
-    """All accounts' latest status (2026 records only)."""
+def api_status(year: int | None = Query(None)) -> JSONResponse:
+    """All accounts' latest status (optionally limited to one application year)."""
     accounts = []
     total_records = 0
     success_count = 0
@@ -49,7 +52,7 @@ def api_status() -> JSONResponse:
     for snap in get_all_latest_snapshots():
         status_counts: dict[int, int] = {}
         for r in snap.get("records", []):
-            if not _is_2026(r.get("dataRegApplyTime")):
+            if not _in_year(r.get("dataRegApplyTime"), year):
                 continue
             code = r.get("dataRegAuditStatus")
             if code is not None:
@@ -80,8 +83,9 @@ def api_status() -> JSONResponse:
 def api_records(
     company: str | None = Query(None),
     status: int | None = Query(None),
+    year: int | None = Query(None),
 ) -> JSONResponse:
-    """Registration records (2026 only), filtered by company name and/or status."""
+    """Registration records, filtered by company name, status and/or application year."""
     rows: list[dict] = []
 
     for snap in get_all_latest_snapshots():
@@ -89,7 +93,7 @@ def api_records(
         if company and snap_company != company:
             continue
         for r in snap.get("records", []):
-            if not _is_2026(r.get("dataRegApplyTime")):
+            if not _in_year(r.get("dataRegApplyTime"), year):
                 continue
             code = r.get("dataRegAuditStatus")
             if status is not None and code != status:

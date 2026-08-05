@@ -1,13 +1,43 @@
-"""Read snapshots from data/snapshots/ (flat naming: {company}_{YYYY-MM-DD-HHMM}.json)."""
+"""Read snapshots from data/snapshots/ (flat naming: {company}_{YYYY-MM-DD-HHMM}.json).
+
+Parsed files are cached on mtime — the dashboard renders several partials per
+refresh and each used to re-read and re-parse every snapshot from disk.
+"""
 
 from __future__ import annotations
 
 import json
 import re
+import threading
 from pathlib import Path
 
 _SNAPSHOTS_DIR = Path(__file__).parent.parent.parent / "data" / "snapshots"
 _DATE_RE = re.compile(r"^(.+)_(\d{4}-\d{2}-\d{2}-\d{4})$")
+
+_cache_lock = threading.Lock()
+_cache: dict[str, tuple[float, dict]] = {}  # path → (mtime, parsed)
+_CACHE_MAX = 512
+
+
+def _read_cached(path: Path) -> dict | None:
+    key = str(path)
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return None
+    with _cache_lock:
+        hit = _cache.get(key)
+        if hit is not None and hit[0] == mtime:
+            return hit[1]
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    with _cache_lock:
+        if len(_cache) >= _CACHE_MAX:
+            _cache.clear()  # crude but bounded; refills on demand
+        _cache[key] = (mtime, parsed)
+    return parsed
 
 
 def _safe_name(company: str) -> str:
@@ -21,10 +51,7 @@ def get_latest_snapshot(company: str) -> dict | None:
     files = sorted(_SNAPSHOTS_DIR.glob(f"{prefix}_*.json"))
     if not files:
         return None
-    try:
-        return json.loads(files[-1].read_text(encoding="utf-8"))
-    except Exception:
-        return None
+    return _read_cached(files[-1])
 
 
 def get_all_latest_snapshots() -> list[dict]:
@@ -38,10 +65,9 @@ def get_all_latest_snapshots() -> list[dict]:
             by_prefix[m.group(1)] = f  # alphabetically later = more recent
     results = []
     for path in by_prefix.values():
-        try:
-            results.append(json.loads(path.read_text(encoding="utf-8")))
-        except Exception:
-            pass
+        parsed = _read_cached(path)
+        if parsed is not None:
+            results.append(parsed)
     return results
 
 
@@ -70,8 +96,7 @@ def get_snapshots_by_date(date_str: str) -> list[dict]:
                 by_company[company] = f
     results = []
     for path in by_company.values():
-        try:
-            results.append(json.loads(path.read_text(encoding="utf-8")))
-        except Exception:
-            pass
+        parsed = _read_cached(path)
+        if parsed is not None:
+            results.append(parsed)
     return results

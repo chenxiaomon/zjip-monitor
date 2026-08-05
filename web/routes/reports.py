@@ -3,20 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
-from src.main import run_all
-from web.deps import spawn, templates
+from src.reporter import generate_report_from_snapshots
+from web.deps import executor as _executor, spawn, templates
 
 router = APIRouter()
 
 _REPORTS_DIR = Path(__file__).parent.parent.parent / "data" / "reports"
-_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="reports")
 _gen_status: dict[str, str] = {"status": "idle", "msg": ""}
 
 
@@ -38,15 +36,25 @@ def _list_reports() -> list[dict]:
 
 
 async def _generate_report_async() -> None:
+    # Renders from existing snapshots — no login, no fetching, no notifications,
+    # no run lock. Completes in seconds even while a scan is running.
     _gen_status["status"] = "running"
     loop = asyncio.get_event_loop()
     try:
-        await loop.run_in_executor(_executor, run_all)
-        _gen_status["status"] = "done"
-        _gen_status["msg"] = ""
+        path = await loop.run_in_executor(_executor, generate_report_from_snapshots)
+        if path is None:
+            _gen_status["status"] = "error"
+            _gen_status["msg"] = "暂无快照数据，请先执行一次巡检"
+        else:
+            _gen_status["status"] = "done"
+            _gen_status["msg"] = ""
     except Exception as exc:
         _gen_status["status"] = "error"
         _gen_status["msg"] = str(exc)[:80]
+    finally:
+        if _gen_status["status"] == "running":  # e.g. cancelled coroutine
+            _gen_status["status"] = "error"
+            _gen_status["msg"] = "任务被中断"
 
 
 @router.get("/reports", response_class=HTMLResponse)

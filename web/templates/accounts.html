@@ -22,7 +22,7 @@
     <button hx-post="/run-once"
             hx-target="#run-once-status"
             hx-swap="outerHTML"
-            {% if run_once.status == 'running' %}disabled{% endif %}
+            {% if run_once.status in ('running', 'stopping') %}disabled{% endif %}
             class="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md
                    bg-blue-600 hover:bg-blue-700 text-white transition-colors
                    disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">

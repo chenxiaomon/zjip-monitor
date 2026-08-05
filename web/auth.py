@@ -21,6 +21,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import HTTPException, Request
+from loguru import logger
 
 from src.config_loader import Account, ConfigError, load_accounts
 
@@ -59,12 +60,15 @@ def _parse_users() -> dict[str, dict]:
         entry = entry.strip()
         if not entry:
             continue
-        parts = entry.split(":")
-        if len(parts) != 3 or not all(p.strip() for p in parts):
+        # username:password:group — split from both ends so the password
+        # itself may contain colons. Never echo the entry (it holds a password).
+        username, sep1, rest = entry.partition(":")
+        password, sep2, group = rest.rpartition(":")
+        if not sep1 or not sep2 or not username.strip() or not password.strip() or not group.strip():
             raise RuntimeError(
-                f"WEB_USERS 第 {i + 1} 项格式错误（应为 用户名:密码:分组key）：{entry!r}"
+                f"WEB_USERS 第 {i + 1} 项格式错误（应为 用户名:密码:分组key）"
             )
-        username, password, group = (p.strip() for p in parts)
+        username, password, group = username.strip(), password.strip(), group.strip()
         if username in users:
             raise RuntimeError(f"WEB_USERS 用户名重复：{username!r}")
         users[username] = {"password": password, "role": "group", "group": group}
@@ -145,7 +149,10 @@ def visible_accounts(request: Request) -> list[Account]:
     """Accounts the current user may see (admin → all, group user → own group)."""
     try:
         accounts = load_accounts()
-    except ConfigError:
+    except ConfigError as exc:
+        # Loud, not silent: an empty account page caused by a bad FERNET_KEY or
+        # corrupt accounts.enc must be diagnosable from the logs.
+        logger.error(f"加载账号失败（页面将显示为空）：{exc}")
         return []
     if is_admin(request):
         return accounts

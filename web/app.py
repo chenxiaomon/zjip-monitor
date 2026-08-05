@@ -40,11 +40,22 @@ if not _API_KEY:
 async def _lifespan(app: FastAPI):  # type: ignore[type-arg]
     task = asyncio.create_task(start_watcher())
     yield
+    # Graceful shutdown: signal in-flight scans to stop at their next
+    # checkpoint and drop queued work, so worker threads (non-daemon) join
+    # quickly and the port is freed for the next start — otherwise a running
+    # Playwright scan can pin the old process for minutes ("port in use").
+    from src import control
+    from web import deps
+
+    control.request_local_stop()
+    deps.executor.shutdown(wait=False, cancel_futures=True)
     task.cancel()
     try:
         await task
     except asyncio.CancelledError:
         pass
+    except Exception as exc:  # a watcher that died earlier must not break shutdown
+        logger.warning(f"SSE watcher ended with error: {exc!r}")
 
 
 app = FastAPI(title="数智通监控", lifespan=_lifespan)

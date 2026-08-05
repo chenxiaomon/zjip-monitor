@@ -9,7 +9,7 @@ attachments:
   enabled: true
 
 login:
-  token_max_age_hours: 8
+  token_max_age_hours: 12
   headless: true
   browser: "chromium"
 

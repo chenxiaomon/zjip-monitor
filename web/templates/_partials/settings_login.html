@@ -9,7 +9,7 @@
         class="space-y-3">
     <div class="flex items-center gap-4">
       <label class="text-xs text-gray-500 dark:text-gray-400 w-32 flex-shrink-0">Token 有效期（小时）</label>
-      <input type="number" name="token_max_age_hours" value="{{ login.get('token_max_age_hours', 8) }}"
+      <input type="number" name="token_max_age_hours" value="{{ login.get('token_max_age_hours', 12) }}"
              min="1" max="72"
              class="w-24 px-3 py-1.5 text-xs rounded border border-gray-200 dark:border-gray-600
                     bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100

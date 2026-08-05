@@ -16,6 +16,9 @@
     <h3 class="text-sm font-medium text-gray-700 dark:text-gray-200">巡检计划（Asia/Shanghai）</h3>
     {% if saved %}<span class="text-xs text-green-600 dark:text-green-400"><i class="ti ti-check"></i> 已保存，重启 daemon 后生效</span>{% endif %}
   </div>
+  {% if error %}
+  <p class="text-xs text-red-500 mb-3"><i class="ti ti-alert-circle"></i> {{ error }}</p>
+  {% endif %}
   <p class="text-xs text-gray-400 dark:text-gray-500 mb-3">修改后需在服务器重启 daemon（systemctl restart zjip-daemon）方可生效</p>
   <form hx-post="/settings/schedule"
         hx-target="#schedule-section"

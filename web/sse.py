@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Request
+from loguru import logger
 from sse_starlette.sse import EventSourceResponse
 
 from web.auth import allowed_usernames
@@ -22,37 +23,61 @@ router = APIRouter()
 
 _subscribers: set[asyncio.Queue[str]] = set()
 
+# Bounded so one stalled browser connection cannot grow memory forever;
+# a full queue just drops events for that client (it re-syncs on refresh).
+_QUEUE_MAX = 200
+
 
 async def broadcast(data: str) -> None:
     """Push a raw JSON string to all connected SSE clients."""
     for q in list(_subscribers):
-        await q.put(data)
+        try:
+            q.put_nowait(data)
+        except asyncio.QueueFull:
+            pass
 
 
 async def start_watcher() -> None:
-    """Background task: tail events.jsonl and push new lines to subscribers."""
-    last_size = _EVENTS_FILE.stat().st_size if _EVENTS_FILE.exists() else 0
+    """Background task: tail events.jsonl and push new lines to subscribers.
+
+    Survives file deletion/rotation (re-reads from the start when the file
+    shrinks) and any unexpected error (logs and keeps polling) — it must
+    never die silently, or the UI stops updating until a restart.
+    """
+    try:
+        last_size = _EVENTS_FILE.stat().st_size
+    except OSError:
+        last_size = 0
     while True:
         await asyncio.sleep(2)
-        if not _EVENTS_FILE.exists():
-            continue
         try:
-            size = _EVENTS_FILE.stat().st_size
-        except OSError:
-            continue
-        if size <= last_size:
-            continue
-        try:
-            with _EVENTS_FILE.open("r", encoding="utf-8") as f:
-                f.seek(last_size)
-                new_content = f.read()
-                last_size = f.tell()
-        except OSError:
-            continue
-        for line in new_content.splitlines():
-            line = line.strip()
-            if line:
-                await broadcast(line)
+            if not _EVENTS_FILE.exists():
+                last_size = 0
+                continue
+            try:
+                size = _EVENTS_FILE.stat().st_size
+            except OSError:
+                continue
+            if size < last_size:
+                last_size = 0  # file truncated or rotated — start over
+            if size == last_size:
+                continue
+            try:
+                with _EVENTS_FILE.open("r", encoding="utf-8") as f:
+                    f.seek(last_size)
+                    new_content = f.read()
+                    last_size = f.tell()
+            except OSError:
+                continue
+            for line in new_content.splitlines():
+                line = line.strip()
+                if line:
+                    await broadcast(line)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(f"SSE watcher error (retrying): {exc!r}")
+            await asyncio.sleep(5)
 
 
 def _visible_to(allowed: set[str] | None, data: str) -> bool:
@@ -71,7 +96,7 @@ def _visible_to(allowed: set[str] | None, data: str) -> bool:
 
 async def _stream(request: Request) -> AsyncGenerator[dict, None]:
     allowed = allowed_usernames(request)
-    q: asyncio.Queue[str] = asyncio.Queue()
+    q: asyncio.Queue[str] = asyncio.Queue(maxsize=_QUEUE_MAX)
     _subscribers.add(q)
     try:
         while True:
