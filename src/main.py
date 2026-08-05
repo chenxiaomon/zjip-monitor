@@ -1,6 +1,10 @@
 """Main orchestration: iterate all accounts, fetch, diff, notify, report.
 
-Serial for ≤10 accounts; asyncio ThreadPoolExecutor (max 3) for >10.
+Serial for ≤10 accounts; asyncio + thread pool (max 3) for >10.
+
+All entry points (web console, daemon, CLI) serialize through the global
+run lock in src/control.py; a CancelToken threads checkpoints through the
+pipeline so a run can be stopped between accounts/pages.
 """
 
 from __future__ import annotations
@@ -10,33 +14,73 @@ import json
 import random
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
+from . import control
 from .attachments import sync_attachments
 from .config_loader import Account, ConfigError, load_accounts
+from .control import CancelToken
 from .differ import DiffResult, diff_snapshots
+from .fsutil import atomic_write_text
 from .exceptions import (
     CaptchaRequiredError,
     LoginError,
+    RunCancelled,
     ScraperError,
     TokenExpiredError,
 )
 from .login import get_token
-from .notifier import notify
+from .notifier import notify, notify_batch
 from .reporter import generate_report
 from .scraper import decode_status, fetch_all_records
 
 _ROOT = Path(__file__).parent.parent
 _SNAPSHOTS_DIR = _ROOT / "data" / "snapshots"
+_REPORTS_DIR = _ROOT / "data" / "reports"
 _EVENTS_FILE = _ROOT / "data" / "events.jsonl"
 
 # Guards concurrent appends from the >10-account thread-pool path
 _EVENTS_LOCK = threading.Lock()
+
+# Retention limits applied by _prune_data() at the end of each full run
+_SNAPSHOTS_KEEP_PER_COMPANY = 30
+_REPORTS_KEEP_DAYS = 60
+_EVENTS_ROTATE_BYTES = 5 * 1024 * 1024
+# Snapshot stems end with "_YYYY-MM-DD-HHMM" (16 chars incl. underscore)
+_SNAPSHOT_TS_SUFFIX_LEN = 16
+
+
+def _prune_data() -> None:
+    """Bounded data growth: old snapshots/reports removed, big event log rotated."""
+    try:
+        if _SNAPSHOTS_DIR.exists():
+            groups: dict[str, list[Path]] = {}
+            for f in sorted(_SNAPSHOTS_DIR.glob("*.json")):
+                stem = f.stem
+                key = stem[:-_SNAPSHOT_TS_SUFFIX_LEN] if len(stem) > _SNAPSHOT_TS_SUFFIX_LEN else stem
+                groups.setdefault(key, []).append(f)
+            for files in groups.values():
+                for old in files[:-_SNAPSHOTS_KEEP_PER_COMPANY]:
+                    old.unlink(missing_ok=True)
+
+        if _REPORTS_DIR.exists():
+            cutoff = time.time() - _REPORTS_KEEP_DAYS * 86400
+            for f in _REPORTS_DIR.glob("*.html"):
+                if f.stat().st_mtime < cutoff:
+                    f.unlink(missing_ok=True)
+
+        with _EVENTS_LOCK:
+            if _EVENTS_FILE.exists() and _EVENTS_FILE.stat().st_size > _EVENTS_ROTATE_BYTES:
+                ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+                rotated = _EVENTS_FILE.with_name(f"events-{ts}.jsonl")
+                _EVENTS_FILE.rename(rotated)
+                logger.info(f"events.jsonl rotated → {rotated.name}")
+    except Exception as exc:
+        logger.warning(f"Data pruning failed (non-fatal): {exc!r}")
 
 
 def _append_event(account: str, company: str, diff: DiffResult, ts: datetime) -> None:
@@ -99,7 +143,7 @@ def save_snapshot(company: str, records: list[dict], ts: datetime | None = None)
         "record_count": len(records),
         "records": records,
     }
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
     logger.info(f"[{company}] Snapshot saved → {path.name} ({len(records)} records)")
     return path
 
@@ -132,8 +176,20 @@ def load_latest_snapshot(company: str) -> dict | None:
 # Per-account processing
 # ---------------------------------------------------------------------------
 
-def scan_account_and_notify(account: Account) -> dict | None:
+def scan_account_and_notify(
+    account: Account,
+    cancel: CancelToken | None = None,
+    *,
+    force_login: bool = False,
+    notify_inline: bool = True,
+) -> dict | None:
     """Login, fetch, and snapshot one account.
+
+    Args:
+        cancel:        Optional cancel token; RunCancelled propagates to the caller.
+        force_login:   Bypass the token cache and do a fresh browser login.
+        notify_inline: Send notifications immediately (single-account scans).
+                       run_all() passes False and aggregates at the end instead.
 
     Returns:
         Dict with keys: account, company, records, snapshot_path, error.
@@ -150,7 +206,9 @@ def scan_account_and_notify(account: Account) -> dict | None:
 
     # ── Login ──────────────────────────────────────────────────────────────
     try:
-        token = get_token(account.username, account.password)
+        if cancel:
+            cancel.checkpoint(phase="login")
+        token = get_token(account.username, account.password, force_refresh=force_login)
     except CaptchaRequiredError as exc:
         logger.error(f"[{account.company}] Captcha required — skipping: {exc}")
         result["error"] = f"captcha_required: {exc}"
@@ -159,15 +217,25 @@ def scan_account_and_notify(account: Account) -> dict | None:
         logger.error(f"[{account.company}] Login failed — skipping: {exc}")
         result["error"] = f"login_failed: {exc}"
         return result
+    except RunCancelled:
+        raise
+    except Exception as exc:
+        # Playwright timeouts/launch errors are not LoginError subclasses;
+        # without this, one flaky account would abort the whole run.
+        logger.error(f"[{account.company}] Unexpected login failure — skipping: {exc!r}")
+        result["error"] = f"login_failed: {exc}"
+        return result
 
     # ── Fetch records (re-login once on token expiry) ───────────────────────
     try:
-        records = fetch_all_records(token)
+        if cancel:
+            cancel.checkpoint(phase="fetch")
+        records = fetch_all_records(token, cancel=cancel)
     except TokenExpiredError:
         logger.warning(f"[{account.company}] Token expired mid-run — re-logging in…")
         try:
             token = get_token(account.username, account.password, force_refresh=True)
-            records = fetch_all_records(token)
+            records = fetch_all_records(token, cancel=cancel)
         except (LoginError, ScraperError) as exc:
             logger.error(f"[{account.company}] Re-login or re-fetch failed: {exc}")
             result["error"] = str(exc)
@@ -182,6 +250,20 @@ def scan_account_and_notify(account: Account) -> dict | None:
     # ── Diff against previous snapshot ────────────────────────────────────
     prev = load_latest_snapshot(account.company)
     prev_records: list[dict] = prev["records"] if prev else []
+
+    # Sanity check: a sudden >50% shrink almost always means a truncated fetch
+    # (server hiccup mid-pagination), not real deletions. Persisting it would
+    # spam "记录消失" alerts and corrupt the next diff — refuse instead.
+    if len(prev_records) >= 10 and len(records) < len(prev_records) * 0.5:
+        msg = (
+            f"suspicious_shrink: fetched {len(records)} records but previous "
+            f"snapshot has {len(prev_records)} — snapshot NOT saved, no diff emitted"
+        )
+        logger.error(f"[{account.company}] {msg}")
+        result["error"] = msg
+        result["records"] = records
+        return result
+
     diff = diff_snapshots(account.company, records, prev_records)
 
     # ── Save new snapshot ──────────────────────────────────────────────────
@@ -191,10 +273,13 @@ def scan_account_and_notify(account: Account) -> dict | None:
     result["diff"] = diff
     result["fetch_time"] = fetch_time
 
-    # ── Notify if there are changes ────────────────────────────────────────
-    if diff.has_changes:
-        notify(diff, fetch_time)
-    else:
+    # ── Notify if there are changes (non-fatal) ────────────────────────────
+    if diff.has_changes and notify_inline:
+        try:
+            notify(diff, fetch_time)
+        except Exception as exc:
+            logger.error(f"[{account.company}] Notification failed (non-fatal): {exc!r}")
+    elif not diff.has_changes:
         logger.debug(f"[{account.company}] No changes — notification skipped")
 
     # ── Append event to events.jsonl ───────────────────────────────────────
@@ -202,10 +287,20 @@ def scan_account_and_notify(account: Account) -> dict | None:
 
     # ── Sync 通知书/证书 attachments (non-fatal) ────────────────────────────
     try:
-        new_files = sync_attachments(token, account.company, records)
+        if cancel:
+            cancel.checkpoint(phase="attachments")
+        try:
+            new_files = sync_attachments(token, account.company, records, cancel=cancel)
+        except TokenExpiredError:
+            # Token can expire mid-sync on large first runs — re-login once
+            logger.warning(f"[{account.company}] Token expired during attachment sync — re-logging in…")
+            token = get_token(account.username, account.password, force_refresh=True)
+            new_files = sync_attachments(token, account.company, records, cancel=cancel)
         if new_files:
             logger.info(f"[{account.company}] Downloaded {len(new_files)} attachment(s)")
         result["attachments"] = [str(p) for p in new_files]
+    except RunCancelled:
+        raise
     except Exception as exc:
         logger.warning(f"[{account.company}] Attachment sync failed (non-fatal): {exc}")
 
@@ -224,69 +319,181 @@ def scan_account_and_notify(account: Account) -> dict | None:
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def _run_serial(accounts: list[Account]) -> list[dict]:
+def _error_result(account: Account, error: str) -> dict:
+    return {
+        "account": account.username,
+        "company": account.company,
+        "contact": account.contact,
+        "records": [],
+        "snapshot_path": None,
+        "error": error,
+    }
+
+
+def _run_serial(
+    accounts: list[Account],
+    cancel: CancelToken | None = None,
+    *,
+    force_login: bool = False,
+) -> tuple[list[dict], bool]:
+    """Returns (results, cancelled)."""
     results: list[dict] = []
-    for i, account in enumerate(accounts):
-        logger.info(f"── Account {i + 1}/{len(accounts)}: {account.company} ──")
-        results.append(scan_account_and_notify(account))
-        if i < len(accounts) - 1:
-            delay = random.uniform(2.0, 5.0)
-            logger.debug(f"Sleeping {delay:.1f}s before next account…")
-            time.sleep(delay)
-    return results
+    try:
+        for i, account in enumerate(accounts):
+            if cancel:
+                cancel.checkpoint(account=account.company, index=i + 1, total=len(accounts))
+            logger.info(f"── Account {i + 1}/{len(accounts)}: {account.company} ──")
+            try:
+                results.append(
+                    scan_account_and_notify(
+                        account, cancel, force_login=force_login, notify_inline=False
+                    )
+                )
+            except RunCancelled:
+                raise
+            except Exception as exc:
+                logger.error(f"[{account.company}] Unexpected failure — skipping: {exc!r}")
+                results.append(_error_result(account, f"{type(exc).__name__}: {exc}"))
+            if i < len(accounts) - 1:
+                delay = random.uniform(2.0, 5.0)
+                logger.debug(f"Sleeping {delay:.1f}s before next account…")
+                if cancel:
+                    cancel.wait(delay)
+                else:
+                    time.sleep(delay)
+    except RunCancelled:
+        logger.info("Stop requested — run cancelled after current account")
+        return results, True
+    return results, False
 
 
-async def _run_concurrent(accounts: list[Account], max_workers: int = 3) -> list[dict]:
+async def _run_concurrent(
+    accounts: list[Account],
+    cancel: CancelToken | None = None,
+    *,
+    force_login: bool = False,
+    max_workers: int = 3,
+) -> list[dict]:
     """Run accounts concurrently using a thread pool (sync Playwright is thread-safe)."""
     loop = asyncio.get_running_loop()
     semaphore = asyncio.Semaphore(max_workers)
 
     async def _one(account: Account) -> dict:
         async with semaphore:
-            return await loop.run_in_executor(None, scan_account_and_notify, account)
+            return await loop.run_in_executor(
+                None,
+                lambda: scan_account_and_notify(
+                    account, cancel, force_login=force_login, notify_inline=False
+                ),
+            )
 
-    return list(await asyncio.gather(*[_one(a) for a in accounts]))
+    raw = await asyncio.gather(*[_one(a) for a in accounts], return_exceptions=True)
+    results: list[dict] = []
+    for account, r in zip(accounts, raw):
+        if isinstance(r, RunCancelled):
+            results.append(_error_result(account, "cancelled"))
+        elif isinstance(r, BaseException):
+            logger.error(f"[{account.company}] Unexpected failure: {r!r}")
+            results.append(_error_result(account, f"{type(r).__name__}: {r}"))
+        else:
+            results.append(r)
+    return results
 
 
-def run_all(*, force_login: bool = False) -> dict[str, Any]:
+def run_all(*, force_login: bool = False, trigger: str = "cli") -> dict[str, Any]:
     """Process all accounts. Serial for ≤10; asyncio concurrent for >10.
+
+    Takes the global run lock; if another run (any process) holds it, returns
+    immediately with skipped="already_running".
 
     Args:
         force_login: Bypass token cache for every account.
+        trigger:     Who started this run ("web" | "daemon" | "cli") — shown in the UI.
 
     Returns:
         Dict with keys: results (list of per-account dicts), report_path (str | None).
+        May also carry skipped="already_running" or cancelled=True.
     """
+    ctx = control.try_acquire(kind="run_all", trigger=trigger)
+    if ctx is None:
+        holder = control.read_state() or {}
+        logger.warning(
+            f"Another run in progress (pid={holder.get('pid')}, "
+            f"trigger={holder.get('trigger')}) — skipping"
+        )
+        return {"results": [], "report_path": None, "skipped": "already_running"}
+
     try:
         accounts = load_accounts()
     except ConfigError as exc:
         logger.error(f"Cannot load accounts: {exc}")
+        ctx.finish("error", error=f"config: {exc}"[:200])
         return {"results": [], "report_path": None}
 
     run_time = datetime.now(timezone.utc)
+    try:
+        if len(accounts) <= 10:
+            results, cancelled = _run_serial(accounts, ctx.cancel, force_login=force_login)
+        else:
+            logger.info(f"{len(accounts)} accounts — using asyncio concurrency (max 3)")
+            results = asyncio.run(
+                _run_concurrent(accounts, ctx.cancel, force_login=force_login)
+            )
+            cancelled = ctx.cancel.should_stop()
+    except Exception as exc:
+        ctx.finish("error", error=f"{type(exc).__name__}: {exc}"[:200])
+        raise
 
-    if len(accounts) <= 10:
-        results = _run_serial(accounts)
-    else:
-        logger.info(f"{len(accounts)} accounts — using asyncio concurrency (max 3)")
-        results = asyncio.run(_run_concurrent(accounts))
-
-    # ── Generate HTML report ───────────────────────────────────────────────
     diffs: dict[str, DiffResult] = {}
     for r in results:
         if r.get("diff"):
             diffs[r["company"]] = r["diff"]
-    report_path = None
+
+    # ── Aggregated notifications — one message per channel for the whole run.
+    # Sent even when cancelled: completed accounts' snapshots are already
+    # saved, so unsent changes would never be notified again.
     try:
-        report_path = generate_report(results, diffs, report_time=run_time)
+        notify_batch(diffs, fetch_time=run_time)
     except Exception as exc:
-        logger.warning(f"Report generation failed (non-fatal): {exc}")
+        logger.error(f"Batch notification failed (non-fatal): {exc!r}")
+
+    # ── Generate HTML report (skipped when stopping — exit fast) ────────────
+    report_path = None
+    if not cancelled:
+        try:
+            report_path = generate_report(results, diffs, report_time=run_time)
+        except Exception as exc:
+            logger.warning(f"Report generation failed (non-fatal): {exc}")
+        _prune_data()
 
     # ── Summary ────────────────────────────────────────────────────────────
     ok = [r for r in results if not r["error"]]
     failed = [r for r in results if r["error"]]
     logger.info(
-        f"Run complete — {len(ok)} succeeded, {len(failed)} failed"
+        f"Run {'cancelled' if cancelled else 'complete'} — "
+        f"{len(ok)} succeeded, {len(failed)} failed"
         + (f": {[r['company'] for r in failed]}" if failed else "")
     )
-    return {"results": results, "report_path": report_path}
+    ctx.finish("cancelled" if cancelled else "done")
+    return {"results": results, "report_path": report_path, "cancelled": cancelled}
+
+
+def run_single(account: Account, *, trigger: str = "web") -> dict[str, Any]:
+    """Scan one account under the global run lock.
+
+    Returns the scan result dict; skipped="already_running" if the lock is held.
+    """
+    ctx = control.try_acquire(kind="scan_one", trigger=trigger)
+    if ctx is None:
+        return {**_error_result(account, ""), "error": None, "skipped": "already_running"}
+    try:
+        ctx.cancel.checkpoint(account=account.company, index=1, total=1)
+        result = scan_account_and_notify(account, ctx.cancel)
+    except RunCancelled:
+        ctx.finish("cancelled")
+        return _error_result(account, "cancelled")
+    except Exception as exc:
+        ctx.finish("error", error=f"{type(exc).__name__}: {exc}"[:200])
+        raise
+    ctx.finish("done")
+    return result

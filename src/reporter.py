@@ -7,6 +7,7 @@ Works offline — no CDN required.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
@@ -14,11 +15,16 @@ from typing import Optional
 from jinja2 import Environment, BaseLoader
 from loguru import logger
 
-from .differ import DiffResult
+from .differ import DiffResult, diff_snapshots
+from .fsutil import atomic_write_text
 from .scraper import decode_status
 
 _ROOT = Path(__file__).parent.parent
 _REPORTS_DIR = _ROOT / "data" / "reports"
+_SNAPSHOTS_DIR = _ROOT / "data" / "snapshots"
+
+# Length of the "_YYYY-MM-DD-HHMM" suffix appended to snapshot file stems
+_SNAPSHOT_TS_SUFFIX_LEN = 16
 
 # Status → (background, text-color)
 # Labels verified against live DOM on 2026-05-19
@@ -309,11 +315,53 @@ def generate_report(
     tmpl = env.from_string(_TEMPLATE)
     html = tmpl.render(report_time=ts_str, companies=companies)
 
-    _REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     out_path = _REPORTS_DIR / filename
-    out_path.write_text(html, encoding="utf-8")
+    atomic_write_text(out_path, html)
     logger.info(f"HTML report → {out_path.name}")
     return out_path
+
+
+def generate_report_from_snapshots(report_time: Optional[datetime] = None) -> Optional[Path]:
+    """Render a report from existing snapshots — no login, no fetching, no notifications.
+
+    For each company the latest snapshot provides the current records and the
+    second-latest the previous state for change highlighting. Runs in seconds
+    and needs no run lock, unlike a full run_all().
+
+    Returns:
+        Path to the written HTML file, or None if there are no snapshots yet.
+    """
+    groups: dict[str, list[Path]] = {}
+    if _SNAPSHOTS_DIR.exists():
+        for f in sorted(_SNAPSHOTS_DIR.glob("*.json")):
+            stem = f.stem
+            key = stem[:-_SNAPSHOT_TS_SUFFIX_LEN] if len(stem) > _SNAPSHOT_TS_SUFFIX_LEN else stem
+            groups.setdefault(key, []).append(f)
+    if not groups:
+        logger.warning("No snapshots found — nothing to report")
+        return None
+
+    def _read(path: Path) -> Optional[dict]:
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning(f"Could not read snapshot {path.name}: {exc}")
+            return None
+
+    run_results: list[dict] = []
+    diffs: dict[str, DiffResult] = {}
+    for key, files in sorted(groups.items()):
+        latest = _read(files[-1])
+        if latest is None:
+            continue
+        prev = _read(files[-2]) if len(files) >= 2 else None
+        company = latest.get("company") or key
+        records = latest.get("records", [])
+        prev_records = prev.get("records", []) if prev else []
+        diffs[company] = diff_snapshots(company, records, prev_records)
+        run_results.append({"company": company, "records": records, "error": None})
+
+    return generate_report(run_results, diffs, report_time=report_time)
 
 
 def _fmt_ts(ts: object) -> str:

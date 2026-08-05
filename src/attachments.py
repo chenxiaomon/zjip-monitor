@@ -21,12 +21,17 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import requests
 from loguru import logger
 
+from .exceptions import TokenExpiredError
 from .scraper import _build_session, _load_settings
+
+if TYPE_CHECKING:
+    from .control import CancelToken
 
 _ROOT = Path(__file__).parent.parent
 _ATTACHMENTS_DIR = _ROOT / "data" / "attachments"
@@ -76,6 +81,8 @@ def _download_file(url: str, dest: Path, timeout: int = 60) -> bool:
 
 
 def _api_data(resp: requests.Response, what: str) -> dict | list | None:
+    if resp.status_code == 401:
+        raise TokenExpiredError(f"{what}: HTTP 401 — token expired during attachment sync")
     if not resp.ok:
         logger.warning(f"{what} HTTP {resp.status_code}: {resp.text[:150]}")
         return None
@@ -84,6 +91,8 @@ def _api_data(resp: requests.Response, what: str) -> dict | list | None:
     except ValueError:
         logger.warning(f"{what} non-JSON response: {resp.text[:150]}")
         return None
+    if payload.get("code") == 401:
+        raise TokenExpiredError(f"{what}: code=401 — token expired during attachment sync")
     if payload.get("code") not in (200, 0):
         logger.warning(f"{what} API code={payload.get('code')}: {payload.get('message', '')[:100]}")
         return None
@@ -145,6 +154,7 @@ def sync_attachments(
     company: str,
     records: list[dict],
     base_url: str | None = None,
+    cancel: "CancelToken | None" = None,
 ) -> list[Path]:
     """Download missing 通知书/证书 for all eligible records of one account.
 
@@ -164,6 +174,8 @@ def sync_attachments(
     downloaded: list[Path] = []
     try:
         for r in records:
+            if cancel:
+                cancel.checkpoint()
             code = r.get("dataRegAuditStatus")
             reg_no = r.get("dataRegNo")
             if not reg_no or code is None or int(code) not in NOTIFY_STATUSES:
@@ -210,7 +222,10 @@ def sync_attachments(
                     ),
                     encoding="utf-8",
                 )
-            time.sleep(0.5)  # polite crawl delay
+            if cancel:
+                cancel.wait(0.5)  # polite crawl delay, cancellable
+            else:
+                time.sleep(0.5)
     finally:
         session.close()
 

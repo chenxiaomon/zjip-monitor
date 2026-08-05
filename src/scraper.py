@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import requests
 import yaml
@@ -19,6 +19,10 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from .exceptions import ScraperError, TokenExpiredError
+from .settings_cache import get_settings
+
+if TYPE_CHECKING:
+    from .control import CancelToken
 
 # Full status map extracted from the platform frontend bundle (2026-07):
 # all 17 dataRegAuditStatus codes with their official UI labels.
@@ -58,10 +62,7 @@ _SETTINGS_FILE = _ROOT / "config" / "settings.yaml"
 
 
 def _load_settings() -> dict:
-    if _SETTINGS_FILE.exists():
-        with open(_SETTINGS_FILE, encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-    return {}
+    return get_settings()
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +73,7 @@ def fetch_all_records(
     token: str,
     page_size: int | None = None,
     base_url: str | None = None,
+    cancel: "CancelToken | None" = None,
 ) -> list[dict]:
     """Fetch every datareg record for the authenticated account.
 
@@ -108,13 +110,28 @@ def fetch_all_records(
 
     try:
         first_page = _fetch_page(session, base_url, page_num=1, page_size=page_size)
-        total, records = _parse_response(first_page, page_num=1)
+        total, first_records = _parse_response(first_page, page_num=1)
         logger.info(f"Total records (server): {total}")
 
         # Server ignores 'size' param and always returns a fixed page size (~10).
         # Paginate by incrementing 'page' until the last page returns fewer records
         # than the previous page (meaning we've hit the end).
-        server_page_size = len(records)  # actual records per page from server
+        server_page_size = len(first_records)  # actual records per page from server
+
+        # Deduplicate incrementally (API may return overlapping pages) so the
+        # stop condition below counts unique records — comparing the raw count
+        # against `total` could stop early and truncate the snapshot.
+        seen: set[str] = set()
+        records: list[dict] = []
+
+        def _add_unique(page_records: list[dict]) -> None:
+            for r in page_records:
+                key = str(r.get("id") or r.get("dataRegNo") or id(r))
+                if key not in seen:
+                    seen.add(key)
+                    records.append(r)
+
+        _add_unique(first_records)
         if server_page_size == 0:
             return records
 
@@ -122,32 +139,23 @@ def fetch_all_records(
         # Safety cap: never fetch more than (total / server_page_size + 5) pages
         max_pages = math.ceil(total / max(server_page_size, 1)) + 5
 
-        while page_num <= max_pages:
-            time.sleep(0.5)  # polite crawl delay
+        while page_num <= max_pages and len(records) < total:
+            if cancel:
+                cancel.wait(0.5)  # polite crawl delay, cancellable per page
+            else:
+                time.sleep(0.5)
             page_data = _fetch_page(session, base_url, page_num=page_num, page_size=page_size)
             _, page_records = _parse_response(page_data, page_num=page_num)
             if not page_records:
                 break
-            records.extend(page_records)
-            # Stop when we've reached or exceeded the reported total
-            if len(records) >= total:
-                break
-            # Also stop if this page returned fewer records (last page)
+            _add_unique(page_records)
+            # A short page means the server ran out of records
             if len(page_records) < server_page_size:
                 break
             page_num += 1
 
-        # Deduplicate by stable key (guard against API returning overlapping pages)
-        seen: set[str] = set()
-        deduped: list[dict] = []
-        for r in records:
-            key = str(r.get("id") or r.get("dataRegNo") or id(r))
-            if key not in seen:
-                seen.add(key)
-                deduped.append(r)
-
-        logger.info(f"Fetched {len(deduped)} records total")
-        return deduped
+        logger.info(f"Fetched {len(records)} records total")
+        return records
 
     except (TokenExpiredError, ScraperError):
         raise
@@ -180,7 +188,8 @@ def _build_session(token: str, timeout: int = 30) -> requests.Session:
         total=3,
         backoff_factor=1.0,
         status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["POST"],
+        # GET included: attachments.py reuses this session for getNotification
+        allowed_methods=["POST", "GET"],
         raise_on_status=False,
     )
     adapter = HTTPAdapter(max_retries=retry)
@@ -284,13 +293,15 @@ def _parse_response(data: dict[str, Any], page_num: int) -> tuple[int, list[dict
             or inner.get("data")
             or []
         )
-        total = (
-            inner.get("totalSize")
-            or inner.get("total")
-            or inner.get("totalCount")
-            or inner.get("count")
-            or inner.get("totalNum")
-            or len(records)
+        # `is not None` checks, not `or`-chaining: totalSize=0 is a legitimate
+        # value (empty account) and must not fall through to other keys.
+        total = next(
+            (
+                inner[k]
+                for k in ("totalSize", "total", "totalCount", "count", "totalNum")
+                if inner.get(k) is not None
+            ),
+            len(records),
         )
     # Pattern B: data = [...]  (flat list, only 1 page)
     elif isinstance(inner, list):

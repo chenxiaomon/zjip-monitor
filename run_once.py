@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT))
 
 import argparse
 from loguru import logger
+from src import control
 from src.main import run_all
 
 logger.remove()
@@ -41,9 +42,34 @@ def main() -> int:
         action="store_true",
         help="Bypass token cache and do a fresh browser login for every account",
     )
+    parser.add_argument(
+        "--stop",
+        action="store_true",
+        help="Ask the currently running scan (web/daemon/CLI) to stop, then exit",
+    )
     args = parser.parse_args()
 
-    output = run_all(force_login=args.force_login)
+    if args.stop:
+        state = control.read_state()
+        if state and state.get("status") in ("running", "stopping"):
+            control.request_stop()
+            logger.info(
+                f"已发送停止请求（当前运行：pid={state.get('pid')}, "
+                f"trigger={state.get('trigger')}），最长约 1 分钟后停止"
+            )
+        else:
+            logger.info("当前没有正在运行的巡检")
+        return 0
+
+    output = run_all(force_login=args.force_login, trigger="cli")
+    if output.get("skipped"):
+        holder = control.read_state() or {}
+        logger.error(
+            f"另一巡检进行中（pid={holder.get('pid')}, trigger={holder.get('trigger')}）"
+            "— 本次退出。可用 --stop 请求其停止"
+        )
+        return 2
+
     results = output.get("results", [])
     report_path = output.get("report_path")
 

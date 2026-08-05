@@ -27,3 +27,7 @@ class TokenExtractionError(LoginError):
 
 class ScraperError(ZJIPError):
     """Data fetching failed."""
+
+
+class RunCancelled(ZJIPError):
+    """The current run was stopped at a checkpoint (stop flag / shutdown)."""

@@ -22,6 +22,8 @@ from cryptography.fernet import Fernet, InvalidToken
 from dotenv import load_dotenv
 from loguru import logger
 
+from .fsutil import atomic_write_bytes
+
 _ROOT = Path(__file__).parent.parent
 _ENC_PATH = _ROOT / "config" / "accounts.enc"
 _ENV_PATH = _ROOT / ".env"
@@ -134,5 +136,11 @@ def save_accounts(accounts: list[Account]) -> None:
     except Exception as exc:
         raise ConfigError(f"Encryption failed: {exc}") from exc
 
-    _ENC_PATH.write_bytes(encrypted)
+    # Keep a one-generation backup: a bad write must never be the only copy
+    if _ENC_PATH.exists():
+        try:
+            _ENC_PATH.with_suffix(".enc.bak").write_bytes(_ENC_PATH.read_bytes())
+        except OSError as exc:
+            logger.warning(f"Could not write accounts.enc.bak: {exc}")
+    atomic_write_bytes(_ENC_PATH, encrypted)
     logger.info(f"accounts.enc updated: {len(accounts)} account(s)")

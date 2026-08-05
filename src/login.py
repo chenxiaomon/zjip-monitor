@@ -29,6 +29,8 @@ from .exceptions import (
     LoginError,
     TokenExtractionError,
 )
+from .fsutil import atomic_write_text
+from .settings_cache import get_settings
 
 # ---------------------------------------------------------------------------
 # Paths & constants
@@ -50,10 +52,7 @@ _DEFAULT_USER_AGENT = (
 # ---------------------------------------------------------------------------
 
 def _load_settings() -> dict:
-    if _SETTINGS_FILE.exists():
-        with open(_SETTINGS_FILE, encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-    return {}
+    return get_settings()
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +137,7 @@ def _save_token(account: str, token: str) -> None:
         "fetched_at": fetched_at.isoformat(),
         "expires_at": expires_at.isoformat(),
     }
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
     logger.debug(f"[{account}] Token cached → {path.name}, expires {expires_at.isoformat()}")
 
 
@@ -157,7 +156,7 @@ def _compute_expiry(token: str, fetched_at: datetime) -> datetime:
         pass
 
     settings = _load_settings()
-    max_age_hours: int = settings.get("login", {}).get("token_max_age_hours", 8)
+    max_age_hours: int = settings.get("login", {}).get("token_max_age_hours", 12)
     return fetched_at + timedelta(hours=max_age_hours)
 
 
@@ -188,7 +187,10 @@ def _login_via_browser(account: str, password: str) -> str:
         try:
             login_url = f"{base_url}/user/login"
             logger.debug(f"[{account}] Navigating to {login_url}")
-            page.goto(login_url, wait_until="networkidle", timeout=30_000)
+            # domcontentloaded, not networkidle: the SPA keeps connections open
+            # and networkidle regularly burns the whole 30s timeout for nothing.
+            # The wait_for_selector below is the real readiness check.
+            page.goto(login_url, wait_until="domcontentloaded", timeout=30_000)
 
             # Wait for the login form to be visible
             page.wait_for_selector('input[name="account"], input[type="text"]', timeout=10_000)

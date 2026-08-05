@@ -5,6 +5,10 @@ WEB_RELOAD=1 to enable auto-reload (dev only).
 """
 
 import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
 
 import uvicorn
 
@@ -14,4 +18,8 @@ if __name__ == "__main__":
         host=os.getenv("WEB_HOST", "127.0.0.1"),
         port=int(os.getenv("WEB_PORT", "8000")),
         reload=os.getenv("WEB_RELOAD") == "1",
+        # Hard cap on graceful shutdown: in-flight scans stop at their next
+        # checkpoint (≤ ~60s Playwright stretch); never hang the old process
+        # past this or a restart hits "address already in use".
+        timeout_graceful_shutdown=90,
     )

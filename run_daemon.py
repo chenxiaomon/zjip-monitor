@@ -14,7 +14,10 @@ Press Ctrl-C to stop.
 from __future__ import annotations
 
 import argparse
+import os
+import signal
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).parent
@@ -25,6 +28,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 from loguru import logger
 
+from src import control
 from src.main import run_all
 
 _SETTINGS = ROOT / "config" / "settings.yaml"
@@ -33,11 +37,14 @@ _TIMEZONE = "Asia/Shanghai"
 
 
 def _load_crons() -> list[str]:
-    if _SETTINGS.exists():
-        data = yaml.safe_load(_SETTINGS.read_text(encoding="utf-8")) or {}
-        crons = data.get("schedule", {}).get("crons")
-        if crons:
-            return list(crons)
+    try:
+        if _SETTINGS.exists():
+            data = yaml.safe_load(_SETTINGS.read_text(encoding="utf-8")) or {}
+            crons = data.get("schedule", {}).get("crons")
+            if crons:
+                return list(crons)
+    except Exception as exc:
+        logger.error(f"读取 settings.yaml 失败（{exc}）— 使用默认计划 {_DEFAULT_CRONS}")
     return _DEFAULT_CRONS
 
 
@@ -59,9 +66,21 @@ def _setup_logger() -> None:
 
 
 def _job() -> None:
+    if control.is_daemon_paused():
+        logger.info("巡检已暂停（data/control/pause.flag 存在）— 跳过本轮")
+        return
     logger.info("Scheduled job triggered — starting run…")
-    run_all()
-    logger.info("Scheduled job done")
+    try:
+        output = run_all(trigger="daemon")
+    except Exception as exc:
+        logger.exception(f"Scheduled run failed: {exc}")
+        return
+    if output.get("skipped"):
+        logger.warning("另一巡检进行中（web/CLI 触发）— 本轮跳过")
+    elif output.get("cancelled"):
+        logger.info("Scheduled job stopped by user request")
+    else:
+        logger.info("Scheduled job done")
 
 
 def main() -> int:
@@ -78,15 +97,50 @@ def main() -> int:
 
     scheduler = BlockingScheduler(timezone=_TIMEZONE)
     for expr in crons:
-        trigger = CronTrigger.from_crontab(expr, timezone=_TIMEZONE)
+        # One bad expression must not keep the daemon from starting
+        try:
+            trigger = CronTrigger.from_crontab(expr, timezone=_TIMEZONE)
+        except ValueError as exc:
+            logger.error(f"非法 cron 表达式 {expr!r}（{exc}）— 已跳过")
+            continue
         scheduler.add_job(_job, trigger, misfire_grace_time=300)
         logger.info(f"Scheduled: {expr} ({_TIMEZONE})")
+
+    if not scheduler.get_jobs():
+        logger.error(f"没有可用的 cron 表达式 — 回退默认计划 {_DEFAULT_CRONS}")
+        for expr in _DEFAULT_CRONS:
+            scheduler.add_job(
+                _job, CronTrigger.from_crontab(expr, timezone=_TIMEZONE),
+                misfire_grace_time=300,
+            )
+
+    def _on_sigterm(signum, frame):  # noqa: ARG001
+        logger.info("SIGTERM received — stopping scheduler, in-flight run will stop at next checkpoint…")
+        control.request_local_stop()
+        scheduler.shutdown(wait=False)
+
+    signal.signal(signal.SIGTERM, _on_sigterm)
 
     logger.info("Daemon started — press Ctrl-C to stop")
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):
-        logger.info("Daemon stopped")
+        control.request_local_stop()
+        logger.info("Daemon stopping…")
+
+    # Wait (bounded) for an in-flight run owned by this process to reach a
+    # terminal state so Playwright cleanup runs and no chromium is orphaned.
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline:
+        state = control.read_state()
+        if (
+            not state
+            or state.get("pid") != os.getpid()
+            or state.get("status") not in ("running", "stopping")
+        ):
+            break
+        time.sleep(1)
+    logger.info("Daemon stopped")
     return 0
 
 
