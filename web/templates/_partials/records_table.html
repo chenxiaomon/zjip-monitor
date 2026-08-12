@@ -22,7 +22,8 @@
     </td>
     <td class="px-4 py-2.5 text-xs whitespace-nowrap">
       {% for f in r.attachments %}
-      <a href="/attachments/{{ r.company | urlencode }}/{{ r.reg_no | urlencode }}/{{ f | urlencode }}"
+      {# ?v=2 缓存破除:老响应无 Cache-Control 被浏览器长期缓存,换 URL 强制重取 #}
+      <a href="/attachments/{{ r.company | urlencode }}/{{ r.reg_no | urlencode }}/{{ f | urlencode }}?v=2"
          onclick="event.stopPropagation()"
          title="{{ f }}"
          class="inline-flex items-center gap-0.5 mr-1.5 text-blue-600 dark:text-blue-400 hover:underline">
