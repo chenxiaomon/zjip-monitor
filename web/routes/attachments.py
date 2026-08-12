@@ -6,7 +6,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
 from web.auth import allowed_companies
-from web.services.attachments_svc import attachment_path
+from web.services.attachments_svc import attachment_path, download_name
 
 router = APIRouter()
 
@@ -19,4 +19,4 @@ def get_attachment(request: Request, company: str, reg_no: str, filename: str):
     path = attachment_path(company, reg_no, filename)
     if path is None:
         return HTMLResponse("附件不存在", status_code=404)
-    return FileResponse(path, filename=path.name)
+    return FileResponse(path, filename=download_name(company, reg_no, path.name))
