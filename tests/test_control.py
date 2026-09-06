@@ -149,3 +149,61 @@ def test_lock_excludes_other_process(_isolated_control_dir):
 def test_corrupt_state_file_returns_none(_isolated_control_dir):
     (_isolated_control_dir / "state.json").write_text("{truncated", encoding="utf-8")
     assert control.read_state() is None
+
+
+def test_live_pid_with_dead_heartbeat_reports_wedged_holder():
+    """A holder that is alive but silent is a wedged process, not a crash."""
+    ctx = control.try_acquire(kind="run_all", trigger="test")
+    state = dict(ctx.state)
+    old = datetime.now(timezone.utc) - timedelta(seconds=control.HEARTBEAT_STALE_SECONDS + 10)
+    state["heartbeat_at"] = old.isoformat()
+    control._write_state(state)
+    seen = control.read_state()
+    assert seen["status"] == "stale"
+    assert seen["holder_alive"] is True
+    ctx.finish("done")
+
+
+def test_dead_pid_reports_holder_not_alive():
+    ctx = control.try_acquire(kind="run_all", trigger="test")
+    state = dict(ctx.state)
+    state["pid"] = 99999999
+    control._write_state(state)
+    seen = control.read_state()
+    assert seen["status"] == "stale"
+    assert seen["holder_alive"] is False
+    ctx.finish("done")
+
+
+def test_heartbeat_swallows_write_errors(monkeypatch):
+    """A failing state.json write must not abort the scan (heartbeat is bookkeeping)."""
+    ctx = control.try_acquire(kind="run_all", trigger="test")
+
+    def boom(state):
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(control, "_write_state", boom)
+    ctx.cancel.heartbeat(account="x")   # must not raise
+    ctx.cancel.checkpoint(account="y")  # must not raise either
+    monkeypatch.undo()
+    ctx.finish("done")
+
+
+def test_concurrent_checkpoints_from_threads_do_not_raise():
+    import threading
+    ctx = control.try_acquire(kind="run_all", trigger="test")
+    errors = []
+
+    def worker(i):
+        try:
+            for _ in range(30):
+                ctx.cancel.checkpoint(account=f"acc{i}")
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    ts = [threading.Thread(target=worker, args=(i,)) for i in range(5)]
+    for t in ts: t.start()
+    for t in ts: t.join()
+    assert errors == []
+    assert control.read_state()["status"] == "running"
+    ctx.finish("done")

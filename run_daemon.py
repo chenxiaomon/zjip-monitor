@@ -65,6 +65,21 @@ def _setup_logger() -> None:
     )
 
 
+def _exit_if_wedged_on_self() -> None:
+    """Self-heal: if the lock holder is *this* process but its heartbeat is
+    dead, an earlier run is wedged in a thread that will never finish (seen
+    2026-09-04: a Playwright login hung, blocking every later scheduled run).
+    Nothing inside the process can free it, so exit non-zero and let systemd
+    (Restart=on-failure) bring up a clean daemon."""
+    state = control.read_state() or {}
+    if state.get("status") == "stale" and state.get("pid") == os.getpid():
+        logger.critical(
+            f"Run {state.get('run_id')} is wedged inside this process "
+            f"(last heartbeat {state.get('heartbeat_at')}) — exiting so systemd restarts the daemon"
+        )
+        os._exit(1)
+
+
 def _job() -> None:
     if control.is_daemon_paused():
         logger.info("巡检已暂停（data/control/pause.flag 存在）— 跳过本轮")
@@ -76,6 +91,7 @@ def _job() -> None:
         logger.exception(f"Scheduled run failed: {exc}")
         return
     if output.get("skipped"):
+        _exit_if_wedged_on_self()
         logger.warning("另一巡检进行中（web/CLI 触发）— 本轮跳过")
     elif output.get("cancelled"):
         logger.info("Scheduled job stopped by user request")
@@ -113,6 +129,11 @@ def main() -> int:
                 _job, CronTrigger.from_crontab(expr, timezone=_TIMEZONE),
                 misfire_grace_time=300,
             )
+
+    # Self-heal probe: catches a run wedged inside this process within minutes
+    # instead of waiting for the next cron slot (which APScheduler may even
+    # skip with "maximum number of running instances reached").
+    scheduler.add_job(_exit_if_wedged_on_self, "interval", minutes=10, id="wedge-probe")
 
     def _on_sigterm(signum, frame):  # noqa: ARG001
         logger.info("SIGTERM received — stopping scheduler, in-flight run will stop at next checkpoint…")

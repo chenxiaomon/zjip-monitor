@@ -15,7 +15,10 @@ import base64
 import hashlib
 import json
 import re
+import subprocess
+import threading
 import time
+import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
@@ -45,6 +48,18 @@ _DEFAULT_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/124.0.0.0 Safari/537.36"
 )
+
+# Hard ceiling for one browser login, launch → token. A normal login takes
+# 20-40s. Not every Playwright call has a timeout (page.evaluate, close()),
+# so a wedged renderer can block the calling thread forever — which on
+# 2026-09-04 froze a whole daemon run and, with it, every later scheduled
+# run. A watchdog kills the tagged chromium after this many seconds; the
+# pending Playwright call then raises and the thread is released.
+LOGIN_HARD_TIMEOUT_SECONDS = 120
+
+# Unknown chromium switches are ignored but stay on the command line, so a
+# unique tag lets the watchdog kill exactly this login's browser tree.
+_BROWSER_TAG_SWITCH = "--zjip-login-tag="
 
 
 # ---------------------------------------------------------------------------
@@ -176,10 +191,40 @@ def _login_via_browser(account: str, password: str) -> str:
     headless: bool = login_cfg.get("headless", True)
     base_url: str = settings.get("base_url", "https://www.zjip.org.cn")
 
+    tag = f"{_BROWSER_TAG_SWITCH}{uuid.uuid4().hex}"
+    watchdog = threading.Timer(
+        LOGIN_HARD_TIMEOUT_SECONDS, _kill_tagged_browser, args=(tag, account)
+    )
+    watchdog.daemon = True
+    watchdog.start()
+    try:
+        return _login_via_browser_inner(account, password, headless, base_url, tag)
+    finally:
+        watchdog.cancel()
+
+
+def _kill_tagged_browser(tag: str, account: str) -> None:
+    """Watchdog: kill the chromium launched with `tag` so the stuck login
+    thread gets a Playwright error instead of waiting forever."""
+    logger.error(
+        f"[{account}] Browser login exceeded {LOGIN_HARD_TIMEOUT_SECONDS}s — "
+        "killing browser to release the worker thread"
+    )
+    try:
+        # -f matches the full command line; every chromium child process
+        # inherits the switch, so the whole browser tree goes down.
+        subprocess.run(["pkill", "-9", "-f", tag], check=False, timeout=10)
+    except Exception as exc:  # pragma: no cover — best effort
+        logger.warning(f"[{account}] Could not kill tagged browser: {exc!r}")
+
+
+def _login_via_browser_inner(
+    account: str, password: str, headless: bool, base_url: str, tag: str
+) -> str:
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=headless,
-            args=["--disable-blink-features=AutomationControlled"],
+            args=["--disable-blink-features=AutomationControlled", tag],
         )
         context = browser.new_context(user_agent=_DEFAULT_USER_AGENT)
         page = context.new_page()
@@ -243,11 +288,34 @@ def _login_via_browser(account: str, password: str) -> str:
                 )
 
             logger.info(f"[{account}] Login successful — token length: {len(token)}")
+            # Nothing else may happen in this browser once we have the token:
+            # close the page right away so no later code can interact with the
+            # logged-in session.
+            try:
+                page.close()
+            except Exception:
+                pass
             return token
 
         finally:
-            context.close()
-            browser.close()
+            # Never let a failing close() mask the real login outcome.
+            for closer in (context.close, browser.close):
+                try:
+                    closer()
+                except Exception as exc:
+                    logger.debug(f"[{account}] Browser cleanup error ignored: {exc!r}")
+
+
+def _assert_on_login_page(page, action: str) -> None:
+    """Read-only guard: the only page we ever type into or click on is the
+    login page. If the platform ever redirects /user/login elsewhere (e.g. an
+    already-authenticated session), refuse rather than fill/click blindly —
+    a generic submit selector on a business page could trigger a real action."""
+    url = getattr(page, "url", "") or ""
+    if "/login" not in url:
+        raise LoginError(
+            f"[guard] refusing to {action}: current page is not the login page ({url})"
+        )
 
 
 def _fill_login_form(page, account: str, password: str) -> None:
@@ -255,12 +323,13 @@ def _fill_login_form(page, account: str, password: str) -> None:
 
     Tries multiple selector strategies in order of preference.
     Logs which selector succeeded so operators can update if the UI changes.
+    Deliberately no generic input[type=text]/[type=password] fallback: if the
+    login form cannot be identified precisely we fail instead of guessing.
     """
-    # Strategy 1: name attribute (most stable)
+    _assert_on_login_page(page, "fill credentials")
     strategies = [
         ('name="account"', 'name="password"'),
         ('placeholder*="账号"', 'placeholder*="密码"'),
-        ('type="text"', 'type="password"'),
     ]
 
     for acc_sel, pwd_sel in strategies:
@@ -279,16 +348,22 @@ def _fill_login_form(page, account: str, password: str) -> None:
 
 
 def _click_login_button(page) -> None:
-    """Click the login submit button."""
+    """Click the login submit button — the only click this tool ever performs."""
+    _assert_on_login_page(page, "click the login button")
+    # Semantic selector first; generic submit selectors only as fallback.
     strategies = [
-        'button[type="submit"]',
         'button:has-text("登录")',
-        '.login-btn',
+        'button[type="submit"]',
         'input[type="submit"]',
     ]
     for sel in strategies:
         btn = page.locator(sel)
-        if btn.count() > 0:
+        n = btn.count()
+        if n > 0:
+            if n > 1:
+                logger.warning(
+                    f"{n} elements match {sel!r} on the login page — clicking the first"
+                )
             logger.debug(f"Clicking login button: {sel}")
             btn.first.click()
             return

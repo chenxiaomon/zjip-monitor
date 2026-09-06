@@ -33,6 +33,11 @@
   <span class="text-gray-500 dark:text-gray-400 flex items-center gap-1">
     <i class="ti ti-player-stop text-base"></i>巡检已停止
   </span>
+  {% elif run_once.status == 'stale' and run_once.holder_alive %}
+  <span class="text-red-500 flex items-center gap-1"
+        title="巡检进程 pid {{ run_once.pid }} 仍在运行但已无心跳，它持有全局锁，新巡检无法启动。定时任务会自动检测并重启；也可手动 systemctl restart zjip-daemon">
+    <i class="ti ti-alert-octagon text-base"></i>巡检进程卡死（{% if run_once.trigger == 'daemon' %}定时任务{% elif run_once.trigger == 'cli' %}命令行{% else %}Web{% endif %}），需重启后才能重新发起
+  </span>
   {% elif run_once.status == 'stale' %}
   <span class="text-orange-500 flex items-center gap-1">
     <i class="ti ti-alert-triangle text-base"></i>上次巡检异常中断，可重新发起

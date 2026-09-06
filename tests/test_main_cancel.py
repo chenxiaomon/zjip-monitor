@@ -85,3 +85,35 @@ def test_run_single_skips_when_lock_held():
     result = main.run_single(_fake_accounts(1)[0], trigger="test")
     assert result.get("skipped") == "already_running"
     ctx.finish("done")
+
+
+def test_concurrent_path_abandons_stuck_account(monkeypatch):
+    """One account that never returns must not block the whole run (2026-09-04 incident)."""
+    monkeypatch.setattr(main, "load_accounts", lambda: _fake_accounts(12))  # >10 → concurrent
+    monkeypatch.setattr(main, "ACCOUNT_HARD_TIMEOUT_SECONDS", 0.3)
+    monkeypatch.setattr(main, "generate_report", lambda *a, **k: None)
+    monkeypatch.setattr(main, "notify_batch", lambda *a, **k: None)
+    monkeypatch.setattr(main, "_prune_data", lambda: None)
+
+    release = threading.Event()
+
+    def scan(account, cancel=None, *, force_login=False, notify_inline=True):
+        if account.username == "user5":
+            release.wait(10)  # simulates a wedged Playwright call
+        return {"account": account.username, "company": account.company,
+                "records": [], "snapshot_path": None, "error": None}
+
+    monkeypatch.setattr(main, "scan_account_and_notify", scan)
+    try:
+        start = time.monotonic()
+        output = main.run_all(trigger="test")
+        elapsed = time.monotonic() - start
+    finally:
+        release.set()
+
+    assert elapsed < 3.0
+    assert len(output["results"]) == 12
+    stuck = [r for r in output["results"] if r["account"] == "user5"]
+    assert stuck and "timeout" in stuck[0]["error"]
+    assert sum(1 for r in output["results"] if r["error"]) == 1
+    assert control.read_state()["status"] == "done"  # lock released despite the stuck thread

@@ -99,7 +99,8 @@ def read_state() -> dict[str, Any] | None:
         return None
 
     if state.get("status") in ("running", "stopping"):
-        stale = not _pid_alive(state.get("pid"))
+        alive = _pid_alive(state.get("pid"))
+        stale = not alive
         if not stale:
             try:
                 hb = datetime.fromisoformat(state["heartbeat_at"])
@@ -108,11 +109,21 @@ def read_state() -> dict[str, Any] | None:
                 stale = True
         if stale:
             state["status"] = "stale"
+            # A live holder with a dead heartbeat is a wedged process, not a
+            # crash: it still owns run.lock, so a new run cannot start until
+            # that process is restarted. The UI and the daemon act on this.
+            state["holder_alive"] = alive
     return state
 
 
+# Serializes state.json writes from the concurrent scan threads so the JSON
+# snapshot is taken and written by one thread at a time.
+_STATE_WRITE_LOCK = threading.Lock()
+
+
 def _write_state(state: dict[str, Any]) -> None:
-    atomic_write_text(_STATE_FILE, json.dumps(state, ensure_ascii=False, indent=2))
+    with _STATE_WRITE_LOCK:
+        atomic_write_text(_STATE_FILE, json.dumps(state, ensure_ascii=False, indent=2))
 
 
 class CancelToken:
@@ -138,7 +149,11 @@ class CancelToken:
             return
         self._state["heartbeat_at"] = datetime.now(timezone.utc).isoformat()
         self._last_write = now
-        _write_state(self._state)
+        try:
+            _write_state(self._state)
+        except OSError as exc:
+            # A heartbeat is bookkeeping; it must never fail the scan itself.
+            logger.warning(f"Heartbeat write failed (ignored): {exc!r}")
 
     def checkpoint(self, **progress: Any) -> None:
         """Update heartbeat; raise RunCancelled if a stop was requested."""

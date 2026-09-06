@@ -165,8 +165,13 @@ def sync_attachments(
         List of newly downloaded file paths.
     """
     settings = _load_settings()
-    if not settings.get("attachments", {}).get("enabled", True):
+    att_cfg = settings.get("attachments", {})
+    if not att_cfg.get("enabled", True):
         return []
+    # Separate switch for the certificate lookup: it is the one platform call
+    # whose path carries a write-sounding name ("confirmation"). It is a query
+    # (empty body, returns URLs), but this lets operators turn just it off.
+    certificates_enabled = att_cfg.get("certificates_enabled", True)
     if base_url is None:
         base_url = settings.get("base_url", "https://www.zjip.org.cn")
 
@@ -188,7 +193,7 @@ def sync_attachments(
                 continue  # already synced at this status
 
             wanted = _fetch_notifications(session, base_url, reg_no)
-            if code in CERT_STATUSES:
+            if code in CERT_STATUSES and certificates_enabled:
                 wanted += _fetch_certificates(session, base_url, reg_no)
 
             ok = True

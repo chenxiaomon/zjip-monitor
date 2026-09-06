@@ -43,6 +43,8 @@ def run_state_ctx() -> dict:
         "msg": state.get("error") or "",
         "progress": state.get("progress") or {},
         "trigger": state.get("trigger"),
+        "pid": state.get("pid"),
+        "holder_alive": bool(state.get("holder_alive")),
     }
 
 

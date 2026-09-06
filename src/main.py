@@ -14,6 +14,7 @@ import json
 import random
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,13 @@ _REPORTS_KEEP_DAYS = 60
 _EVENTS_ROTATE_BYTES = 5 * 1024 * 1024
 # Snapshot stems end with "_YYYY-MM-DD-HHMM" (16 chars incl. underscore)
 _SNAPSHOT_TS_SUFFIX_LEN = 16
+
+# Wall-clock ceiling per account in the concurrent (>10 accounts) path.
+# Login (≤120s, see login.LOGIN_HARD_TIMEOUT_SECONDS) + paging + attachments
+# normally finish in well under 2 minutes; 10 minutes is the "something is
+# wedged" line. Second line of defence behind the login watchdog: guarantees
+# run_all() always reaches ctx.finish() and releases the global run lock.
+ACCOUNT_HARD_TIMEOUT_SECONDS = 600
 
 
 def _prune_data() -> None:
@@ -374,20 +382,43 @@ async def _run_concurrent(
     force_login: bool = False,
     max_workers: int = 3,
 ) -> list[dict]:
-    """Run accounts concurrently using a thread pool (sync Playwright is thread-safe)."""
+    """Run accounts concurrently using a thread pool (sync Playwright is thread-safe).
+
+    Each account gets a hard wall-clock budget (ACCOUNT_HARD_TIMEOUT_SECONDS).
+    A worker thread that never returns is abandoned, not joined: the run must
+    still reach ctx.finish() and release the global lock. That is why a
+    private executor is used — asyncio.run() would join the default
+    executor's threads on shutdown and hang on the very thread we gave up on.
+    """
     loop = asyncio.get_running_loop()
-    semaphore = asyncio.Semaphore(max_workers)
+    executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="scan")
 
     async def _one(account: Account) -> dict:
-        async with semaphore:
-            return await loop.run_in_executor(
-                None,
-                lambda: scan_account_and_notify(
-                    account, cancel, force_login=force_login, notify_inline=False
-                ),
+        fut = loop.run_in_executor(
+            executor,
+            lambda: scan_account_and_notify(
+                account, cancel, force_login=force_login, notify_inline=False
+            ),
+        )
+        try:
+            return await asyncio.wait_for(
+                asyncio.shield(fut), timeout=ACCOUNT_HARD_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                f"[{account.company}] Account scan exceeded "
+                f"{ACCOUNT_HARD_TIMEOUT_SECONDS}s — abandoning its worker thread"
+            )
+            return _error_result(
+                account, f"timeout: 超过 {ACCOUNT_HARD_TIMEOUT_SECONDS}s 未完成"
             )
 
-    raw = await asyncio.gather(*[_one(a) for a in accounts], return_exceptions=True)
+    try:
+        raw = await asyncio.gather(*[_one(a) for a in accounts], return_exceptions=True)
+    finally:
+        # Don't wait for stuck workers; nothing new is submitted anyway.
+        executor.shutdown(wait=False, cancel_futures=True)
+
     results: list[dict] = []
     for account, r in zip(accounts, raw):
         if isinstance(r, RunCancelled):

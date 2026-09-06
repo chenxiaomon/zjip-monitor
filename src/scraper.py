@@ -11,6 +11,7 @@ import math
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 import requests
 import yaml
@@ -20,6 +21,63 @@ from urllib3.util.retry import Retry
 
 from .exceptions import ScraperError, TokenExpiredError
 from .settings_cache import get_settings
+
+# ---------------------------------------------------------------------------
+# Read-only contract with the platform
+# ---------------------------------------------------------------------------
+# This tool only ever READS from zjip.org.cn. Every request that goes through
+# _build_session() must be one of these. The platform uses POST for two of its
+# query endpoints (all parameters in the query string, empty JSON body), so
+# those two are allowed with a mandatory empty body; anything else — other
+# methods, other POST paths, a POST with a payload, or a different host — is
+# refused before it leaves the process. Extend deliberately, never casually.
+READ_ONLY_METHODS = frozenset({"GET", "HEAD"})
+READ_ONLY_POST_PATHS = frozenset({
+    "/v1/datareg/list",          # registration list (paged)
+    "/v1/datareg/confirmation",  # certificate download URLs
+})
+_EMPTY_BODIES = (None, b"", b"{}", "", "{}")
+
+
+class ReadOnlyViolation(ScraperError):
+    """A request that would break the read-only contract was blocked."""
+
+
+class _ReadOnlyAdapter(HTTPAdapter):
+    """HTTPAdapter that enforces the read-only contract on every send()."""
+
+    def __init__(self, allowed_host: str | None, **kwargs):
+        super().__init__(**kwargs)
+        self.allowed_host = (allowed_host or "").lower() or None
+
+    def send(self, request, **kwargs):
+        check_read_only(request.method, request.url, request.body, self.allowed_host)
+        return super().send(request, **kwargs)
+
+
+def check_read_only(
+    method: str | None, url: str, body: Any, allowed_host: str | None
+) -> None:
+    """Raise ReadOnlyViolation unless (method, url, body) is a permitted read."""
+    method = (method or "").upper()
+    parsed = urlparse(url or "")
+    path = parsed.path or "/"
+    host = (parsed.hostname or "").lower()
+
+    if allowed_host and host != allowed_host:
+        raise ReadOnlyViolation(
+            f"read-only guard: host {host!r} is not the platform host {allowed_host!r}"
+        )
+    if method in READ_ONLY_METHODS:
+        return
+    if method == "POST" and path in READ_ONLY_POST_PATHS:
+        if body in _EMPTY_BODIES:
+            return
+        raise ReadOnlyViolation(
+            f"read-only guard: POST {path} must carry an empty body, got {body!r:.80}"
+        )
+    raise ReadOnlyViolation(f"read-only guard: {method} {path} is not a permitted read")
+
 
 if TYPE_CHECKING:
     from .control import CancelToken
@@ -192,7 +250,10 @@ def _build_session(token: str, timeout: int = 30) -> requests.Session:
         allowed_methods=["POST", "GET"],
         raise_on_status=False,
     )
-    adapter = HTTPAdapter(max_retries=retry)
+    # Every platform request funnels through this adapter, which refuses
+    # anything outside the read-only contract (see check_read_only).
+    allowed_host = urlparse(_load_settings().get("base_url", "https://www.zjip.org.cn")).hostname
+    adapter = _ReadOnlyAdapter(allowed_host, max_retries=retry)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
 
