@@ -36,7 +36,7 @@ from .exceptions import (
     ScraperError,
     TokenExpiredError,
 )
-from .login import get_token
+from .login import forget_cached_token, get_token, has_valid_cached_token
 from .notifier import notify, notify_batch, notify_login_failure
 from .reporter import generate_report
 from .scraper import FetchResult, decode_status, fetch_all_records
@@ -297,6 +297,10 @@ def scan_account_and_notify(
         return result
 
     # ── Login ──────────────────────────────────────────────────────────────
+    # A cache hit is not a login. Recording success for one would reset the
+    # lockout streak (and stamp a fake last_login_ok_at) for an account the
+    # platform is in fact rejecting, postponing the auto-pause indefinitely.
+    fresh_login = force_login or not has_valid_cached_token(account.username)
     try:
         if cancel:
             cancel.checkpoint(phase="login")
@@ -324,7 +328,8 @@ def scan_account_and_notify(
             account.username, account.company, ok=False, error=str(exc), kind="login_failed"
         )
         return result
-    status_store.record_login(account.username, account.company, ok=True)
+    if fresh_login:
+        status_store.record_login(account.username, account.company, ok=True)
 
     # ── Fetch records (re-login once on token expiry) ───────────────────────
     try:
@@ -333,8 +338,12 @@ def scan_account_and_notify(
         fetch: FetchResult = fetch_all_records(token, cancel=cancel)
     except TokenExpiredError:
         logger.warning(f"[{account.company}] Token expired mid-run — re-logging in…")
+        # The cached file still looks valid locally; without dropping it every
+        # later scan would replay the same dead token.
+        forget_cached_token(account.username)
         try:
             token = get_token(account.username, _current_password(account), force_refresh=True)
+            status_store.record_login(account.username, account.company, ok=True)
             fetch = fetch_all_records(token, cancel=cancel)
         except (LoginError, ScraperError) as exc:
             logger.error(f"[{account.company}] Re-login or re-fetch failed: {exc}")
@@ -477,7 +486,9 @@ def scan_account_and_notify(
         except TokenExpiredError:
             # Token can expire mid-sync on large first runs — re-login once
             logger.warning(f"[{account.company}] Token expired during attachment sync — re-logging in…")
+            forget_cached_token(account.username)
             token = get_token(account.username, _current_password(account), force_refresh=True)
+            status_store.record_login(account.username, account.company, ok=True)
             new_files = sync_attachments(token, account.company, records, cancel=cancel)
         if new_files:
             logger.info(f"[{account.company}] Downloaded {len(new_files)} attachment(s)")

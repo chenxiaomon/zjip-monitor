@@ -132,3 +132,65 @@ def test_fresh_login_uses_current_stored_password(monkeypatch, account):
     )
     main.scan_account_and_notify(account)  # account object still carries "p"
     assert used == ["NEW-PW"]
+
+
+def _ok_fetch(monkeypatch):
+    from src.scraper import FetchResult
+
+    monkeypatch.setattr(main, "load_latest_snapshot", lambda company: None)
+    monkeypatch.setattr(
+        main, "fetch_all_records",
+        lambda tok, cancel=None: FetchResult(records=[], reported_total=0, pages_fetched=1),
+    )
+
+
+def test_cached_token_hit_does_not_reset_the_streak(monkeypatch, account):
+    """A cache hit is not a login. Counting it as one would clear the lockout
+    streak (and un-pause) for an account the platform is still rejecting."""
+    status_store.record_login("u1", "测试公司", ok=False, error="rejected")
+    status_store._read_cache = None
+    assert status_store.get_status("u1")["consecutive_login_failures"] == 1
+
+    monkeypatch.setattr(main, "has_valid_cached_token", lambda username: True)
+    monkeypatch.setattr(main, "get_token", lambda *a, **k: "cached-tok")
+    _ok_fetch(monkeypatch)
+
+    assert main.scan_account_and_notify(account)["error"] is None
+
+    status_store._read_cache = None
+    entry = status_store.get_status("u1")
+    assert entry["consecutive_login_failures"] == 1   # untouched
+    assert entry["last_login_ok_at"] is None          # no fake success stamp
+    assert entry["status"] == "ok"                    # the scan itself did succeed
+
+
+def test_token_expired_midfetch_drops_cache_and_records_the_real_login(monkeypatch, account):
+    from src.scraper import FetchResult
+    from src.exceptions import TokenExpiredError
+
+    status_store.record_login("u1", "测试公司", ok=False, error="rejected")
+    status_store._read_cache = None
+
+    forgotten: list[str] = []
+    monkeypatch.setattr(main, "has_valid_cached_token", lambda username: True)
+    monkeypatch.setattr(main, "forget_cached_token", forgotten.append)
+
+    def fake_get_token(username, password, *, force_refresh=False):
+        return "fresh-tok" if force_refresh else "stale-tok"
+
+    def fake_fetch(token, cancel=None):
+        if token == "stale-tok":
+            raise TokenExpiredError("401")
+        return FetchResult(records=[], reported_total=0, pages_fetched=1)
+
+    monkeypatch.setattr(main, "get_token", fake_get_token)
+    monkeypatch.setattr(main, "load_latest_snapshot", lambda company: None)
+    monkeypatch.setattr(main, "fetch_all_records", fake_fetch)
+
+    assert main.scan_account_and_notify(account)["error"] is None
+    assert forgotten == ["u1"]  # the dead token is not replayed next run
+
+    status_store._read_cache = None
+    entry = status_store.get_status("u1")
+    assert entry["consecutive_login_failures"] == 0   # the forced re-login really happened
+    assert entry["last_login_ok_at"] is not None

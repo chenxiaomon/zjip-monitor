@@ -184,14 +184,35 @@ class RunContext:
         self.cancel = CancelToken(state)
 
     def finish(self, status: str, error: str | None = None) -> None:
+        """Publish the final state and ALWAYS release the global run lock.
+
+        The state write can fail for real (ENOSPC on a 96%-full disk is the
+        case this guards). Before the try/finally that left the lock held by a
+        still-living process, so every later scan — daemon and console alike —
+        returned skipped="already_running" until the wedge probe restarted the
+        daemon. Losing the final state.json is survivable; losing the lock is
+        not, so the write is best-effort and the release is not."""
         self.state["status"] = status
         self.state["error"] = error
         now = datetime.now(timezone.utc).isoformat()
         self.state["heartbeat_at"] = now
         self.state["finished_at"] = now
-        _write_state(self.state)
-        clear_stop()
-        self._lock.release()
+        try:
+            _write_state(self.state)
+        except OSError as exc:
+            logger.error(f"Could not write final run state ({exc!r}) — releasing the lock anyway")
+            # Leave no stale "running" behind: read_state() returning None is
+            # honest ("no run"), a stale running entry is not. Unlinking needs
+            # no free space, unlike the atomic rewrite above.
+            try:
+                _STATE_FILE.unlink(missing_ok=True)
+            except OSError:
+                pass
+        finally:
+            try:
+                clear_stop()
+            finally:
+                self._lock.release()
 
     def __enter__(self) -> "RunContext":
         return self
@@ -215,7 +236,9 @@ def try_acquire(kind: str, trigger: str) -> RunContext | None:
     leftover 'running' state is simply overwritten.
     """
     _CONTROL_DIR.mkdir(parents=True, exist_ok=True)
-    lock = FileLock(_LOCK_FILE)
+    # thread_local=False so filelock's own __del__ safety net can force-release
+    # from any thread; RunContext is the sole owner, no other thread touches it.
+    lock = FileLock(_LOCK_FILE, thread_local=False)
     try:
         lock.acquire(timeout=0)
     except Timeout:
@@ -235,5 +258,10 @@ def try_acquire(kind: str, trigger: str) -> RunContext | None:
         "error": None,
         "finished_at": None,
     }
-    _write_state(state)
+    try:
+        _write_state(state)
+    except OSError:
+        # Never hold the lock for a run that could not even be announced.
+        lock.release()
+        raise
     return RunContext(lock, state)

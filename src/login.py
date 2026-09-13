@@ -151,6 +151,29 @@ def get_token(account: str, password: str, *, force_refresh: bool = False) -> st
     return token
 
 
+def has_valid_cached_token(account: str) -> bool:
+    """True when get_token() would answer from data/sessions/ without logging in.
+
+    Callers use this to tell a real login outcome from a cache hit: recording
+    "login succeeded" on a cache hit would reset the lockout streak (and stamp
+    a fake last_login_ok_at) for an account the platform is actually rejecting.
+    """
+    return _load_cached_token(account) is not None
+
+
+def forget_cached_token(account: str) -> None:
+    """Drop the cached token for *account* (no-op when there is none).
+
+    Called when the platform rejects a token mid-fetch: the file still looks
+    valid locally, so without this every later scan would replay the same dead
+    token, spend a 401 round-trip and re-enter the re-login path.
+    """
+    try:
+        _session_path(account).unlink(missing_ok=True)
+    except OSError as exc:  # read-only FS / permissions — not worth failing a scan
+        logger.warning(f"[{account}] Could not drop cached token: {exc}")
+
+
 def verify_credentials(account: str, password: str) -> str:
     """Fresh login with ZERO token-cache interaction — never reads and never
     writes data/sessions/. Used by the web console's 测试登录 so that testing

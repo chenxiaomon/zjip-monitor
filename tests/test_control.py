@@ -210,3 +210,36 @@ def test_concurrent_checkpoints_from_threads_do_not_raise():
     assert errors == []
     assert control.read_state()["status"] == "running"
     ctx.finish("done")
+
+
+def test_finish_releases_the_lock_even_if_the_state_write_fails(monkeypatch):
+    """ENOSPC on a nearly-full disk used to skip the release, leaving the
+    global run lock held by a live process — every later scan then returned
+    skipped="already_running" until systemd restarted the daemon."""
+    ctx = control.try_acquire(kind="run_all", trigger="test")
+    assert ctx is not None
+
+    def boom(state):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(control, "_write_state", boom)
+    ctx.finish("done")  # must not raise
+    monkeypatch.undo()  # the disk is "fixed" again
+
+    again = control.try_acquire(kind="run_all", trigger="test")
+    assert again is not None, "lock was not released"
+    again.finish("done")
+
+
+def test_acquire_releases_the_lock_if_the_opening_state_write_fails(monkeypatch):
+    def boom(state):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(control, "_write_state", boom)
+    with pytest.raises(OSError):
+        control.try_acquire(kind="run_all", trigger="test")
+
+    monkeypatch.undo()
+    ctx = control.try_acquire(kind="run_all", trigger="test")
+    assert ctx is not None, "lock was not released"
+    ctx.finish("done")
