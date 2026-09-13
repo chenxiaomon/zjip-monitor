@@ -27,20 +27,39 @@ cp deploy/deploy.env.example deploy/deploy.env   # 按需改 SERVER / REMOTE
 | --- | --- |
 | `deploy`（默认） | 本地 pytest → 远端预检（磁盘 ≥ 200MB）→ 备份代码目录 → rsync → 写 RELEASE → `pip install -r requirements.lock` → 导入冒烟 → 重启两个服务 → `/health?strict=1` 健康检查。任何一步失败立刻停止并说明服务器现状 |
 | `dry-run` | 只跑本地闸门 + `rsync -n`（列出将传输的文件）+ 打印将执行的远端步骤 |
-| `rollback [备份名]` | 回滚到某份备份（默认最新）：解包覆盖代码目录（不动 `data/ logs/ .venv/`），装依赖、冒烟、重启、健康检查。执行前要求 `yes` |
+| `rollback [备份名]` | 回滚到某份备份（默认最新）：**只恢复代码**（不动 `.env`、`config/`、`data/`、`logs/`、`.venv/`），装依赖、冒烟、重启、健康检查。执行前要求 `yes`；加 `--with-config` 才连 `.env` 与 `config/` 一起恢复 |
 | `status` | 远端 `systemctl is-active`、RELEASE、`/health` JSON、`df -h /`、备份列表 |
 | `lock` | 把远端 `pip freeze` 写回本地 `requirements.lock` |
 | `install-units` | 把 `deploy/*.service` 安装到 `/etc/systemd/system/`（先 diff，再确认，`daemon-reload`，不重启） |
 | `help` | 用法 |
 
-选项：`--allow-dirty`（工作区有未提交改动仍部署）、`--skip-tests`（跳过本地 pytest）、`--yes`（跳过交互确认）。
-环境变量：`DEPLOY_DELETE=1`（rsync 加 `--delete`，先预览要删的远端文件并确认；排除清单里的 `.env`、`config/*.yaml`、`data/` 等受保护不会被删）、`DEPLOY_SSH_CMD`、`DEPLOY_ENV`。
+选项：`--allow-dirty`（工作区有未提交改动仍部署）、`--skip-tests`（跳过本地 pytest）、`--yes`（跳过交互确认）、`--with-config`（仅 `rollback`，见下）。
+环境变量：`DEPLOY_DELETE=1`（rsync 加 `--delete`，先预览要删的远端文件并确认；排除清单里的 `.env`、`.env.bak`、`config/*.yaml`、`config/accounts.enc[.bak]`、`data/` 等受保护不会被删）、`DEPLOY_SSH_CMD`、`DEPLOY_ENV`。
+
+排除清单里有三类只存在于服务器、本地永远没有的文件，`--delete` 必须绕开它们：`.env.bak` 与 `config/accounts.enc.bak`（控制台改设置时留下的一代备份，出事时正好要用），以及本地才有的 `miniprogram/project.private.config.json`（`.gitignore` 里有，但 rsync 不读 gitignore）。
 
 ## 备份与回滚
 
-- 每次 `deploy` 先在服务器上 `tar czf BACKUP_DIR/code-<UTC时间>-<git短sha>.tgz`，内容是代码目录里除 `data/ logs/ .venv/ .pytest_cache/ __pycache__` 之外的一切——包括 `.env`、`config/`（`settings.yaml`、`accounts.enc`）、`requirements.lock`、`RELEASE`，都是回滚所需且很小。
-- 只保留最近 `KEEP_BACKUPS` 份（默认 3）。
-- `rollback` 是解包覆盖：部署新增的文件不会被删掉（旧代码不引用它们，无害）；备份里的 `.env` / `config/` 也会一并恢复到备份时刻，回滚前脚本会提示这一点。
+- 每次 `deploy` 先在服务器上 `tar czf BACKUP_DIR/code-<UTC时间戳>-pre-<新sha>.tgz`。名字里的 **`pre-<新sha>` 表示「部署 `<新sha>` 之前服务器上的代码」**——归档内容是被这次部署替换掉的旧版本，不是 `<新sha>` 本身。
+- 内容是代码目录里除 `data/ logs/ .venv/ .pytest_cache/ __pycache__` 之外的一切——包括 `.env`、`config/`（`settings.yaml`、`accounts.enc`）、`requirements.lock`、`RELEASE`，都是灾难恢复所需且很小。
+- 归档里有明文口令（`.env` 的 `FERNET_KEY` / `WEB_PASS` / `API_KEY`），所以备份目录是 `700`、tgz 是 `600`。
+- 只保留最近 `KEEP_BACKUPS` 份（默认 3）。**必须是正整数（≥1）**：0 会让清理逻辑把刚生成的那份也删掉，脚本因此直接拒绝启动。
+- `rollback` 是解包覆盖，**默认只恢复代码**：解包时排除 `.env`、`.env.bak`、`config/`。控制台会在部署之后改写 `config/accounts.enc` 与 `settings.yaml`，把它们退回备份时刻等于静默抹掉这些改动，是数据丢失而不是回滚。
+- 真正的灾难恢复（配置本身被写坏）用 `./deploy.sh rollback <备份名> --with-config`，它会连 `.env` 与 `config/` 一起覆盖回备份时刻；确认提示里会说明这个差别。
+- 部署新增的文件不会被解包删掉（旧代码不引用它们，无害）。
+
+## 健康检查怎么判定
+
+`deploy` / `rollback` 的最后一步是在服务器本机上探 `/health?strict=1`，最多 15 次 × 2s，每次 `curl --max-time 5`（服务器 hang 住时上界才成立），再加两个 `systemctl is-active`：
+
+| `/health?strict=1` | 判定 |
+| --- | --- |
+| `200` | 健康 |
+| `404` / `302` / `401` / `403` | 这个版本还没有 `/health` 路由（`web/app.py` 的鉴权中间件会把不在白名单里的路径 302 到 `/login`，所以旧版本给的是 302 而不是 404）。退回探 `/login`，为 `200` 即算健康 |
+| `503` | 新代码已经跑起来了，只是系统自评 degraded（例如某个账号密码错）。打印完整 `/health` JSON，以**警告**结束：部署算成功，回滚改不了业务状态，去控制台查 |
+| `000`（连不上）/ 其它 5xx | 失败：打印两份 `journalctl` 并提示回滚 |
+
+两个 `systemctl is-active` 任意一个不通过，同样算失败（503 也不例外）。
 
 ## requirements.lock
 

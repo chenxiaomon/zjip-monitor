@@ -5,7 +5,7 @@
 # 用法：./deploy.sh [子命令] [选项]
 #   deploy（默认）    完整部署；任何一步失败立刻停止并说明服务器现状
 #   dry-run           只跑本地闸门 + rsync -n 列出将传输的文件 + 打印将执行的远端步骤，不改服务器
-#   rollback [备份名]  回滚到某份备份（默认最新）：只覆盖代码目录，不动 data/ logs/ .venv/
+#   rollback [备份名]  回滚到某份备份（默认最新）：默认只恢复代码，不动 .env / config/ / data/ / logs/ / .venv/
 #   status            远端服务状态 / RELEASE / /health / 磁盘 / 备份列表
 #   lock              把远端 pip freeze 写回本地 requirements.lock
 #   install-units     把 deploy/*.service 安装到 /etc/systemd/system/（先 diff，输入 yes 后 daemon-reload，不重启）
@@ -14,6 +14,8 @@
 #   --allow-dirty     工作区有未提交改动时仍继续（deploy 默认中止；dry-run 只警告）
 #   --skip-tests      跳过本地 pytest 闸门
 #   --yes / -y        rollback / install-units / --delete 预览不再交互确认
+#   --with-config     仅 rollback：连 .env 与 config/（settings.yaml、accounts.enc）一起恢复到备份时刻
+#                     （灾难恢复用；默认只恢复代码，以免抹掉部署之后在控制台里改过的账号密码与设置）
 # 环境变量：
 #   DEPLOY_ENV        配置文件路径，默认 deploy/deploy.env（不存在时用脚本内默认值，模板见 deploy/deploy.env.example）
 #   DEPLOY_DELETE=1   rsync 加 --delete：先 rsync -n 打印将删除的远端文件，输入 yes 才真正执行
@@ -38,10 +40,6 @@ if [ -f "$DEPLOY_ENV" ]; then
 fi
 SSH_CMD="${DEPLOY_SSH_CMD:-ssh}"
 
-case "$KEEP_BACKUPS" in
-  ''|*[!0-9]*) echo "✗ KEEP_BACKUPS 必须是非负整数，当前：$KEEP_BACKUPS" >&2; exit 1 ;;
-esac
-
 # ---- 输出样式（沿用 ▶ ✓ ✗；非终端时不上色）----
 if [ -t 1 ]; then
   C_STEP=$'\033[1;34m'; C_OK=$'\033[1;32m'; C_WARN=$'\033[1;33m'; C_ERR=$'\033[1;31m'; C_RESET=$'\033[0m'
@@ -53,13 +51,22 @@ ok()   { printf '%s✓ %s%s\n' "$C_OK" "$*" "$C_RESET"; }
 warn() { printf '%s! %s%s\n' "$C_WARN" "$*" "$C_RESET" >&2; }
 fail() { printf '%s✗ %s%s\n' "$C_ERR" "$*" "$C_RESET" >&2; exit 1; }
 
+# KEEP_BACKUPS must be >= 1. The trim step deletes everything past line KEEP+1
+# of a newest-first listing, so 0 would wipe the backup that was just taken —
+# exactly the one a rollback needs — leaving no way back.
+case "$KEEP_BACKUPS" in
+  ''|*[!0-9]*) fail "KEEP_BACKUPS 必须是正整数（≥1），当前：$KEEP_BACKUPS" ;;
+esac
+[ "$KEEP_BACKUPS" -ge 1 ] || fail "KEEP_BACKUPS 必须是正整数（≥1），当前：${KEEP_BACKUPS}（0 会把刚做的备份一起删掉）"
+
 # ---- 参数 ----
-CMD=""; ARG=""; ALLOW_DIRTY=0; SKIP_TESTS=0; ASSUME_YES=0
+CMD=""; ARG=""; ALLOW_DIRTY=0; SKIP_TESTS=0; ASSUME_YES=0; WITH_CONFIG=0
 for a in "$@"; do
   case "$a" in
     --allow-dirty) ALLOW_DIRTY=1 ;;
     --skip-tests)  SKIP_TESTS=1 ;;
     --yes|-y)      ASSUME_YES=1 ;;
+    --with-config) WITH_CONFIG=1 ;;
     -h|--help)     CMD="help" ;;
     -*)            fail "未知选项：${a}（./deploy.sh help 查看用法）" ;;
     *)
@@ -98,15 +105,21 @@ confirm() {  # confirm "提示" → 0 继续；--yes 时直接通过
 # caches, .claude/ (worktrees live there — huge), and RELEASE (written by the
 # server side; must survive --delete). `.git` without the slash also covers a
 # worktree checkout, where .git is a file.
+# .env.bak and config/accounts.enc.bak exist only on the server (save_accounts
+# keeps one generation; the laptop never has them). Without an exclude, --delete
+# would remove precisely the files a bad settings edit needs to recover from.
 RSYNC_EXCLUDES=(
   --exclude='.venv/'
   --exclude='__pycache__/'
   --exclude='*.pyc'
   --exclude='.env'
+  --exclude='.env.bak'
   --exclude='config/accounts.enc'
+  --exclude='config/accounts.enc.bak'
   --exclude='config/accounts.yaml'
   --exclude='config/settings.yaml'
   --exclude='miniprogram/config.js'
+  --exclude='miniprogram/project.private.config.json'
   --exclude='data/'
   --exclude='logs/'
   --exclude='.git'
@@ -193,44 +206,67 @@ echo "  已重启 zjip-daemon、zjip-web"
 EOF
 }
 
+HEALTH_DEGRADED=0
+
 step_health() {  # $1 = 失败时的提示
   step "健康检查（/health?strict=1，最多 15 次 × 2s；两服务 is-active）..."
-  remote <<'EOF' || fail "健康检查未通过。$1"
+  # The remote script separates "broken" from "degraded": exit 3 means the new
+  # code is up and answering but rates its own business state unhealthy, which
+  # a rollback cannot fix — so it must not read as a failed deploy.
+  local rc=0
+  remote <<'EOF' || rc=$?
 # step: health
 set -uo pipefail
 HEALTH_URL='http://127.0.0.1:8000/health?strict=1'
 LOGIN_URL='http://127.0.0.1:8000/login'
-healthy=0; code="000"; i=0
+healthy=0; degraded=0; code="000"; i=0
 while [ "$i" -lt 15 ]; do
   i=$((i + 1))
-  code=$(curl -s -o /dev/null -w '%{http_code}' "$HEALTH_URL") || code="000"
+  # --max-time keeps the advertised "15 × 2s" ceiling true even when the server
+  # accepts the connection and then never answers.
+  code=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' "$HEALTH_URL") || code="000"
   case "$code" in
     200) echo "  /health?strict=1 → 200（第 $i 次）"; healthy=1; break ;;
-    404)
-      # Builds that predate /health: settle for the login page answering.
-      login=$(curl -s -o /dev/null -w '%{http_code}' "$LOGIN_URL") || login="000"
+    503) degraded=1; break ;;
+    404|302|401|403)
+      # No /health route in this build: 404 when it really 404s, 302/401/403
+      # when the auth middleware answers the unknown path before routing ever
+      # sees it. Settle for the login page answering.
+      login=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' "$LOGIN_URL") || login="000"
       if [ "$login" = "200" ]; then
-        echo "  /health 不存在（旧版本还没有该路由），退回检查 /login → 200"
+        echo "  /health?strict=1 → ${code}（这个版本还没有 /health 路由），退回检查 /login → 200，视为健康"
         healthy=1; break
       fi ;;
   esac
   sleep 2
 done
-if [ "$healthy" != 1 ]; then
-  echo "✗ /health?strict=1 最后返回 ${code}（503 = 系统 degraded，详情见下方 JSON）"
+if [ "$degraded" = 1 ]; then
+  echo "! /health?strict=1 → 503：服务已启动，但系统自评为 degraded（业务状态不健康，回滚修不好）"
+  echo "---- /health 完整 JSON ----"
+  curl -s --max-time 5 'http://127.0.0.1:8000/health' | head -c 2000; echo
+elif [ "$healthy" != 1 ]; then
+  echo "✗ /health?strict=1 最后返回 ${code}（000 = 连不上；5xx = 服务起不来）"
   curl -s --max-time 5 'http://127.0.0.1:8000/health' | head -c 2000; echo
 fi
 active=1
 if systemctl is-active --quiet zjip-web; then echo "  zjip-web: active"; else echo "✗ zjip-web 未运行"; active=0; fi
 if systemctl is-active --quiet zjip-daemon; then echo "  zjip-daemon: active"; else echo "✗ zjip-daemon 未运行"; active=0; fi
-if [ "$healthy" != 1 ] || [ "$active" != 1 ]; then
+if { [ "$healthy" != 1 ] && [ "$degraded" != 1 ]; } || [ "$active" != 1 ]; then
   echo "---- journalctl -u zjip-web -n 30 ----"
   journalctl -u zjip-web -n 30 --no-pager
   echo "---- journalctl -u zjip-daemon -n 30 ----"
   journalctl -u zjip-daemon -n 30 --no-pager
   exit 1
 fi
+[ "$degraded" = 1 ] && exit 3
+exit 0
 EOF
+  case "$rc" in
+    0) ;;
+    3) HEALTH_DEGRADED=1
+       warn "服务已启动，但系统自评为 degraded，请到控制台查看（部署本身算成功：回滚改不了业务状态）" ;;
+    *) fail "健康检查未通过。$1" ;;
+  esac
 }
 
 # ---- 子命令 ----
@@ -248,18 +284,31 @@ REMOTE="$1"; BACKUP_DIR="$2"; MIN_FREE_MB="$3"
 avail_mb=$(df -Pm "$REMOTE" | awk 'NR==2 {print $4}')
 echo "  磁盘剩余 ${avail_mb}MB（下限 ${MIN_FREE_MB}MB）"
 [ "$avail_mb" -ge "$MIN_FREE_MB" ] || { echo "✗ 磁盘剩余不足，拒绝部署（先清理再来）"; exit 1; }
+# Backups contain .env in the clear (FERNET_KEY / WEB_PASS / API_KEY), so the
+# directory must be owner-only even if an earlier run left it at 0755.
 mkdir -p "$BACKUP_DIR"
-echo "  备份目录 $BACKUP_DIR 就绪"
+chmod 700 "$BACKUP_DIR"
+echo "  备份目录 $BACKUP_DIR 就绪（权限 700）"
 EOF
 
   local backup_name
-  backup_name="code-$(date -u +%Y%m%d-%H%M%S)-${GIT_SHA}.tgz"
-  step "备份远端代码 → $BACKUP_DIR/$backup_name ..."
+  # "pre-<新 sha>" spells out what the archive holds: the code that was on the
+  # server *before* GIT_SHA went out. A name carrying only the new sha reads as
+  # "this archive is <sha>" and invites rolling back into the very build that is
+  # being replaced.
+  backup_name="code-$(date -u +%Y%m%d-%H%M%S)-pre-${GIT_SHA}.tgz"
+  step "备份远端代码（部署 ${GIT_SHA} 之前服务器上的代码）→ $BACKUP_DIR/$backup_name ..."
   remote "$REMOTE" "$BACKUP_DIR" "$backup_name" "$KEEP_BACKUPS" <<'EOF' || fail "备份失败，已中止（服务器未改动，仍在运行旧版本）"
 # step: backup
 set -euo pipefail
 REMOTE="$1"; BACKUP_DIR="$2"; NAME="$3"; KEEP="$4"
 cd "$REMOTE"
+# The archive carries .env in the clear, so it must not land at the default
+# 0644 inside a 0755 directory: umask covers the tar and the chmods repair a
+# directory or file created before this rule existed.
+umask 077
+mkdir -p "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR"
 # Top-level entries minus runtime data, caches and the venv. Everything else —
 # code, .env, config/ (settings.yaml, accounts.enc), requirements.lock, RELEASE —
 # is small and is exactly what a rollback has to put back.
@@ -269,7 +318,8 @@ for entry in .[!.]* ..?* *; do
   case "$entry" in data|logs|.venv|.pytest_cache) ;; *) set -- "$@" "$entry" ;; esac
 done
 tar czf "$BACKUP_DIR/$NAME" --exclude='__pycache__' --exclude='*.pyc' "$@"
-echo "  已备份 ${NAME}（$(du -h "$BACKUP_DIR/$NAME" | cut -f1)）"
+chmod 600 "$BACKUP_DIR/$NAME"
+echo "  已备份 ${NAME}（$(du -h "$BACKUP_DIR/$NAME" | cut -f1)，权限 600）——内容是本次部署之前服务器上的代码"
 # Names carry a UTC stamp, so a reverse sort is newest-first.
 ls -1 "$BACKUP_DIR"/code-*.tgz | sort -r | tail -n +"$((KEEP + 1))" | while read -r old; do
   rm -f "$old"
@@ -312,8 +362,13 @@ EOF
   step_restart
   step_health "新版本已重启但状态异常；可 ./deploy.sh rollback $backup_name 回滚"
 
-  ok "部署完成：${GIT_SHA}（${GIT_BRANCH}）→ $SERVER:$REMOTE"
-  echo "  回滚：./deploy.sh rollback $backup_name"
+  if [ "$HEALTH_DEGRADED" = 1 ]; then
+    ok "部署完成（带警告：系统自评 degraded）：${GIT_SHA}（${GIT_BRANCH}）→ $SERVER:$REMOTE"
+  else
+    ok "部署完成：${GIT_SHA}（${GIT_BRANCH}）→ $SERVER:$REMOTE"
+  fi
+  echo "  这份备份是部署 ${GIT_SHA} 之前服务器上的代码：$backup_name"
+  echo "  回滚：./deploy.sh rollback ${backup_name}（默认只恢复代码；加 --with-config 才连 .env 与 config/ 一起恢复）"
 }
 
 cmd_dry_run() {
@@ -324,8 +379,9 @@ cmd_dry_run() {
   run_rsync -n ${extra[@]+"${extra[@]}"} || fail "rsync -n 失败（无法连接服务器？）"
   echo
   echo "将执行的远端步骤（dry-run 未执行任何一步，服务器未改动）："
-  echo "  1. 预检：$REMOTE 与 .venv 存在；df 剩余 ≥ ${MIN_FREE_MB}MB；mkdir -p $BACKUP_DIR"
-  echo "  2. 备份：tar czf $BACKUP_DIR/code-<UTC时间>-${GIT_SHA}.tgz（排除 data/ logs/ .venv/ .pytest_cache/ __pycache__），保留最近 $KEEP_BACKUPS 份"
+  echo "  1. 预检：$REMOTE 与 .venv 存在；df 剩余 ≥ ${MIN_FREE_MB}MB；mkdir -p ${BACKUP_DIR}（chmod 700）"
+  echo "  2. 备份：tar czf $BACKUP_DIR/code-<UTC时间>-pre-${GIT_SHA}.tgz（chmod 600；排除 data/ logs/ .venv/ .pytest_cache/ __pycache__），保留最近 $KEEP_BACKUPS 份"
+  echo "     —— 名字里的 pre-${GIT_SHA} 表示「部署 ${GIT_SHA} 之前服务器上的代码」，回滚时选它就回到本次部署前"
   if [ "${DEPLOY_DELETE:-0}" = 1 ]; then
     echo "  3. rsync --delete 上述清单（先确认 deleting 列表）"
   else
@@ -335,7 +391,7 @@ cmd_dry_run() {
   echo "  5. pip install -r requirements.lock（不存在则退回 requirements.txt 并警告）"
   echo "  6. 导入冒烟：web.app / src.main.run_all / run_daemon"
   echo "  7. 重启：systemctl restart zjip-daemon zjip-web"
-  echo "  8. 健康检查：/health?strict=1 → 200（15 次 × 2s；404 退回 /login）+ 两服务 is-active"
+  echo "  8. 健康检查：/health?strict=1 → 200（15 次 × 2s，每次 --max-time 5；404/302/401/403 退回 /login → 200 也算健康；503 = degraded，只警告不算失败）+ 两服务 is-active"
   ok "dry-run 完成"
 }
 
@@ -351,6 +407,7 @@ EOF
 )" || fail "无法列出远端备份"
   [ -n "$backups" ] || fail "远端没有任何备份（${BACKUP_DIR}），无法回滚"
   printf '%s\n' "$backups" | sed 's/^/  /'
+  echo "  （名字里的 pre-<sha> = 部署 <sha> 之前服务器上的代码，选它就回到那次部署前的状态）"
 
   local target
   if [ -n "$ARG" ]; then
@@ -361,17 +418,37 @@ EOF
   fi
   echo
   echo "  将回滚到：$target"
-  warn "回滚只覆盖代码目录（data/ logs/ .venv/ 不受影响），但备份里的 .env 与 config/（settings.yaml、accounts.enc）也会恢复到备份时刻的内容"
+  if [ "$WITH_CONFIG" = 1 ]; then
+    warn "--with-config：除代码外，备份里的 .env 与 config/（settings.yaml、accounts.enc）也会覆盖回备份时刻——本次部署之后在控制台里改过的账号、密码、设置会全部丢失"
+  else
+    echo "  只恢复代码：.env 与 config/（settings.yaml、accounts.enc）保持服务器现状不动"
+    echo "  （data/ logs/ .venv/ 同样不动；确实要连配置一起回退到备份时刻，用 --with-config）"
+  fi
   confirm "确认回滚？" || fail "已取消，服务器未改动"
 
   step "解包备份 → $REMOTE ..."
-  remote "$REMOTE" "$BACKUP_DIR" "$target" <<'EOF' || fail "解包失败：服务器代码可能处于半恢复状态，请登录检查"
+  remote "$REMOTE" "$BACKUP_DIR" "$target" "$WITH_CONFIG" <<'EOF' || fail "解包失败：服务器代码可能处于半恢复状态，请登录检查"
 # step: rollback-restore
 set -euo pipefail
-REMOTE="$1"; ARCHIVE="$2/$3"
+REMOTE="$1"; ARCHIVE="$2/$3"; WITH_CONFIG="$4"
 [ -f "$ARCHIVE" ] || { echo "✗ 备份不存在：$ARCHIVE"; exit 1; }
-tar xzf "$ARCHIVE" -C "$REMOTE"
-echo "  已解包 $3 → ${REMOTE}（data/ logs/ .venv/ 未动）"
+if [ "$WITH_CONFIG" = 1 ]; then
+  tar xzf "$ARCHIVE" -C "$REMOTE"
+  echo "  已解包 $3 → ${REMOTE}（含 .env 与 config/；data/ logs/ .venv/ 未动）"
+else
+  # Code only. The console rewrites .env and config/ (accounts.enc, settings.yaml)
+  # while the release is live, so restoring them would silently undo password and
+  # settings edits made since the backup — data loss, not a rollback. tar honours
+  # --exclude while extracting; archive entries carry relative names (".env",
+  # "config/settings.yaml"), and the "config/*" pattern is what skips the members
+  # under an excluded directory.
+  tar xzf "$ARCHIVE" -C "$REMOTE" \
+    --exclude='.env' --exclude='./.env' \
+    --exclude='.env.bak' --exclude='./.env.bak' \
+    --exclude='config' --exclude='./config' \
+    --exclude='config/*' --exclude='./config/*'
+  echo "  已解包 $3 → ${REMOTE}（只恢复代码：.env 与 config/ 保持现状；data/ logs/ .venv/ 未动）"
+fi
 if [ -f "$REMOTE/RELEASE" ]; then echo "  RELEASE: $(cat "$REMOTE/RELEASE")"; fi
 EOF
 
@@ -380,7 +457,11 @@ EOF
   step_smoke "$restored"
   step_restart
   step_health "回滚后的版本仍不健康：请登录服务器排查 journalctl"
-  ok "回滚完成：$target"
+  if [ "$WITH_CONFIG" = 1 ]; then
+    ok "回滚完成：${target}（代码 + .env + config/ 均已恢复到备份时刻）"
+  else
+    ok "回滚完成：${target}（只恢复了代码；.env 与 config/ 仍是服务器上的现状）"
+  fi
 }
 
 cmd_status() {

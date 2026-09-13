@@ -16,6 +16,7 @@ are never walked or copied.
 """
 
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -65,9 +66,57 @@ case " ${FAKE_SSH_EXEC_STEPS:-} " in
     exit $? ;;
 esac
 case "$step" in
-  list-backups) printf '%s\n' code-20260102-000000-bbbbbbb.tgz code-20260101-000000-aaaaaaa.tgz ;;
+  # Newest first. The older name predates the "-pre-" convention: `ls code-*.tgz`
+  # still finds it, so an archive made by an earlier deploy.sh stays rollable.
+  list-backups) printf '%s\n' code-20260102-000000-pre-bbbbbbb.tgz code-20260101-000000-aaaaaaa.tgz ;;
   pip-freeze)   printf '%s\n' "Python 3.12.3" "foo==1.0" "bar==2.0" ;;
 esac
+exit 0
+"""
+
+# The health step is the one remote step that needs more than tar/df/ls, so it
+# gets its own stand-ins on PATH: scripted HTTP codes, scripted service states,
+# and a no-op sleep so the "15 x 2s" retry loop costs nothing in a test.
+FAKE_CURL = r"""#!/bin/sh
+# Fake curl: log the whole argv (so --max-time can be asserted), then answer by
+# URL. The strict health URL walks FAKE_CURL_HEALTH_CODES, repeating the last
+# entry once the script runs out.
+printf '%s\n' "$*" >> "${FAKE_CURL_LOG:?}"
+url=""
+for a in "$@"; do url="$a"; done
+case "$url" in
+  *"/health?strict=1")
+    n=1
+    if [ -f "$FAKE_CURL_COUNT" ]; then n=$(($(cat "$FAKE_CURL_COUNT") + 1)); fi
+    printf '%s' "$n" > "$FAKE_CURL_COUNT"
+    set -- ${FAKE_CURL_HEALTH_CODES:-200}
+    while [ "$n" -gt 1 ] && [ $# -gt 1 ]; do shift; n=$((n - 1)); done
+    # Real curl prints nothing and exits non-zero when it cannot connect.
+    [ "$1" = "000" ] && exit 7
+    printf '%s' "$1" ;;
+  *"/login")  printf '%s' "${FAKE_CURL_LOGIN_CODE:-200}" ;;
+  *"/health") printf '%s\n' "${FAKE_CURL_HEALTH_BODY:-}" ;;
+esac
+exit 0
+"""
+
+FAKE_SYSTEMCTL = r"""#!/bin/sh
+# Fake systemctl: the health step only ever asks `is-active --quiet <service>`.
+svc=""
+for a in "$@"; do
+  case "$a" in -*|is-active) ;; *) svc="$a" ;; esac
+done
+case " ${FAKE_ACTIVE_SERVICES-zjip-web zjip-daemon} " in
+  *" $svc "*) exit 0 ;;
+esac
+exit 3
+"""
+
+FAKE_JOURNALCTL = r"""#!/bin/sh
+echo "JOURNALCTL $*"
+"""
+
+FAKE_SLEEP = r"""#!/bin/sh
 exit 0
 """
 
@@ -90,6 +139,7 @@ MINI_REPO_FILES = {
     "config/settings.yaml": "secret: 1\n",
     "config/accounts.enc": "SECRET",
     "miniprogram/config.js": "SECRET",
+    "miniprogram/project.private.config.json": "{\"appid\": \"SECRET\"}",
     "deploy/deploy.env": "SERVER=secret@host\n",
     # runtime / caches — must be excluded
     "data/control/state.json": "{}",
@@ -107,8 +157,12 @@ REMOTE_SEED = {
     "web/app.py": "print('old web')\n",
     "stale_old.py": "old\n",
     ".env": "SERVER_SECRET\n",
+    # Written on the server only (save_accounts / .env edits keep one generation);
+    # the laptop never has them, so --delete must be taught to leave them alone.
+    ".env.bak": "SERVER_SECRET_OLD\n",
     "config/settings.yaml": "server: 1\n",
     "config/accounts.enc": "ENC",
+    "config/accounts.enc.bak": "ENC_OLD",
     "requirements.lock": "fastapi==0.0\n",
     "RELEASE": "0000000 main 2026-01-01T00:00:00Z oldhost\n",
     "data/snapshots/snap.json": "{}",
@@ -229,6 +283,36 @@ def harness(tmp_path):
                            tmp=tmp_path, env_file=env_file)
 
 
+def health_env(harness, health_codes=("200",), login_code="200", body="",
+               active=("zjip-web", "zjip-daemon")) -> dict:
+    """Env that makes the real `health` step run locally against scripted answers.
+
+    curl / systemctl / journalctl / sleep are shadowed on PATH; every other
+    remote step stays canned, so a deploy reaches the health check for free.
+    """
+    bindir = harness.tmp / "fakebin"
+    bindir.mkdir(exist_ok=True)
+    _write_exec(bindir / "curl", FAKE_CURL)
+    _write_exec(bindir / "systemctl", FAKE_SYSTEMCTL)
+    _write_exec(bindir / "journalctl", FAKE_JOURNALCTL)
+    _write_exec(bindir / "sleep", FAKE_SLEEP)
+    return {
+        "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
+        "FAKE_SSH_EXEC_STEPS": "health",
+        "FAKE_CURL_LOG": str(harness.tmp / "curl.log"),
+        "FAKE_CURL_COUNT": str(harness.tmp / "curl.count"),
+        "FAKE_CURL_HEALTH_CODES": " ".join(health_codes),
+        "FAKE_CURL_LOGIN_CODE": login_code,
+        "FAKE_CURL_HEALTH_BODY": body,
+        "FAKE_ACTIVE_SERVICES": " ".join(active),
+    }
+
+
+def curl_calls(harness) -> list:
+    log = harness.tmp / "curl.log"
+    return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+
+
 def _listed_paths(output: str) -> set:
     """Paths from an `rsync -n -v` listing (one per line, dirs end with '/')."""
     paths = set()
@@ -266,7 +350,7 @@ def test_help_lists_every_subcommand(harness):
     assert res.returncode == 0, res.stderr
     for name in ("deploy", "dry-run", "rollback", "status", "lock", "install-units"):
         assert name in res.stdout
-    for opt in ("--allow-dirty", "--skip-tests", "--yes", "DEPLOY_DELETE"):
+    for opt in ("--allow-dirty", "--skip-tests", "--yes", "--with-config", "DEPLOY_DELETE"):
         assert opt in res.stdout
     assert harness.steps() == []
 
@@ -357,7 +441,8 @@ def test_dry_run_lists_transfer_and_honours_excludes(harness):
         assert must in listed, f"{must} missing from transfer list:\n{res.stdout}"
 
     for never in (".env", "config/settings.yaml", "config/accounts.enc",
-                  "miniprogram/config.js", "deploy/deploy.env", "deploy.sh", ".git"):
+                  "miniprogram/config.js", "miniprogram/project.private.config.json",
+                  "deploy/deploy.env", "deploy.sh", ".git"):
         assert never not in listed, f"{never} must not be transferred"
     for prefix in ("data/", "logs/", ".venv/", ".pytest_cache/", ".claude/", ".git/"):
         assert not any(p.startswith(prefix) for p in listed), prefix
@@ -369,6 +454,7 @@ def test_dry_run_lists_transfer_and_honours_excludes(harness):
     # The plan of remote steps is spelled out for the operator.
     for word in ("预检", "备份", "RELEASE", "requirements.lock", "冒烟", "重启", "健康检查"):
         assert word in res.stdout
+    assert "-pre-" in res.stdout  # the backup naming is part of the plan
 
 
 def test_dry_run_on_real_repo_never_lists_secrets(harness):
@@ -423,9 +509,11 @@ def test_deploy_pipeline_runs_steps_in_order(harness):
     # --- backup really happened, holds code + .env + config/, not runtime dirs
     archives = sorted(harness.backups.glob("code-*.tgz"))
     assert len(archives) == 1
-    assert archives[0].name.endswith(f"-{sha[:7]}.tgz")
+    # The name says what is inside: the code from *before* this deploy's sha.
+    assert archives[0].name.endswith(f"-pre-{sha[:7]}.tgz"), archives[0].name
     names = _tar_names(archives[0])
-    for must in ("src/main.py", ".env", "config/settings.yaml", "config/accounts.enc",
+    for must in ("src/main.py", ".env", ".env.bak", "config/settings.yaml",
+                 "config/accounts.enc", "config/accounts.enc.bak",
                  "requirements.lock", "RELEASE", "stale_old.py"):
         assert must in names, (must, names)
     for never in ("data", "logs", ".venv", ".pytest_cache"):
@@ -442,8 +530,9 @@ def test_deploy_pipeline_runs_steps_in_order(harness):
     assert (harness.remote / "requirements.lock").read_text() == "fastapi==0.1\n"
     assert (harness.remote / "deploy" / "zjip-web.service").exists()
     assert (harness.remote / "stale_old.py").exists()  # no --delete by default
-    for untouched in (".env", "config/settings.yaml", "config/accounts.enc",
-                      "data/snapshots/snap.json", "logs/app.log", ".venv/lib/python3.12/site.py"):
+    for untouched in (".env", ".env.bak", "config/settings.yaml", "config/accounts.enc",
+                      "config/accounts.enc.bak", "data/snapshots/snap.json",
+                      "logs/app.log", ".venv/lib/python3.12/site.py"):
         assert (harness.remote / untouched).read_text() == REMOTE_SEED[untouched], untouched
     for never in ("deploy/deploy.env", "miniprogram/config.js", ".git", ".claude",
                   ".pytest_cache", "deploy.sh"):
@@ -465,8 +554,14 @@ def test_deploy_pipeline_runs_steps_in_order(harness):
     health = harness.script_of("health")
     for word in ("/health?strict=1", "/login", "journalctl", "zjip-web", "zjip-daemon"):
         assert word in health
+    # An unbounded curl would blow the advertised "15 x 2s" ceiling on a hung box.
+    curls = [ln for ln in health.splitlines() if "curl " in ln]
+    assert len(curls) >= 3
+    assert all("--max-time" in ln for ln in curls), curls
     assert "部署完成" in res.stdout
     assert "rollback" in res.stdout
+    # The operator is told which build the backup predates, not just its name.
+    assert "之前" in res.stdout
 
 
 def test_deploy_then_rollback_round_trip(harness):
@@ -504,6 +599,61 @@ def test_backups_are_trimmed_to_keep_backups(harness):
     names = sorted(p.name for p in harness.backups.glob("code-*.tgz"))
     assert len(names) == 2, names  # KEEP_BACKUPS=2 in the harness env file
     assert "已清理旧备份" in res.stdout
+
+
+def test_keep_backups_one_keeps_the_backup_just_taken(harness):
+    """The lower bound of the trim: `sort -r | tail -n +2` must spare row one."""
+    harness.env_file.write_text(
+        f"SERVER=fake@localhost\nREMOTE={harness.remote}\n"
+        f"BACKUP_DIR={harness.backups}\nKEEP_BACKUPS=1\n", encoding="utf-8")
+    repo = make_mini_repo(harness.tmp / "repo")
+    seed_remote(harness.remote)
+    res = harness.run("deploy", "--skip-tests", script=repo / "deploy.sh", real_steps=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert len(list(harness.backups.glob("code-*.tgz"))) == 1
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "abc", ""])
+def test_keep_backups_must_be_a_positive_integer(harness, value):
+    """KEEP=0 passed the old "non-negative" check and then made the trim delete
+    from row one of a newest-first listing — wiping the backup just taken, i.e.
+    the only way back from the deploy that created it."""
+    harness.env_file.write_text(f"KEEP_BACKUPS={value}\n", encoding="utf-8")
+    res = harness.run("help")
+    assert res.returncode != 0, res.stdout
+    assert "KEEP_BACKUPS" in res.stdout + res.stderr
+    assert harness.steps() == []
+
+
+def test_backup_dir_and_archive_are_owner_only(harness):
+    """The archive holds .env verbatim — FERNET_KEY, WEB_PASS, API_KEY."""
+    repo = make_mini_repo(harness.tmp / "repo")
+    seed_remote(harness.remote)
+    res = harness.run("deploy", "--skip-tests", script=repo / "deploy.sh", real_steps=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert stat.S_IMODE(harness.backups.stat().st_mode) == 0o700
+    archive = sorted(harness.backups.glob("code-*.tgz"))[0]
+    assert stat.S_IMODE(archive.stat().st_mode) == 0o600
+    assert ".env" in _tar_names(archive)  # still backed up, just not world-readable
+
+
+def test_backup_name_marks_it_as_pre_deploy(harness):
+    """`-pre-<sha>` reads as "the code from before <sha>". A bare `-<sha>` reads
+    as "this archive is <sha>" and invites rolling back into the build that is
+    being replaced — the opposite of what the archive contains."""
+    repo = make_mini_repo(harness.tmp / "repo")
+    sha = _git(repo, "rev-parse", "--short", "HEAD")
+    seed_remote(harness.remote)
+    res = harness.run("deploy", "--skip-tests", script=repo / "deploy.sh", real_steps=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+    name = sorted(harness.backups.glob("code-*.tgz"))[0].name
+    assert re.match(r"^code-\d{8}-\d{6}-pre-%s\.tgz$" % re.escape(sha), name), name
+    assert f"部署 {sha} 之前" in res.stdout
+    assert f"rollback {name}" in res.stdout
+    # and the archive really is the pre-deploy code, not the new one
+    with tarfile.open(sorted(harness.backups.glob("code-*.tgz"))[0]) as tf:
+        member = [m for m in tf.getmembers() if _tar_name(m.name) == "src/main.py"][0]
+        assert tf.extractfile(member).read() == b"print('old')\n"
 
 
 def test_deploy_stops_when_preflight_fails(harness):
@@ -546,6 +696,114 @@ def test_deploy_health_failure_points_at_rollback(harness):
     assert "rollback" in res.stdout + res.stderr
 
 
+# ---------------------------------------------------------------------------
+# health check: healthy / degraded / broken are three different outcomes
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("code", ["404", "302", "401", "403"])
+def test_health_without_health_route_falls_back_to_login(harness, code):
+    """A build with no /health route answers the probe in several ways: a plain
+    404, or 302/401/403 when the auth middleware intercepts the unknown path
+    before routing sees it (which is what the current web/app.py does). All of
+    them mean "old build", not "broken deploy" — /login answering settles it."""
+    repo = make_mini_repo(harness.tmp / "repo")
+    res = harness.run("deploy", "--skip-tests", script=repo / "deploy.sh",
+                      env=health_env(harness, health_codes=(code,), login_code="200"))
+    assert res.returncode == 0, res.stdout + res.stderr
+    out = res.stdout + res.stderr
+    assert code in out and "/login" in out
+    assert "部署完成" in out
+    assert "JOURNALCTL" not in out  # nothing was treated as a failure
+    # one probe each: the fallback settles it, no 15-round retry loop
+    assert len(curl_calls(harness)) == 2
+
+
+def test_health_falls_back_only_while_login_answers(harness):
+    repo = make_mini_repo(harness.tmp / "repo")
+    res = harness.run("deploy", "--skip-tests", script=repo / "deploy.sh",
+                      env=health_env(harness, health_codes=("302",), login_code="500"))
+    assert res.returncode != 0
+    out = res.stdout + res.stderr
+    assert "JOURNALCTL -u zjip-web" in out and "JOURNALCTL -u zjip-daemon" in out
+    assert "rollback" in out
+    # 15 rounds, each pairing a /health probe with a /login probe
+    assert len([c for c in curl_calls(harness) if "strict=1" in c]) == 15
+
+
+def test_health_503_is_a_warning_not_a_failed_deploy(harness):
+    """503 means the new code is up and rates its own business state degraded
+    (a wrong account password, say). A rollback cannot fix that and would only
+    take a working release away, so the deploy stands — loudly."""
+    repo = make_mini_repo(harness.tmp / "repo")
+    body = '{"status": "degraded", "accounts": [{"name": "a1", "ok": false}]}'
+    res = harness.run("deploy", "--skip-tests", script=repo / "deploy.sh",
+                      env=health_env(harness, health_codes=("503",), body=body))
+    assert res.returncode == 0, res.stdout + res.stderr
+    out = res.stdout + res.stderr
+    assert "服务已启动，但系统自评为 degraded，请到控制台查看" in out
+    assert body in out  # the whole /health JSON, not just the status code
+    assert "部署完成" in out
+    assert "JOURNALCTL" not in out
+    # 503 is conclusive: no point burning 15 retries on it
+    assert len([c for c in curl_calls(harness) if "strict=1" in c]) == 1
+
+
+def test_health_503_still_fails_when_a_service_is_down(harness):
+    repo = make_mini_repo(harness.tmp / "repo")
+    res = harness.run("deploy", "--skip-tests", script=repo / "deploy.sh",
+                      env=health_env(harness, health_codes=("503",), active=("zjip-web",)))
+    assert res.returncode != 0
+    out = res.stdout + res.stderr
+    assert "zjip-daemon 未运行" in out
+    assert "JOURNALCTL" in out
+    assert "rollback" in out
+
+
+@pytest.mark.parametrize("code", ["500", "502"])
+def test_health_non_503_server_error_is_a_failure(harness, code):
+    repo = make_mini_repo(harness.tmp / "repo")
+    res = harness.run("deploy", "--skip-tests", script=repo / "deploy.sh",
+                      env=health_env(harness, health_codes=(code,)))
+    assert res.returncode != 0
+    out = res.stdout + res.stderr
+    assert code in out
+    assert "JOURNALCTL" in out
+    assert "rollback" in out
+
+
+def test_health_unreachable_is_a_failure(harness):
+    repo = make_mini_repo(harness.tmp / "repo")
+    res = harness.run("deploy", "--skip-tests", script=repo / "deploy.sh",
+                      env=health_env(harness, health_codes=("000",)))
+    assert res.returncode != 0
+    out = res.stdout + res.stderr
+    assert "000" in out
+    assert "JOURNALCTL" in out
+    assert "rollback" in out
+
+
+def test_health_retries_until_the_service_comes_up(harness):
+    repo = make_mini_repo(harness.tmp / "repo")
+    res = harness.run("deploy", "--skip-tests", script=repo / "deploy.sh",
+                      env=health_env(harness, health_codes=("000", "000", "200")))
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "第 3 次" in res.stdout
+    assert len([c for c in curl_calls(harness) if "strict=1" in c]) == 3
+
+
+def test_health_curls_are_bounded_by_max_time(harness):
+    """Without --max-time, "15 x 2s" holds only while the server answers; a box
+    that accepts the connection and then hangs stalls the deploy indefinitely."""
+    repo = make_mini_repo(harness.tmp / "repo")
+    # 403 + a dead /login exercises all three call sites: probe, fallback, JSON dump
+    res = harness.run("deploy", "--skip-tests", script=repo / "deploy.sh",
+                      env=health_env(harness, health_codes=("403",), login_code="404"))
+    assert res.returncode != 0
+    calls = curl_calls(harness)
+    assert len(calls) == 15 * 2 + 1, calls
+    assert all("--max-time 5" in c for c in calls), calls
+
+
 def test_deploy_delete_previews_and_requires_yes(harness):
     repo = make_mini_repo(harness.tmp / "repo")
     seed_remote(harness.remote)
@@ -566,9 +824,13 @@ def test_deploy_delete_previews_and_requires_yes(harness):
     assert res.returncode == 0, res.stdout + res.stderr
     assert not (harness.remote / "stale_old.py").exists()
     assert (harness.remote / "src" / "main.py").read_text() == "print('new')\n"
-    for untouched in (".env", "config/settings.yaml", "config/accounts.enc", "RELEASE",
-                      "data/snapshots/snap.json", "logs/app.log", ".venv/lib/python3.12/site.py"):
+    for untouched in (".env", ".env.bak", "config/settings.yaml", "config/accounts.enc",
+                      "config/accounts.enc.bak", "RELEASE", "data/snapshots/snap.json",
+                      "logs/app.log", ".venv/lib/python3.12/site.py"):
         assert (harness.remote / untouched).read_text() == REMOTE_SEED[untouched], untouched
+    # The server-only recovery copies are never even proposed for deletion.
+    assert "deleting .env.bak" not in res.stdout
+    assert "accounts.enc.bak" not in res.stdout
     rsync_lines = [ln for ln in harness.scripts().splitlines() if ln.startswith("RSYNC ")]
     assert len(rsync_lines) == 2  # preview + real
     assert all("--delete" in ln for ln in rsync_lines)
@@ -591,7 +853,7 @@ def test_rollback_defaults_to_latest_and_needs_confirmation(harness):
     repo = make_mini_repo(harness.tmp / "repo")
     res = harness.run("rollback", script=repo / "deploy.sh", stdin="")
     assert res.returncode != 0
-    assert "code-20260102-000000-bbbbbbb.tgz" in res.stdout
+    assert "code-20260102-000000-pre-bbbbbbb.tgz" in res.stdout
     assert harness.steps() == ["list-backups"]
 
     harness.reset_log()
@@ -600,12 +862,13 @@ def test_rollback_defaults_to_latest_and_needs_confirmation(harness):
     assert harness.steps() == ["list-backups", "rollback-restore", "pip-install",
                                "smoke", "restart", "health"]
     restore = harness.script_of("rollback-restore")
-    assert "code-20260102-000000-bbbbbbb.tgz" in restore
+    assert "code-20260102-000000-pre-bbbbbbb.tgz" in restore
     assert "code-20260101" not in restore
 
 
 def test_rollback_accepts_explicit_backup_and_rejects_unknown(harness):
     repo = make_mini_repo(harness.tmp / "repo")
+    # Also proves an archive named by an older deploy.sh is still selectable.
     res = harness.run("rollback", "code-20260101-000000-aaaaaaa.tgz", "--yes",
                       script=repo / "deploy.sh")
     assert res.returncode == 0, res.stdout + res.stderr
@@ -615,7 +878,70 @@ def test_rollback_accepts_explicit_backup_and_rejects_unknown(harness):
     res = harness.run("rollback", "code-nope.tgz", "--yes", script=repo / "deploy.sh")
     assert res.returncode != 0
     assert harness.steps() == ["list-backups"]
-    assert "code-20260102-000000-bbbbbbb.tgz" in res.stdout + res.stderr
+    assert "code-20260102-000000-pre-bbbbbbb.tgz" in res.stdout + res.stderr
+
+
+def test_rollback_keeps_live_env_and_config_by_default(harness):
+    """Code rolls back; secrets and settings do not. The console rewrites .env
+    and config/accounts.enc while a release is live, so restoring the backup's
+    copies would silently undo account-password and settings edits made since —
+    data loss dressed up as a rollback."""
+    repo = make_mini_repo(harness.tmp / "repo")
+    seed_remote(harness.remote)
+    res = harness.run("deploy", "--skip-tests", script=repo / "deploy.sh", real_steps=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+
+    # after the deploy, an operator fixes an account password in the console
+    (harness.remote / ".env").write_text("SERVER_SECRET_ROTATED\n")
+    (harness.remote / ".env.bak").write_text("SERVER_SECRET\n")
+    (harness.remote / "config" / "accounts.enc").write_text("ENC_NEW_PASSWORD")
+    (harness.remote / "config" / "accounts.enc.bak").write_text("ENC")
+    (harness.remote / "config" / "settings.yaml").write_text("server: 2\n")
+
+    harness.reset_log()
+    res = harness.run("rollback", "--yes", script=repo / "deploy.sh", real_steps=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+    # code and RELEASE went back ...
+    assert (harness.remote / "src" / "main.py").read_text() == "print('old')\n"
+    assert (harness.remote / "requirements.lock").read_text() == "fastapi==0.0\n"
+    assert (harness.remote / "RELEASE").read_text() == REMOTE_SEED["RELEASE"]
+    # ... secrets and settings stayed exactly as the console left them
+    assert (harness.remote / ".env").read_text() == "SERVER_SECRET_ROTATED\n"
+    assert (harness.remote / ".env.bak").read_text() == "SERVER_SECRET\n"
+    assert (harness.remote / "config" / "accounts.enc").read_text() == "ENC_NEW_PASSWORD"
+    assert (harness.remote / "config" / "accounts.enc.bak").read_text() == "ENC"
+    assert (harness.remote / "config" / "settings.yaml").read_text() == "server: 2\n"
+    # the operator is told both what was skipped and how to ask for it
+    assert "--with-config" in res.stdout + res.stderr
+
+
+def test_rollback_with_config_restores_env_and_config(harness):
+    """The disaster-recovery variant: everything goes back, and the prompt says
+    so before anything is unpacked."""
+    repo = make_mini_repo(harness.tmp / "repo")
+    seed_remote(harness.remote)
+    res = harness.run("deploy", "--skip-tests", script=repo / "deploy.sh", real_steps=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+    (harness.remote / ".env").write_text("SERVER_SECRET_ROTATED\n")
+    (harness.remote / "config" / "accounts.enc").write_text("ENC_NEW_PASSWORD")
+
+    harness.reset_log()
+    res = harness.run("rollback", "--with-config", "--yes",
+                      script=repo / "deploy.sh", real_steps=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert (harness.remote / "src" / "main.py").read_text() == "print('old')\n"
+    assert (harness.remote / ".env").read_text() == REMOTE_SEED[".env"]
+    assert (harness.remote / "config" / "accounts.enc").read_text() == REMOTE_SEED["config/accounts.enc"]
+    assert (harness.remote / "config" / "settings.yaml").read_text() == REMOTE_SEED["config/settings.yaml"]
+    assert "丢失" in res.stdout + res.stderr  # the warning names the cost
+
+
+def test_rollback_listing_explains_the_pre_sha_naming(harness):
+    repo = make_mini_repo(harness.tmp / "repo")
+    res = harness.run("rollback", "--yes", script=repo / "deploy.sh")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "pre-<sha>" in res.stdout
+    assert "之前" in res.stdout
 
 
 def test_rollback_with_no_backups_aborts(harness):
