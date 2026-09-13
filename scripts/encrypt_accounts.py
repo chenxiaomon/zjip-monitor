@@ -114,8 +114,11 @@ def _as_text(value: object, where: str) -> str:
     # leading-zero one into octal!). Refuse instead of str()-ing it so the
     # operator fixes the source file rather than encrypting a mangled value.
     if not isinstance(value, str):
+        kind = type(value).__name__
         raise ConfigError(
-            f"{where} 不是字符串（YAML 把未加引号的纯数字解析成了数字）——请给该值加上引号后重跑"
+            f"{where} 不是字符串，而是 {kind}（{value!r}）——YAML 会把未加引号的 "
+            "12345 / true / 2026-01-01 解析成数字、布尔或日期，"
+            "请给该值加上引号后重跑"
         )
     return value
 
