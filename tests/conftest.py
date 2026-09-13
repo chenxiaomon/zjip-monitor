@@ -32,20 +32,36 @@ GROUP_B_USER = ("gb", "test-gb-pass")
 API_KEY = "test-api-key-0123456789"
 
 
+@pytest.fixture
+def _own_patcher():
+    """A MonkeyPatch instance the test under way cannot revert.
+
+    The `monkeypatch` fixture is one object shared by the test function and
+    every fixture that asks for it, so a test calling `monkeypatch.undo()`
+    (to simulate "the disk is fine again", say) also undid the path
+    redirections that keep the suite off the real data/ directory — and the
+    rest of that test then wrote data/control/state.json and run.lock for
+    real. Isolation fixtures patch through their own instance instead.
+    """
+    patcher = pytest.MonkeyPatch()
+    yield patcher
+    patcher.undo()
+
+
 @pytest.fixture(autouse=True)
-def _isolated_status_store(tmp_path_factory, monkeypatch):
+def _isolated_status_store(tmp_path_factory, _own_patcher):
     """Redirect the durable account-status file for EVERY test: deep code
     paths (scan timeouts, login failures) write it as a side effect, and no
     test may leak into the real data/control/accounts_status.json."""
     path = tmp_path_factory.mktemp("status") / "accounts_status.json"
-    monkeypatch.setattr(status_store, "_STATUS_FILE", path)
+    _own_patcher.setattr(status_store, "_STATUS_FILE", path)
     status_store._read_cache = None
     yield
     status_store._read_cache = None
 
 
 @pytest.fixture(autouse=True)
-def _isolated_diskstat(tmp_path_factory, monkeypatch):
+def _isolated_diskstat(tmp_path_factory, _own_patcher):
     """Point the disk guard at an empty temp tree for EVERY test: every way
     out of run_all()/run_single() now prunes, which sweeps .part files under
     data/attachments and writes data/control/disk_stats.json as a side
@@ -55,34 +71,34 @@ def _isolated_diskstat(tmp_path_factory, monkeypatch):
 
     root = tmp_path_factory.mktemp("diskstat")
     data = root / "data"
-    monkeypatch.setattr(diskstat, "_ROOT", root)
-    monkeypatch.setattr(diskstat, "_DATA_DIR", data)
-    monkeypatch.setattr(diskstat, "_ATTACHMENTS_DIR", data / "attachments")
-    monkeypatch.setattr(diskstat, "_SNAPSHOTS_DIR", data / "snapshots")
-    monkeypatch.setattr(diskstat, "_REPORTS_DIR", data / "reports")
-    monkeypatch.setattr(diskstat, "_EVENTS_FILE", data / "events.jsonl")
-    monkeypatch.setattr(diskstat, "_LOGS_DIR", root / "logs")
-    monkeypatch.setattr(diskstat, "_STATS_FILE", data / "control" / "disk_stats.json")
-    monkeypatch.setattr(src_main, "_ATTACHMENTS_DIR", data / "attachments")
+    _own_patcher.setattr(diskstat, "_ROOT", root)
+    _own_patcher.setattr(diskstat, "_DATA_DIR", data)
+    _own_patcher.setattr(diskstat, "_ATTACHMENTS_DIR", data / "attachments")
+    _own_patcher.setattr(diskstat, "_SNAPSHOTS_DIR", data / "snapshots")
+    _own_patcher.setattr(diskstat, "_REPORTS_DIR", data / "reports")
+    _own_patcher.setattr(diskstat, "_EVENTS_FILE", data / "events.jsonl")
+    _own_patcher.setattr(diskstat, "_LOGS_DIR", root / "logs")
+    _own_patcher.setattr(diskstat, "_STATS_FILE", data / "control" / "disk_stats.json")
+    _own_patcher.setattr(src_main, "_ATTACHMENTS_DIR", data / "attachments")
     diskstat._read_cache = None
     yield
     diskstat._read_cache = None
 
 
 @pytest.fixture(autouse=True)
-def _isolated_ops_alerts(tmp_path_factory, monkeypatch):
+def _isolated_ops_alerts(tmp_path_factory, _own_patcher):
     """Redirect the ops-banner bookkeeping file for EVERY test: any call to
     ops_alerts.refresh_and_log() (the daemon job, the alert tests) writes it,
     and a leftover activation would silence the very next run's log lines."""
     from src import ops_alerts
 
     path = tmp_path_factory.mktemp("ops_alerts") / "ops_alerts.json"
-    monkeypatch.setattr(ops_alerts, "_STATE_FILE", path)
+    _own_patcher.setattr(ops_alerts, "_STATE_FILE", path)
     yield path
 
 
 @pytest.fixture(autouse=True)
-def _isolated_settings_file(tmp_path_factory, monkeypatch):
+def _isolated_settings_file(tmp_path_factory, _own_patcher):
     """No test may read — or write — the developer's real config/settings.yaml.
 
     Everything tunable now flows through settings_cache (runtime_settings,
@@ -95,8 +111,8 @@ def _isolated_settings_file(tmp_path_factory, monkeypatch):
     from web.services import settings_svc
 
     path = tmp_path_factory.mktemp("settings") / "settings.yaml"  # never created
-    monkeypatch.setattr(settings_cache, "_SETTINGS_FILE", path)
-    monkeypatch.setattr(settings_svc, "_SETTINGS", path)
+    _own_patcher.setattr(settings_cache, "_SETTINGS_FILE", path)
+    _own_patcher.setattr(settings_svc, "_SETTINGS", path)
     settings_cache._cache = None
     yield
     settings_cache._cache = None
@@ -117,13 +133,13 @@ def _reset_login_guard():
 
 
 @pytest.fixture
-def isolated_control_dir(tmp_path, monkeypatch):
+def isolated_control_dir(tmp_path, _own_patcher):
     """Point all control files at a temp dir so tests never touch data/."""
-    monkeypatch.setattr(control, "_CONTROL_DIR", tmp_path)
-    monkeypatch.setattr(control, "_LOCK_FILE", tmp_path / "run.lock")
-    monkeypatch.setattr(control, "_STATE_FILE", tmp_path / "state.json")
-    monkeypatch.setattr(control, "_STOP_FLAG", tmp_path / "stop.flag")
-    monkeypatch.setattr(control, "_PAUSE_FLAG", tmp_path / "pause.flag")
+    _own_patcher.setattr(control, "_CONTROL_DIR", tmp_path)
+    _own_patcher.setattr(control, "_LOCK_FILE", tmp_path / "run.lock")
+    _own_patcher.setattr(control, "_STATE_FILE", tmp_path / "state.json")
+    _own_patcher.setattr(control, "_STOP_FLAG", tmp_path / "stop.flag")
+    _own_patcher.setattr(control, "_PAUSE_FLAG", tmp_path / "pause.flag")
     control._local_stop.clear()
     yield tmp_path
     control._local_stop.clear()
@@ -190,7 +206,7 @@ def fake_accounts(monkeypatch):
 
 
 @pytest.fixture
-def isolated_settings(tmp_path, monkeypatch):
+def isolated_settings(tmp_path, _own_patcher):
     """A writable temp settings.yaml wired into both the reader and the writer.
 
     Returns a namespace with `.path`, `.write(dict)` and `.read()`.
@@ -198,8 +214,8 @@ def isolated_settings(tmp_path, monkeypatch):
     from web.services import settings_svc
 
     path = tmp_path / "settings.yaml"
-    monkeypatch.setattr(settings_cache, "_SETTINGS_FILE", path)
-    monkeypatch.setattr(settings_svc, "_SETTINGS", path)
+    _own_patcher.setattr(settings_cache, "_SETTINGS_FILE", path)
+    _own_patcher.setattr(settings_svc, "_SETTINGS", path)
 
     def write(data: dict):
         path.write_text(
@@ -230,15 +246,15 @@ def isolated_settings(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def isolated_snapshots(tmp_path, monkeypatch):
+def isolated_snapshots(tmp_path, _own_patcher):
     """Temp snapshot dir shared by the web reader and src.main's writer."""
     from src import main as src_main
     from web.services import snapshot as snap_svc
 
     d = tmp_path / "snapshots"
     d.mkdir()
-    monkeypatch.setattr(snap_svc, "_SNAPSHOTS_DIR", d)
-    monkeypatch.setattr(src_main, "_SNAPSHOTS_DIR", d)
+    _own_patcher.setattr(snap_svc, "_SNAPSHOTS_DIR", d)
+    _own_patcher.setattr(src_main, "_SNAPSHOTS_DIR", d)
     snap_svc._cache.clear()
 
     def write(company: str, records: list[dict], *, ts: str = "2026-01-01-0900", fetch=None):

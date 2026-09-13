@@ -243,3 +243,22 @@ def test_acquire_releases_the_lock_if_the_opening_state_write_fails(monkeypatch)
     ctx = control.try_acquire(kind="run_all", trigger="test")
     assert ctx is not None, "lock was not released"
     ctx.finish("done")
+
+
+def test_a_tests_monkeypatch_undo_cannot_revert_the_isolation(monkeypatch, tmp_path):
+    """`monkeypatch.undo()` inside a test used to also revert the fixture that
+    keeps control files in a temp dir — two tests below do exactly that, and
+    everything they did afterwards landed in the repository's real
+    data/control/ (state.json plus a run.lock)."""
+    isolated = control._CONTROL_DIR
+
+    monkeypatch.setattr(control, "_write_state", lambda state: None)
+    monkeypatch.undo()
+
+    assert control._CONTROL_DIR == isolated
+    assert control._STATE_FILE.parent == isolated
+
+    ctx = control.try_acquire(kind="run_all", trigger="test")
+    assert ctx is not None
+    ctx.finish("done")
+    assert (isolated / "state.json").exists()
