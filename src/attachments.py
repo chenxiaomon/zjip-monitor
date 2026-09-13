@@ -29,6 +29,7 @@ from loguru import logger
 
 from .exceptions import TokenExpiredError
 from .fsutil import atomic_write_text
+from .runtime_settings import attachment_settings
 from .scraper import _build_session, _load_settings, int_or_none
 
 if TYPE_CHECKING:
@@ -47,10 +48,6 @@ CERT_STATUSES = {7, 13}
 
 _MANIFEST_NAME = ".sync.json"
 
-# Notices and certificates are small PDFs; anything of this size is a bug or
-# a hostile URL, and the partition it writes to has run at 96% full.
-_MAX_FILE_BYTES = 50 * 1024 * 1024
-
 
 def _safe_name(name: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
@@ -66,7 +63,7 @@ def _url_ext(url: str) -> str:
 
 
 def _download_file(
-    url: str, dest: Path, timeout: int = 60, max_bytes: int = _MAX_FILE_BYTES
+    url: str, dest: Path, timeout: float | None = None, max_bytes: int | None = None
 ) -> bool:
     """Download a (typically OSS) file URL to dest. Plain request — the file
     URLs are pre-signed; never send our platform token to a third-party host.
@@ -74,8 +71,15 @@ def _download_file(
     Guarantees no `.part` file survives a failure (a mid-stream disconnect used
     to leave one behind with nothing to clean it up), and refuses a body larger
     than *max_bytes* — these are notice/certificate PDFs, and the disk they
-    land on has been as full as 96%.
+    land on has been as full as 96%. Both limits default to settings.yaml →
+    attachments.download_timeout_seconds / max_file_mb.
     """
+    if timeout is None or max_bytes is None:
+        cfg = attachment_settings()
+        if timeout is None:
+            timeout = cfg.download_timeout_seconds
+        if max_bytes is None:
+            max_bytes = cfg.max_file_bytes
     tmp: Path | None = None
     try:
         resp = requests.get(url, timeout=timeout, stream=True)
@@ -139,7 +143,7 @@ def _fetch_notifications(session: requests.Session, base_url: str, reg_no: str) 
     resp = session.get(
         f"{base_url}/v1/datareg/getNotification",
         params={"dataRegNo": reg_no},
-        timeout=30,
+        timeout=attachment_settings().request_timeout_seconds,
     )
     data = _api_data(resp, f"getNotification[{reg_no}]")
     if not isinstance(data, list):
@@ -158,7 +162,7 @@ def _fetch_certificates(session: requests.Session, base_url: str, reg_no: str) -
         f"{base_url}/v1/datareg/confirmation",
         params={"dataRegNo": reg_no},
         json={},
-        timeout=30,
+        timeout=attachment_settings().request_timeout_seconds,
     )
     data = _api_data(resp, f"confirmation[{reg_no}]")
     if not isinstance(data, dict):
@@ -209,6 +213,7 @@ def sync_attachments(
     certificates_enabled = att_cfg.get("certificates_enabled", True)
     if base_url is None:
         base_url = settings.get("base_url", "https://www.zjip.org.cn")
+    crawl_delay = attachment_settings().crawl_delay_seconds
 
     session = _build_session(token)
     downloaded: list[Path] = []
@@ -270,9 +275,9 @@ def sync_attachments(
                     ),
                 )
             if cancel:
-                cancel.wait(0.5)  # polite crawl delay, cancellable
+                cancel.wait(crawl_delay)  # polite crawl delay, cancellable
             else:
-                time.sleep(0.5)
+                time.sleep(crawl_delay)
     finally:
         session.close()
 

@@ -17,7 +17,9 @@ def _fake_accounts(n=3):
 
 
 @pytest.fixture(autouse=True)
-def _setup(isolated_control_dir, monkeypatch):
+def _setup(isolated_control_dir, isolated_settings, monkeypatch):
+    # isolated_settings: run.* (threshold, workers, timeout) come from the
+    # temp settings.yaml, never from a developer's real config.
     monkeypatch.setattr(main, "load_accounts", lambda: _fake_accounts(3))
     monkeypatch.setattr(main.random, "uniform", lambda a, b: 0.05)
     yield
@@ -87,10 +89,11 @@ def test_run_single_skips_when_lock_held():
     ctx.finish("done")
 
 
-def test_concurrent_path_abandons_stuck_account(monkeypatch):
+def test_concurrent_path_abandons_stuck_account(monkeypatch, isolated_settings):
     """One account that never returns must not block the whole run (2026-09-04 incident)."""
     monkeypatch.setattr(main, "load_accounts", lambda: _fake_accounts(12))  # >10 → concurrent
-    monkeypatch.setattr(main, "ACCOUNT_HARD_TIMEOUT_SECONDS", 0.3)
+    # The per-account ceiling is settings.yaml → run.account_timeout_seconds.
+    isolated_settings.write({"run": {"account_timeout_seconds": 0.3}})
     monkeypatch.setattr(main, "generate_report", lambda *a, **k: None)
     monkeypatch.setattr(main, "notify_batch", lambda *a, **k: None)
     monkeypatch.setattr(main, "_prune_data", lambda: None)

@@ -1,6 +1,8 @@
 """Main orchestration: iterate all accounts, fetch, diff, notify, report.
 
-Serial for ≤10 accounts; asyncio + thread pool (max 3) for >10.
+Serial for up to settings.yaml → run.serial_max_accounts accounts (default
+10); asyncio + a thread pool of run.max_workers (default 3) beyond that.
+Delays, timeouts and retention limits live in src/runtime_settings.py.
 
 All entry points (web console, daemon, CLI) serialize through the global
 run lock in src/control.py; a CancelToken threads checkpoints through the
@@ -40,6 +42,7 @@ from .exceptions import (
 from .login import forget_cached_token, get_token, has_valid_cached_token
 from .notifier import notify, notify_batch, notify_login_failure
 from .reporter import generate_report
+from .runtime_settings import retention_settings, run_settings
 from .scraper import FetchResult, decode_status, fetch_all_records
 
 _ROOT = Path(__file__).parent.parent
@@ -50,30 +53,20 @@ _EVENTS_FILE = _ROOT / "data" / "events.jsonl"
 # data/control/force_save/{safe_username}.flag to accept the next shrunk fetch.
 _FORCE_SAVE_DIR = _ROOT / "data" / "control" / "force_save"
 
-# Guards concurrent appends from the >10-account thread-pool path
+# Guards concurrent appends from the thread-pool (concurrent) path
 _EVENTS_LOCK = threading.Lock()
 
-# Retention limits applied by _prune_data() at the end of each full run
-_SNAPSHOTS_KEEP_PER_COMPANY = 30
-_REPORTS_KEEP_DAYS = 60
-_EVENTS_ROTATE_BYTES = 5 * 1024 * 1024
-# Rotated events-*.jsonl had no retention at all: 5 MB blocks accumulated
-# forever on a root partition that has been as full as 96%.
-_EVENTS_ROTATED_KEEP = 6
 # Snapshot stems end with "_YYYY-MM-DD-HHMM" (16 chars incl. underscore)
 _SNAPSHOT_TS_SUFFIX_LEN = 16
 _SNAPSHOT_TS_RE = re.compile(r"^_\d{4}-\d{2}-\d{2}-\d{4}$")
 
-# Wall-clock ceiling per account in the concurrent (>10 accounts) path.
-# Login (≤120s, see login.LOGIN_HARD_TIMEOUT_SECONDS) + paging + attachments
-# normally finish in well under 2 minutes; 10 minutes is the "something is
-# wedged" line. Second line of defence behind the login watchdog: guarantees
-# run_all() always reaches ctx.finish() and releases the global run lock.
-ACCOUNT_HARD_TIMEOUT_SECONDS = 600
-
 
 def _prune_data() -> None:
-    """Bounded data growth: old snapshots/reports removed, big event log rotated."""
+    """Bounded data growth: old snapshots/reports removed, big event log rotated.
+
+    Limits come from settings.yaml → retention.* (see runtime_settings).
+    """
+    keep = retention_settings()
     try:
         if _SNAPSHOTS_DIR.exists():
             groups: dict[str, list[Path]] = {}
@@ -82,24 +75,24 @@ def _prune_data() -> None:
                 key = stem[:-_SNAPSHOT_TS_SUFFIX_LEN] if len(stem) > _SNAPSHOT_TS_SUFFIX_LEN else stem
                 groups.setdefault(key, []).append(f)
             for files in groups.values():
-                for old in files[:-_SNAPSHOTS_KEEP_PER_COMPANY]:
+                for old in files[:-keep.snapshots_keep_per_company]:
                     old.unlink(missing_ok=True)
 
         if _REPORTS_DIR.exists():
-            cutoff = time.time() - _REPORTS_KEEP_DAYS * 86400
+            cutoff = time.time() - keep.reports_keep_days * 86400
             for f in _REPORTS_DIR.glob("*.html"):
                 if f.stat().st_mtime < cutoff:
                     f.unlink(missing_ok=True)
 
         with _EVENTS_LOCK:
-            if _EVENTS_FILE.exists() and _EVENTS_FILE.stat().st_size > _EVENTS_ROTATE_BYTES:
+            if _EVENTS_FILE.exists() and _EVENTS_FILE.stat().st_size > keep.events_rotate_bytes:
                 ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
                 rotated = _EVENTS_FILE.with_name(f"events-{ts}.jsonl")
                 _EVENTS_FILE.rename(rotated)
                 logger.info(f"events.jsonl rotated → {rotated.name}")
             # Names carry a zero-padded UTC stamp, so sorted() is chronological.
             old_rotations = sorted(_EVENTS_FILE.parent.glob("events-*.jsonl"))
-            for stale in old_rotations[:-_EVENTS_ROTATED_KEEP]:
+            for stale in old_rotations[:-keep.events_rotated_keep]:
                 stale.unlink(missing_ok=True)
                 logger.info(f"Pruned rotated event log {stale.name}")
     except Exception as exc:
@@ -559,6 +552,7 @@ def _run_serial(
     force_login: bool = False,
 ) -> tuple[list[dict], bool]:
     """Returns (results, cancelled)."""
+    rs = run_settings()
     results: list[dict] = []
     try:
         for i, account in enumerate(accounts):
@@ -581,7 +575,7 @@ def _run_serial(
                     ok=False, error=f"{type(exc).__name__}: {exc}", kind="error",
                 )
             if i < len(accounts) - 1:
-                delay = random.uniform(2.0, 5.0)
+                delay = random.uniform(rs.account_delay_min_seconds, rs.account_delay_max_seconds)
                 logger.debug(f"Sleeping {delay:.1f}s before next account…")
                 if cancel:
                     cancel.wait(delay)
@@ -598,16 +592,24 @@ async def _run_concurrent(
     cancel: CancelToken | None = None,
     *,
     force_login: bool = False,
-    max_workers: int = 3,
+    max_workers: int | None = None,
+    account_timeout: float | None = None,
 ) -> list[dict]:
     """Run accounts concurrently using a thread pool (sync Playwright is thread-safe).
 
-    Each account gets a hard wall-clock budget (ACCOUNT_HARD_TIMEOUT_SECONDS).
-    A worker thread that never returns is abandoned, not joined: the run must
-    still reach ctx.finish() and release the global lock. That is why a
-    private executor is used — asyncio.run() would join the default
-    executor's threads on shutdown and hang on the very thread we gave up on.
+    Each account gets a hard wall-clock budget (`account_timeout`, default
+    settings.yaml → run.account_timeout_seconds). A worker thread that never
+    returns is abandoned, not joined: the run must still reach ctx.finish()
+    and release the global lock. That is why a private executor is used —
+    asyncio.run() would join the default executor's threads on shutdown and
+    hang on the very thread we gave up on.
     """
+    rs = run_settings()
+    if max_workers is None:
+        max_workers = rs.max_workers
+    if account_timeout is None:
+        account_timeout = rs.account_timeout_seconds
+
     loop = asyncio.get_running_loop()
     executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="scan")
 
@@ -619,21 +621,17 @@ async def _run_concurrent(
             ),
         )
         try:
-            return await asyncio.wait_for(
-                asyncio.shield(fut), timeout=ACCOUNT_HARD_TIMEOUT_SECONDS
-            )
+            return await asyncio.wait_for(asyncio.shield(fut), timeout=account_timeout)
         except asyncio.TimeoutError:
             logger.error(
                 f"[{account.company}] Account scan exceeded "
-                f"{ACCOUNT_HARD_TIMEOUT_SECONDS}s — abandoning its worker thread"
+                f"{account_timeout:g}s — abandoning its worker thread"
             )
             status_store.record_scan(
                 account.username, account.company,
-                ok=False, error=f"超过 {ACCOUNT_HARD_TIMEOUT_SECONDS}s 未完成", kind="timeout",
+                ok=False, error=f"超过 {account_timeout:g}s 未完成", kind="timeout",
             )
-            return _error_result(
-                account, f"timeout: 超过 {ACCOUNT_HARD_TIMEOUT_SECONDS}s 未完成"
-            )
+            return _error_result(account, f"timeout: 超过 {account_timeout:g}s 未完成")
 
     try:
         raw = await asyncio.gather(*[_one(a) for a in accounts], return_exceptions=True)
@@ -654,7 +652,8 @@ async def _run_concurrent(
 
 
 def run_all(*, force_login: bool = False, trigger: str = "cli") -> dict[str, Any]:
-    """Process all accounts. Serial for ≤10; asyncio concurrent for >10.
+    """Process all accounts. Serial up to run.serial_max_accounts; asyncio
+    concurrent beyond that (both from settings.yaml, defaults 10 / 3 workers).
 
     Takes the global run lock; if another run (any process) holds it, returns
     immediately with skipped="already_running".
@@ -684,13 +683,21 @@ def run_all(*, force_login: bool = False, trigger: str = "cli") -> dict[str, Any
         return {"results": [], "report_path": None}
 
     run_time = datetime.now(timezone.utc)
+    rs = run_settings()
     try:
-        if len(accounts) <= 10:
+        if len(accounts) <= rs.serial_max_accounts:
             results, cancelled = _run_serial(accounts, ctx.cancel, force_login=force_login)
         else:
-            logger.info(f"{len(accounts)} accounts — using asyncio concurrency (max 3)")
+            logger.info(
+                f"{len(accounts)} accounts (> run.serial_max_accounts={rs.serial_max_accounts}) "
+                f"— using asyncio concurrency (max {rs.max_workers})"
+            )
             results = asyncio.run(
-                _run_concurrent(accounts, ctx.cancel, force_login=force_login)
+                _run_concurrent(
+                    accounts, ctx.cancel, force_login=force_login,
+                    max_workers=rs.max_workers,
+                    account_timeout=rs.account_timeout_seconds,
+                )
             )
             cancelled = ctx.cancel.should_stop()
     except Exception as exc:

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from src import status_store
+from src.runtime_settings import ops_alert_settings
 from src.scraper import AUDIT_STATUS
 from web.auth import allowed_usernames, visible_accounts
 from web.deps import STATUS_COLORS, account_dot, in_year, int_or_none, templates
@@ -18,11 +19,10 @@ router = APIRouter()
 
 _SHANGHAI_TZ = timezone(timedelta(hours=8))
 
-# A snapshot older than this is flagged 数据可能过期 on the account card.
-_STALE_AFTER_HOURS = 36
 
-
-def _is_stale(snapshot_time: str | None) -> bool:
+def _is_stale(snapshot_time: str | None, stale_hours: float) -> bool:
+    """A snapshot older than `stale_hours` (settings.yaml → ops_alerts.stale_hours)
+    is flagged 数据可能过期 on the account card."""
     if not snapshot_time:
         return False
     try:
@@ -31,7 +31,7 @@ def _is_stale(snapshot_time: str | None) -> bool:
             dt = dt.replace(tzinfo=timezone.utc)
     except (ValueError, TypeError):
         return False
-    return datetime.now(timezone.utc) - dt > timedelta(hours=_STALE_AFTER_HOURS)
+    return datetime.now(timezone.utc) - dt > timedelta(hours=stale_hours)
 
 
 def _filtered_events(request: Request, hours: int = 24, limit: int = 50) -> list[dict]:
@@ -45,6 +45,8 @@ def _filtered_events(request: Request, hours: int = 24, limit: int = 50) -> list
 def _dashboard_ctx(request: Request, year: int | None = None) -> dict:
     accounts = visible_accounts(request)
     all_status = status_store.get_all()
+    # Once per request: get_settings() is mtime-cached, so this is a stat().
+    stale_hours = ops_alert_settings().stale_hours
 
     account_snapshots = []
     login_alerts = []
@@ -85,7 +87,7 @@ def _dashboard_ctx(request: Request, year: int | None = None) -> dict:
             "scan_status": ss,
             "scan_failed": scan_failed,
             "scan_partial": scan_partial,
-            "stale": _is_stale(last_check),
+            "stale": _is_stale(last_check, stale_hours),
         })
 
     total_records = sum(s["total"] for s in account_snapshots)
@@ -102,6 +104,7 @@ def _dashboard_ctx(request: Request, year: int | None = None) -> dict:
         "login_alerts": login_alerts,
         "events": events,
         "filter_year": year,
+        "stale_hours": stale_hours,
         "STATUS_COLORS": STATUS_COLORS,
         "AUDIT_STATUS": AUDIT_STATUS,
     }
