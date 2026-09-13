@@ -91,6 +91,17 @@ def _copies(accounts: list[Account]) -> list[Account]:
     return [dataclasses.replace(a) for a in accounts]
 
 
+def _text(value: object) -> str:
+    """Coerce a decrypted field to str (None → "").
+
+    An accounts.enc written from an accounts.yaml whose digit-only password
+    was unquoted holds an int, and `contact:` with no value holds None. Every
+    consumer — login form fill, the console templates, decrypt_accounts'
+    masking — assumes str, so normalize once here instead of in each of them.
+    """
+    return "" if value is None else str(value)
+
+
 def load_accounts() -> list[Account]:
     """Load and decrypt all accounts from config/accounts.enc.
 
@@ -101,7 +112,12 @@ def load_accounts() -> list[Account]:
         ConfigError: File missing, key missing, or decryption failed.
     """
     global _cache
-    load_dotenv(_ENV_PATH)
+    # load_dotenv() never overrides a variable already in os.environ, so once
+    # FERNET_KEY is exported (systemd's EnvironmentFile, or an earlier call)
+    # the call is a no-op that still opens and parses .env — on every single
+    # web request, cache hit included. Skipping it is exactly equivalent.
+    if "FERNET_KEY" not in os.environ:
+        load_dotenv(_ENV_PATH)
 
     enc_path = _ENC_PATH  # one consistent value per call (tests monkeypatch it)
     if not enc_path.exists():
@@ -160,22 +176,43 @@ def load_accounts() -> list[Account]:
     except yaml.YAMLError as exc:
         raise ConfigError(f"Decrypted data is not valid YAML: {exc}") from exc
 
-    raw_accounts = (data or {}).get("accounts", [])
+    # Shape checks, not just `data or {}`: every caller (web/auth.py,
+    # web/routes/accounts.py, src/main.py, both scripts) catches ConfigError
+    # only, so a plain .get() on a list/str would 500 the accounts page and
+    # escape out of the daemon instead of being reported.
+    if data is None:
+        raise ConfigError("accounts.enc decrypted successfully but contains no accounts.")
+    if not isinstance(data, dict):
+        raise ConfigError(
+            "accounts.enc 解密后的内容不是映射（应形如 `accounts: [...]`）——"
+            "文件可能已损坏，可改用 config/accounts.enc.bak 或重新运行 scripts/encrypt_accounts.py"
+        )
+
+    raw_accounts = data.get("accounts", [])
+    if not isinstance(raw_accounts, list):
+        raise ConfigError(
+            "accounts.enc 解密后的 accounts 字段不是列表——文件可能已损坏，"
+            "可改用 config/accounts.enc.bak 或重新运行 scripts/encrypt_accounts.py"
+        )
     if not raw_accounts:
         raise ConfigError("accounts.enc decrypted successfully but contains no accounts.")
 
     accounts: list[Account] = []
     for i, raw in enumerate(raw_accounts):
+        if not isinstance(raw, dict):
+            raise ConfigError(
+                f"accounts[{i}] 不是映射（应包含 company/username/password）——文件可能已损坏"
+            )
         missing = [f for f in ("company", "username", "password") if not raw.get(f)]
         if missing:
             logger.warning(f"accounts[{i}] missing fields {missing} — skipping")
             continue
         accounts.append(Account(
-            company=raw["company"],
-            username=raw["username"],
-            password=raw["password"],
-            contact=raw.get("contact", ""),
-            group=raw.get("group", ""),
+            company=_text(raw["company"]),
+            username=_text(raw["username"]),
+            password=_text(raw["password"]),
+            contact=_text(raw.get("contact")),
+            group=_text(raw.get("group")),
         ))
 
     # Snapshots/attachments/events are keyed by the SANITIZED company name —
