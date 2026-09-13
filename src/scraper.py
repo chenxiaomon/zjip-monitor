@@ -110,6 +110,16 @@ AUDIT_STATUS: dict[int, str] = {
 _warned_unknown_codes: set[int] = set()
 
 
+def int_or_none(value) -> int | None:
+    """Coerce a raw JSON status code (the platform has been seen to send both
+    7 and "7") to int, else None. The single normalizer for status codes —
+    web/deps re-exports it so page rendering and diffing cannot drift apart."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def decode_status(status_code: int | None) -> str:
     """Convert numeric dataRegAuditStatus to Chinese label."""
     if status_code is None:
@@ -241,11 +251,19 @@ def fetch_all_records(
 
         # The server ignores 'size' and returns a fixed page length (~10), but
         # totalSize has been observed to under-report — so pagination trusts
-        # only what the pages themselves say: stop on an empty page, a page
-        # with no new unique records (server repeating itself), or a page
-        # shorter than the longest page seen so far (end of data; tracking the
-        # max makes a ragged FIRST page harmless too).
-        page_len_max = len(first_records)
+        # only what the pages themselves say, and only the two conditions that
+        # cannot be faked by a degraded response: an empty page, or a page with
+        # no new unique records (server repeating its last page).
+        #
+        # A "short page means end of data" heuristic used to live here. It was
+        # removed because a mid-crawl short page (a throttled/degraded HTTP 200
+        # carrying fewer rows) silently truncated the sweep while still
+        # reporting complete=True, so the partial-merge guard in main.py never
+        # ran and the unfetched tail was diffed as 「消失」. The cost is one
+        # extra request per account whose last page is short; the platform
+        # answers an out-of-range page with an empty list, not an error
+        # (observed in production: an account with exactly 10 records reports
+        # "2 pages").
         page_num = 2
 
         while True:
@@ -280,11 +298,8 @@ def fetch_all_records(
             if not page_records:
                 break
             added = _add_unique(page_records)
-            page_len_max = max(page_len_max, len(page_records))
             if added == 0:
                 break  # server is repeating records — end of data
-            if len(page_records) < page_len_max:
-                break  # short page — server ran out of records
             page_num += 1
 
         if result.complete and result.total_from_server and len(records) != result.reported_total:

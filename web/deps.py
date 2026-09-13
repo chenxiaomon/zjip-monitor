@@ -11,6 +11,9 @@ from typing import Coroutine
 
 from fastapi.templating import Jinja2Templates
 
+# Single definition lives next to AUDIT_STATUS/decode_status so page
+# rendering and snapshot diffing can never disagree about a status code.
+from src.scraper import int_or_none  # noqa: F401  (re-exported for routes/templates)
 from src.settings_cache import get_settings
 
 _HERE = Path(__file__).parent
@@ -62,12 +65,6 @@ STATUS_COLORS: dict[int, dict[str, str]] = {
 }
 
 
-def int_or_none(v) -> int | None:
-    """Coerce a raw JSON status code (sometimes a string) to int, else None."""
-    try:
-        return int(v)
-    except (TypeError, ValueError):
-        return None
 
 
 # Account-dot severity, shared by dashboard / api / view (was three copies).

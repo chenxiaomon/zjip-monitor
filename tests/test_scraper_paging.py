@@ -1,9 +1,11 @@
 """Pagination stop-condition tests for scraper.fetch_all_records (fake HTTP).
 
 The server's totalSize is advisory only — pagination must be driven by what
-the pages themselves say (empty page / no new unique records / short page),
-and a mid-pagination error must return the pages fetched so far instead of
-discarding the whole account.
+the pages themselves say (empty page / no new unique records), and a
+mid-pagination error must return the pages fetched so far instead of
+discarding the whole account. A SHORT page is deliberately not a stop
+condition: a throttled HTTP 200 carrying fewer rows would otherwise truncate
+the sweep while still reporting complete=True.
 """
 
 import pytest
@@ -69,13 +71,35 @@ def test_total_size_zero_returns_empty(monkeypatch):
     assert result.reported_total == 0
 
 
-def test_short_page_ends_pagination(monkeypatch):
+def test_short_last_page_is_followed_by_an_empty_page(monkeypatch):
+    """The short page itself no longer stops the crawl — the empty page after
+    it does. That costs one extra request and is what makes a *mid*-crawl
+    short page recoverable (see the next test)."""
     pages = [[_rec(1), _rec(2), _rec(3)], [_rec(4)]]
     _serve(monkeypatch, pages, total=99)  # server lies about total
     result = scraper.fetch_all_records("tok")
     assert [r["id"] for r in result.records] == [1, 2, 3, 4]
     assert result.complete is True
     assert result.reported_total == 99
+    assert result.pages_fetched == 3  # 2 data pages + the empty probe
+
+
+def test_short_middle_page_does_not_truncate(monkeypatch):
+    """A degraded page 2 (HTTP 200, fewer rows) must not end pagination.
+
+    Under the old `len(page) < page_len_max` heuristic this returned only 4
+    records with complete=True, so main.py skipped the partial-merge guard,
+    saved the truncated snapshot and diffed records 5-7 as 「消失」.
+    """
+    pages = [
+        [_rec(1), _rec(2), _rec(3)],
+        [_rec(4)],                       # throttled/degraded page, not the end
+        [_rec(5), _rec(6), _rec(7)],
+    ]
+    _serve(monkeypatch, pages, total=7)
+    result = scraper.fetch_all_records("tok")
+    assert sorted(r["id"] for r in result.records) == [1, 2, 3, 4, 5, 6, 7]
+    assert result.complete is True
 
 
 def test_underreported_total_does_not_truncate(monkeypatch):
