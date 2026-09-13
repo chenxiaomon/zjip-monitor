@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
+from loguru import logger
 
 from src.scraper import AUDIT_STATUS, decode_status
+from web.auth import visible_accounts
 from web.deps import _fmt_time, account_dot, detail_url, in_year, int_or_none
-from web.services.snapshot import get_all_latest_snapshots
+from web.services.snapshot import get_latest_snapshot
 
 router = APIRouter(prefix="/api")
 
@@ -17,21 +19,43 @@ _SHANGHAI_TZ = timezone(timedelta(hours=8))
 
 
 def _ms_to_date(ms: int | None) -> str:
+    """Same defensive shape as the console's copy: an out-of-range timestamp
+    from the platform must not 500 the whole endpoint."""
     if not ms:
         return ""
-    dt = datetime.fromtimestamp(ms / 1000, tz=_SHANGHAI_TZ)
-    return dt.strftime("%Y-%m-%d")
+    try:
+        return datetime.fromtimestamp(ms / 1000, tz=_SHANGHAI_TZ).strftime("%Y-%m-%d")
+    except (OverflowError, OSError, ValueError, TypeError):
+        logger.warning(f"Unparsable dataRegApplyTime: {ms!r}")
+        return ""
+
+
+def _visible_snapshots(request: Request) -> list[dict]:
+    """Latest snapshot per account the caller is allowed to see.
+
+    This used to read every snapshot on disk regardless of the caller, so the
+    console's group isolation stopped at the API boundary. The key carries
+    admin scope today, so the set is the same minus orphan snapshots of
+    accounts that no longer exist — but binding keys to groups is now a change
+    to the middleware, not to every handler.
+    """
+    snaps = []
+    for acc in visible_accounts(request):
+        snap = get_latest_snapshot(acc.company)
+        if snap is not None:
+            snaps.append(snap)
+    return snaps
 
 
 @router.get("/status")
-def api_status(year: int | None = Query(None)) -> JSONResponse:
+def api_status(request: Request, year: int | None = Query(None)) -> JSONResponse:
     """All accounts' latest status (optionally limited to one application year)."""
     accounts = []
     total_records = 0
     success_count = 0
     pending_correction = 0
 
-    for snap in get_all_latest_snapshots():
+    for snap in _visible_snapshots(request):
         status_counts: dict[int, int] = {}
         for r in snap.get("records", []):
             if not in_year(r.get("dataRegApplyTime"), year):
@@ -63,6 +87,7 @@ def api_status(year: int | None = Query(None)) -> JSONResponse:
 
 @router.get("/records")
 def api_records(
+    request: Request,
     company: str | None = Query(None),
     status: int | None = Query(None),
     year: int | None = Query(None),
@@ -70,7 +95,7 @@ def api_records(
     """Registration records, filtered by company name, status and/or application year."""
     rows: list[dict] = []
 
-    for snap in get_all_latest_snapshots():
+    for snap in _visible_snapshots(request):
         snap_company = snap.get("company", "")
         if company and snap_company != company:
             continue

@@ -126,6 +126,7 @@
         重登
       </button>
       {% endif %}
+      {% if is_admin %}
       {% if scan_task == 'running' %}
       <button disabled
               class="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded border border-gray-200 dark:border-gray-600 text-gray-300 cursor-not-allowed">
@@ -141,6 +142,7 @@
                      transition-colors cursor-pointer">
         {% if scan_task == 'error' %}巡检失败{% else %}巡检{% endif %}
       </button>
+      {% endif %}
       {% endif %}
       {% if task.status != 'pending' and is_admin %}
       <button hx-get="/accounts/{{ u }}/edit-form"

@@ -166,6 +166,11 @@ async def _auth_middleware(request: Request, call_next) -> Response:  # type: ig
         api_key = request.headers.get("X-API-Key", "")
         key_ok = bool(_API_KEY) and secrets.compare_digest(api_key.encode(), _API_KEY.encode())
         if key_ok or _basic_admin_ok(request):
+            # The single API_KEY carries admin scope today. Setting a user here
+            # lets the /api handlers go through the same visible_accounts()
+            # path as the console, so binding keys to groups later is a change
+            # to this line, not to every handler.
+            request.state.user = auth.admin_user()
             return await call_next(request)
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     # 控制台：会话 cookie，Basic 管理员兜底

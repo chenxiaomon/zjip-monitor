@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Request
@@ -20,7 +21,7 @@ from src.config_loader import Account, ConfigError, load_accounts, save_accounts
 from src.exceptions import CredentialsRejectedError
 from src.login import _save_token, verify_credentials
 from src.main import run_all, run_single
-from web.auth import require_admin, visible_accounts
+from web.auth import is_admin, require_admin, visible_accounts
 from web.deps import executor as _executor, get_groups, spawn, templates
 from web.services.session import _SESSIONS_DIR, _safe_name, get_session, token_status
 from web.services.snapshot import get_latest_snapshot
@@ -49,6 +50,21 @@ _ACCOUNTS_WRITE_LOCK = threading.Lock()
 # old-password verify must not cache its token or touch the streak after the
 # password was edited.
 _verify_seq: dict[str, int] = {}
+
+
+# A group user re-triggering a login costs a real platform round-trip and
+# feeds that account's lockout streak, so it is rate limited per account.
+# Admins are not: they are the ones fixing a password and need the retry.
+_RELOGIN_COOLDOWN_SECONDS = 600
+_last_relogin: dict[str, float] = {}
+
+
+def _relogin_cooldown_left(username: str) -> int:
+    last = _last_relogin.get(username)
+    if last is None:
+        return 0
+    remaining = _RELOGIN_COOLDOWN_SECONDS - (time.monotonic() - last)
+    return max(0, int(remaining))
 
 
 def _bump_verify_seq(username: str) -> int:
@@ -231,6 +247,19 @@ async def relogin(request: Request, username: str) -> HTMLResponse:
     if acc is None:
         return _row_error(username)
 
+    if not is_admin(request):
+        left = _relogin_cooldown_left(username)
+        if left:
+            return templates.TemplateResponse(
+                request,
+                "_partials/account_row.html",
+                {"row": _row(acc, task={
+                    "status": "error",
+                    "msg": f"操作过于频繁，请 {left // 60 + 1} 分钟后再试",
+                })},
+            )
+
+    _last_relogin[username] = time.monotonic()
     _tasks[username] = {"status": "pending", "msg": ""}
     spawn(_verify_async(username, acc.password, acc.company, seq=_bump_verify_seq(username)))
 
@@ -257,6 +286,10 @@ def token_status_poll(request: Request, username: str) -> HTMLResponse:
 
 @router.post("/accounts/{username}/scan", response_class=HTMLResponse)
 async def scan_account(request: Request, username: str) -> HTMLResponse:
+    # A single-account scan takes the GLOBAL run lock and one of the two shared
+    # workers: repeated clicks by a group user would keep both the daemon's
+    # round and the admin's 立即巡检 answering "already running".
+    require_admin(request)
     accounts_list = visible_accounts(request)
     acc = next((a for a in accounts_list if a.username == username), None)
     if acc is None:

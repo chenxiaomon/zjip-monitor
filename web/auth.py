@@ -24,6 +24,7 @@ from fastapi import HTTPException, Request
 from loguru import logger
 
 from src.config_loader import Account, ConfigError, load_accounts
+from web.services.attachments_svc import _safe_name as _safe_company_key
 
 _ROOT = Path(__file__).parent.parent
 load_dotenv(_ROOT / ".env")
@@ -228,3 +229,17 @@ def allowed_companies(request: Request) -> set[str] | None:
     if is_admin(request):
         return None
     return {a.company for a in visible_accounts(request)}
+
+
+def allowed_company_keys(request: Request) -> set[str] | None:
+    """Visible companies as their on-disk directory names.
+
+    Attachments live under data/attachments/<sanitized company>/, and the
+    sanitizer maps every non-alphanumeric character to "_" — so "A 公司" and
+    "A_公司" share a directory while comparing as different strings. Checking
+    the raw name therefore guarded a different key than the one that selects
+    the file.
+    """
+    if is_admin(request):
+        return None
+    return {_safe_company_key(a.company) for a in visible_accounts(request)}

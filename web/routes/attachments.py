@@ -7,16 +7,19 @@ from urllib.parse import quote
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
-from web.auth import allowed_companies
-from web.services.attachments_svc import attachment_path, download_name
+from web.auth import allowed_company_keys
+from web.services.attachments_svc import _safe_name, attachment_path, download_name
 
 router = APIRouter()
 
 
 @router.get("/attachments/{company}/{reg_no}/{filename}")
 def get_attachment(request: Request, company: str, reg_no: str, filename: str):
-    allowed = allowed_companies(request)
-    if allowed is not None and company not in allowed:
+    # Compare on the same key attachment_path() resolves with, not the raw
+    # display name — otherwise two companies whose names differ only in
+    # punctuation share a directory but not a permission check.
+    allowed = allowed_company_keys(request)
+    if allowed is not None and _safe_name(company) not in allowed:
         return HTMLResponse("附件不存在", status_code=404)
     path = attachment_path(company, reg_no, filename)
     if path is None:
