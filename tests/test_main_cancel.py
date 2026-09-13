@@ -120,3 +120,200 @@ def test_concurrent_path_abandons_stuck_account(monkeypatch, isolated_settings):
     assert stuck and "timeout" in stuck[0]["error"]
     assert sum(1 for r in output["results"] if r["error"]) == 1
     assert control.read_state()["status"] == "done"  # lock released despite the stuck thread
+
+
+def test_queued_accounts_do_not_burn_their_timeout_while_waiting(
+    monkeypatch, isolated_settings
+):
+    """The per-account ceiling must start when the account starts.
+
+    gather() creates one coroutine per account immediately, but only
+    run.max_workers of them can hold a thread. Timing the budget from
+    creation made every queued account report "timeout" on a box tuned down
+    to a single worker, with nothing actually wedged."""
+    monkeypatch.setattr(main, "load_accounts", lambda: _fake_accounts(4))
+    isolated_settings.write({
+        # serial_max_accounts=0 → always take the concurrent path
+        "run": {"serial_max_accounts": 0, "max_workers": 1,
+                "account_timeout_seconds": 0.5},
+    })
+    monkeypatch.setattr(main, "generate_report", lambda *a, **k: None)
+    monkeypatch.setattr(main, "notify_batch", lambda *a, **k: None)
+    monkeypatch.setattr(main, "_prune_data", lambda: None)
+
+    def scan(account, cancel=None, *, force_login=False, notify_inline=True):
+        time.sleep(0.2)  # 4 × 0.2s = 0.8s总时长 > 单账号 0.5s 预算
+        return {"account": account.username, "company": account.company,
+                "records": [], "snapshot_path": None, "error": None}
+
+    monkeypatch.setattr(main, "scan_account_and_notify", scan)
+    output = main.run_all(trigger="test")
+
+    assert len(output["results"]) == 4
+    assert [r["error"] for r in output["results"]] == [None] * 4
+
+
+def test_lock_is_released_when_reading_settings_raises(monkeypatch):
+    """Anything that raises between taking the lock and the final finish used
+    to leave it held by a live process: every later run then answered
+    "already_running" until the daemon was restarted."""
+    monkeypatch.setattr(main, "load_accounts", lambda: _fake_accounts(2))
+    monkeypatch.setattr(main, "_prune_data", lambda: None)
+
+    def boom():
+        raise RuntimeError("settings.yaml exploded")
+
+    monkeypatch.setattr(main, "run_settings", boom)
+
+    with pytest.raises(RuntimeError, match="settings.yaml exploded"):
+        main.run_all(trigger="test")
+
+    assert control.read_state()["status"] == "error"
+    # The proof the lock is free: another run can take it.
+    ctx = control.try_acquire(kind="probe", trigger="test")
+    assert ctx is not None
+    ctx.finish("done")
+
+
+# ---------------------------------------------------------------------------
+# Pruning runs on EVERY way out of a run, while the global lock is still held
+# ---------------------------------------------------------------------------
+
+def _ok(account):
+    return {"account": account.username, "company": account.company,
+            "records": [], "snapshot_path": None, "error": None}
+
+
+@pytest.fixture
+def prune_calls(monkeypatch):
+    """Counts _prune_data() calls and records whether the run lock was held
+    at each one (another try_acquire must fail while we prune — otherwise a
+    concurrent run could be writing snapshots as we delete them)."""
+    calls: list[bool] = []
+
+    def probe():
+        probe_ctx = control.try_acquire(kind="probe", trigger="test")
+        if probe_ctx is not None:  # lock was free → bug; tidy up so the test can report it
+            probe_ctx.finish("done")
+        calls.append(probe_ctx is None)
+
+    monkeypatch.setattr(main, "_prune_data", probe)
+    monkeypatch.setattr(main, "generate_report", lambda *a, **k: None)
+    monkeypatch.setattr(main, "notify_batch", lambda *a, **k: None)
+    return calls
+
+
+def test_run_all_normal_path_prunes_exactly_once_under_lock(prune_calls, monkeypatch):
+    monkeypatch.setattr(main, "scan_account_and_notify", lambda account, cancel=None, **kw: _ok(account))
+
+    main.run_all(trigger="test")
+
+    assert prune_calls == [True]
+    assert control.read_state()["status"] == "done"
+
+
+def test_run_all_cancelled_path_prunes(prune_calls, monkeypatch):
+    from src.exceptions import RunCancelled
+
+    def scan(account, cancel=None, **kw):
+        raise RunCancelled("stop requested")
+
+    monkeypatch.setattr(main, "scan_account_and_notify", scan)
+
+    output = main.run_all(trigger="test")
+
+    assert output["cancelled"] is True
+    assert output["report_path"] is None  # still exits fast: no report
+    assert prune_calls == [True]
+    assert control.read_state()["status"] == "cancelled"
+
+
+def test_run_all_error_path_prunes_before_releasing_the_lock(prune_calls, monkeypatch):
+    def explode(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(main, "_run_serial", explode)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        main.run_all(trigger="test")
+
+    assert prune_calls == [True]
+    state = control.read_state()
+    assert state["status"] == "error"
+    assert "RuntimeError: boom" in state["error"]
+    ctx = control.try_acquire(kind="probe", trigger="test")
+    assert ctx is not None  # lock released afterwards
+    ctx.finish("done")
+
+
+def test_run_all_config_error_path_prunes(prune_calls, monkeypatch):
+    from src.config_loader import ConfigError
+
+    def bad_accounts():
+        raise ConfigError("accounts file unreadable")
+
+    monkeypatch.setattr(main, "load_accounts", bad_accounts)
+
+    output = main.run_all(trigger="test")
+
+    assert output == {"results": [], "report_path": None}
+    assert prune_calls == [True]
+    assert control.read_state()["status"] == "error"
+
+
+def test_run_single_done_path_prunes(prune_calls, monkeypatch):
+    monkeypatch.setattr(main, "scan_account_and_notify", lambda account, cancel=None, **kw: _ok(account))
+
+    result = main.run_single(_fake_accounts(1)[0], trigger="test")
+
+    assert result["error"] is None
+    assert prune_calls == [True]
+    assert control.read_state()["status"] == "done"
+
+
+def test_run_single_cancelled_path_prunes(prune_calls, monkeypatch):
+    from src.exceptions import RunCancelled
+
+    def scan(account, cancel=None, **kw):
+        raise RunCancelled("stop requested")
+
+    monkeypatch.setattr(main, "scan_account_and_notify", scan)
+
+    result = main.run_single(_fake_accounts(1)[0], trigger="test")
+
+    assert result["error"] == "cancelled"
+    assert prune_calls == [True]
+    assert control.read_state()["status"] == "cancelled"
+
+
+def test_run_single_error_path_prunes_and_still_raises(prune_calls, monkeypatch):
+    def scan(account, cancel=None, **kw):
+        raise ValueError("bad thing")
+
+    monkeypatch.setattr(main, "scan_account_and_notify", scan)
+
+    with pytest.raises(ValueError, match="bad thing"):
+        main.run_single(_fake_accounts(1)[0], trigger="test")
+
+    assert prune_calls == [True]
+    state = control.read_state()
+    assert state["status"] == "error"
+    assert "ValueError: bad thing" in state["error"]
+
+
+def test_a_prune_failure_never_blocks_the_lock_release(monkeypatch):
+    def broken_prune():
+        raise RuntimeError("prune exploded")
+
+    monkeypatch.setattr(main, "_prune_data", broken_prune)
+    monkeypatch.setattr(main, "generate_report", lambda *a, **k: None)
+    monkeypatch.setattr(main, "notify_batch", lambda *a, **k: None)
+    monkeypatch.setattr(main, "scan_account_and_notify", lambda account, cancel=None, **kw: _ok(account))
+
+    output = main.run_all(trigger="test")
+
+    assert len(output["results"]) == 3
+    assert control.read_state()["status"] == "done"
+    ctx = control.try_acquire(kind="probe", trigger="test")
+    assert ctx is not None
+    ctx.finish("done")

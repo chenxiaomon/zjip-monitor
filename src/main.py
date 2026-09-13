@@ -24,7 +24,7 @@ from typing import Any
 
 from loguru import logger
 
-from . import control, status_store
+from . import control, diskstat, status_store
 from .attachments import sync_attachments
 from .config_loader import Account, ConfigError, load_accounts
 from .control import CancelToken
@@ -49,6 +49,9 @@ _ROOT = Path(__file__).parent.parent
 _SNAPSHOTS_DIR = _ROOT / "data" / "snapshots"
 _REPORTS_DIR = _ROOT / "data" / "reports"
 _EVENTS_FILE = _ROOT / "data" / "events.jsonl"
+# Swept for orphaned *.part downloads only — attachments themselves are
+# never deleted here (see attachments.py for who writes this tree).
+_ATTACHMENTS_DIR = _ROOT / "data" / "attachments"
 # One-shot manual override for the shrink guard: touch
 # data/control/force_save/{safe_username}.flag to accept the next shrunk fetch.
 _FORCE_SAVE_DIR = _ROOT / "data" / "control" / "force_save"
@@ -56,24 +59,57 @@ _FORCE_SAVE_DIR = _ROOT / "data" / "control" / "force_save"
 # Guards concurrent appends from the thread-pool (concurrent) path
 _EVENTS_LOCK = threading.Lock()
 
-# Snapshot stems end with "_YYYY-MM-DD-HHMM" (16 chars incl. underscore)
-_SNAPSHOT_TS_SUFFIX_LEN = 16
+# Snapshot stems end with "_YYYY-MM-DD-HHMM"; the suffix-only form anchors
+# load_latest_snapshot's prefix match, the full form is what pruning trusts.
 _SNAPSHOT_TS_RE = re.compile(r"^_\d{4}-\d{2}-\d{2}-\d{4}$")
+_SNAPSHOT_NAME_RE = re.compile(r"^(?P<prefix>.+)_(\d{4}-\d{2}-\d{2}-\d{4})$")
+
+# A .part older than this cannot be a download in progress (the per-file
+# timeout is seconds, not hours) — it is what a killed process left behind.
+_PART_STALE_SECONDS = 3600
+
+
+def _prune_stale_parts() -> None:
+    """Remove *.part files a dead download left under data/attachments.
+
+    _download_file cleans up after itself on any exception, but not when the
+    process is killed or the box loses power mid-stream. Only files well past
+    any plausible in-flight age go — a fresh .part may belong to a download
+    that is happening right now in this very process.
+    """
+    if not _ATTACHMENTS_DIR.exists():
+        return
+    cutoff = time.time() - _PART_STALE_SECONDS
+    for part in _ATTACHMENTS_DIR.rglob("*.part"):
+        try:
+            if part.is_file() and part.stat().st_mtime < cutoff:
+                part.unlink(missing_ok=True)
+                logger.info(f"Pruned orphaned download {part.relative_to(_ATTACHMENTS_DIR)}")
+        except OSError as exc:
+            # It may have been renamed/removed by a concurrent download.
+            logger.debug(f"Skipping {part.name}: {exc!r}")
 
 
 def _prune_data() -> None:
-    """Bounded data growth: old snapshots/reports removed, big event log rotated.
+    """Bounded data growth: old snapshots/reports removed, big event log
+    rotated, orphaned .part downloads swept, disk_stats.json refreshed.
 
     Limits come from settings.yaml → retention.* (see runtime_settings).
+    Runs on every way out of run_all()/run_single() while the global run
+    lock is still held, so it never races another process's snapshot writes.
     """
-    keep = retention_settings()
     try:
+        keep = retention_settings()
         if _SNAPSHOTS_DIR.exists():
             groups: dict[str, list[Path]] = {}
             for f in sorted(_SNAPSHOTS_DIR.glob("*.json")):
-                stem = f.stem
-                key = stem[:-_SNAPSHOT_TS_SUFFIX_LEN] if len(stem) > _SNAPSHOT_TS_SUFFIX_LEN else stem
-                groups.setdefault(key, []).append(f)
+                # Only files that look like our snapshots are candidates; a
+                # blind stem[:-16] slice used to lump anything else into some
+                # company's group and could delete (or shield) the wrong file.
+                m = _SNAPSHOT_NAME_RE.match(f.stem)
+                if not m:
+                    continue
+                groups.setdefault(m.group("prefix"), []).append(f)
             for files in groups.values():
                 for old in files[:-keep.snapshots_keep_per_company]:
                     old.unlink(missing_ok=True)
@@ -95,8 +131,28 @@ def _prune_data() -> None:
             for stale in old_rotations[:-keep.events_rotated_keep]:
                 stale.unlink(missing_ok=True)
                 logger.info(f"Pruned rotated event log {stale.name}")
+
+        _prune_stale_parts()
+        # Measure after pruning so the console sees the post-cleanup picture.
+        diskstat.write_stats()
     except Exception as exc:
         logger.warning(f"Data pruning failed (non-fatal): {exc!r}")
+
+
+def _finalize_run(ctx: control.RunContext, status: str, error: str | None = None) -> None:
+    """Prune, then publish the final state and release the global run lock.
+
+    Every exit from run_all()/run_single() goes through here — done,
+    cancelled, crashed — because the disk is tightest exactly when runs
+    fail or get interrupted, and pruning must happen while the lock is
+    still ours (another process's run could otherwise be writing the
+    snapshots we are deleting). A prune failure must never cost the lock.
+    """
+    try:
+        _prune_data()
+    except Exception as exc:  # _prune_data catches its own; belt and braces
+        logger.warning(f"Data pruning failed (non-fatal): {exc!r}")
+    ctx.finish(status, error=error)
 
 
 def _append_event(
@@ -612,8 +668,15 @@ async def _run_concurrent(
 
     loop = asyncio.get_running_loop()
     executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="scan")
+    # The timeout has to start when an account's scan starts, not when it is
+    # queued. gather() creates every coroutine at once, so without this gate
+    # the Nth account would burn its whole budget waiting for a free thread:
+    # with max_workers=1 (the sensible setting on a 1 vCPU box) 20 accounts
+    # would report "timeout" en masse while nothing was actually wedged.
+    slots = asyncio.Semaphore(max_workers)
 
     async def _one(account: Account) -> dict:
+        await slots.acquire()
         fut = loop.run_in_executor(
             executor,
             lambda: scan_account_and_notify(
@@ -621,7 +684,7 @@ async def _run_concurrent(
             ),
         )
         try:
-            return await asyncio.wait_for(asyncio.shield(fut), timeout=account_timeout)
+            result = await asyncio.wait_for(asyncio.shield(fut), timeout=account_timeout)
         except asyncio.TimeoutError:
             logger.error(
                 f"[{account.company}] Account scan exceeded "
@@ -631,7 +694,16 @@ async def _run_concurrent(
                 account.username, account.company,
                 ok=False, error=f"超过 {account_timeout:g}s 未完成", kind="timeout",
             )
+            # Deliberately no release(): the abandoned worker keeps its pool
+            # thread forever, so handing the permit back would let more
+            # accounts start than there are threads to run them — and they
+            # would then time out while queued, the bug this gate prevents.
             return _error_result(account, f"timeout: 超过 {account_timeout:g}s 未完成")
+        except BaseException:
+            slots.release()
+            raise
+        slots.release()
+        return result
 
     try:
         raw = await asyncio.gather(*[_one(a) for a in accounts], return_exceptions=True)
@@ -675,16 +747,21 @@ def run_all(*, force_login: bool = False, trigger: str = "cli") -> dict[str, Any
         )
         return {"results": [], "report_path": None, "skipped": "already_running"}
 
+    # Everything between taking the lock and the final _finalize_run has to
+    # sit inside a handler that releases it. An exception escaping with the
+    # lock still held (an unreadable account store, a settings read that
+    # raises) leaves every later run — daemon and console alike — answering
+    # "already_running" until someone restarts the daemon.
     try:
-        accounts = load_accounts()
-    except ConfigError as exc:
-        logger.error(f"Cannot load accounts: {exc}")
-        ctx.finish("error", error=f"config: {exc}"[:200])
-        return {"results": [], "report_path": None}
+        try:
+            accounts = load_accounts()
+        except ConfigError as exc:
+            logger.error(f"Cannot load accounts: {exc}")
+            _finalize_run(ctx, "error", error=f"config: {exc}"[:200])
+            return {"results": [], "report_path": None}
 
-    run_time = datetime.now(timezone.utc)
-    rs = run_settings()
-    try:
+        run_time = datetime.now(timezone.utc)
+        rs = run_settings()
         if len(accounts) <= rs.serial_max_accounts:
             results, cancelled = _run_serial(accounts, ctx.cancel, force_login=force_login)
         else:
@@ -701,7 +778,7 @@ def run_all(*, force_login: bool = False, trigger: str = "cli") -> dict[str, Any
             )
             cancelled = ctx.cancel.should_stop()
     except Exception as exc:
-        ctx.finish("error", error=f"{type(exc).__name__}: {exc}"[:200])
+        _finalize_run(ctx, "error", error=f"{type(exc).__name__}: {exc}"[:200])
         raise
 
     diffs: dict[str, DiffResult] = {}
@@ -720,14 +797,14 @@ def run_all(*, force_login: bool = False, trigger: str = "cli") -> dict[str, Any
     except Exception as exc:
         logger.error(f"Batch notification failed (non-fatal): {exc!r}")
 
-    # ── Generate HTML report (skipped when stopping — exit fast) ────────────
+    # ── Generate HTML report (skipped when stopping — exit fast; pruning is
+    # sub-second and still runs, in _finalize_run) ───────────────────────────
     report_path = None
     if not cancelled:
         try:
             report_path = generate_report(results, diffs, report_time=run_time)
         except Exception as exc:
             logger.warning(f"Report generation failed (non-fatal): {exc}")
-        _prune_data()
 
     # ── Summary ────────────────────────────────────────────────────────────
     ok = [r for r in results if not r["error"]]
@@ -737,7 +814,7 @@ def run_all(*, force_login: bool = False, trigger: str = "cli") -> dict[str, Any
         f"{len(ok)} succeeded, {len(failed)} failed"
         + (f": {[r['company'] for r in failed]}" if failed else "")
     )
-    ctx.finish("cancelled" if cancelled else "done")
+    _finalize_run(ctx, "cancelled" if cancelled else "done")
     return {"results": results, "report_path": report_path, "cancelled": cancelled}
 
 
@@ -755,10 +832,10 @@ def run_single(account: Account, *, trigger: str = "web") -> dict[str, Any]:
         # attempt the login even when auto-paused, and success un-pauses.
         result = scan_account_and_notify(account, ctx.cancel, ignore_pause=True)
     except RunCancelled:
-        ctx.finish("cancelled")
+        _finalize_run(ctx, "cancelled")
         return _error_result(account, "cancelled")
     except Exception as exc:
-        ctx.finish("error", error=f"{type(exc).__name__}: {exc}"[:200])
+        _finalize_run(ctx, "error", error=f"{type(exc).__name__}: {exc}"[:200])
         raise
-    ctx.finish("done")
+    _finalize_run(ctx, "done")
     return result

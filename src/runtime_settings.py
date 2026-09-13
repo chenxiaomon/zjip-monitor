@@ -4,9 +4,9 @@ Every value here used to be a literal somewhere in src/ or web/: the serial
 vs. concurrent threshold, crawl delays, retention limits, HTTP timeouts, the
 "data may be stale" cut-off. The dataclass defaults ARE those literals, so a
 settings.yaml without any of these keys behaves exactly as the code did
-before. Keys that have no consumer yet (disk.*, ops_alerts.min_failed_accounts,
-attachments.max_total_mb, retention.*logs_keep_days) are defined here so the
-disk guard / ops banner / log pruning read them from the same place later.
+before. Keys whose consumers arrived later (disk.*, attachments.max_total_mb,
+retention.*logs_keep_days) are defined here too, so the disk guard, the log
+set-up and the console banner all read them through the same validation.
 
 Reads go through settings_cache.get_settings() (mtime-cached), so an edit
 takes effect at the next call without a restart. A value of the wrong type
@@ -237,11 +237,16 @@ def _is_int(value: Any) -> bool:
 
 
 def _is_num(value: Any) -> bool:
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(value)
-    )
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        # A YAML integer with hundreds of digits cannot be converted to a
+        # float. It is not a usable delay or timeout either, so it is simply
+        # invalid — letting the OverflowError escape would abort the caller
+        # (run_all reads these while holding the global run lock).
+        return False
 
 
 def _section(name: str) -> dict:

@@ -108,3 +108,124 @@ def test_rotation_and_pruning_happen_in_one_pass(tmp_path, monkeypatch):
     # 6 old + 1 fresh rotation, trimmed back to the keep limit
     assert len(list(tmp_path.glob("events-*.jsonl"))) == _DEFAULTS.events_rotated_keep
     assert not events.exists()
+
+
+# ---------------------------------------------------------------------------
+# Disk guard additions: strict snapshot grouping, .part sweep, disk_stats.json
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def prune_tree(tmp_path, monkeypatch):
+    """main + diskstat pointed at one temp data tree."""
+    from src import diskstat
+
+    snaps = tmp_path / "snapshots"
+    reports = tmp_path / "reports"
+    attachments = tmp_path / "attachments"
+    for d in (snaps, reports, attachments):
+        d.mkdir()
+    monkeypatch.setattr(main, "_SNAPSHOTS_DIR", snaps)
+    monkeypatch.setattr(main, "_REPORTS_DIR", reports)
+    monkeypatch.setattr(main, "_EVENTS_FILE", tmp_path / "events.jsonl")
+    monkeypatch.setattr(main, "_ATTACHMENTS_DIR", attachments)
+    monkeypatch.setattr(diskstat, "_SNAPSHOTS_DIR", snaps)
+    monkeypatch.setattr(diskstat, "_REPORTS_DIR", reports)
+    monkeypatch.setattr(diskstat, "_ATTACHMENTS_DIR", attachments)
+    monkeypatch.setattr(diskstat, "_EVENTS_FILE", tmp_path / "events.jsonl")
+    monkeypatch.setattr(diskstat, "_STATS_FILE", tmp_path / "control" / "disk_stats.json")
+    return tmp_path
+
+
+def _age(path, seconds: float) -> None:
+    import os
+
+    old = time.time() - seconds
+    os.utime(path, (old, old))
+
+
+def test_prune_skips_snapshot_files_without_a_timestamp_suffix(prune_tree):
+    """The old blind `stem[:-16]` slice grouped `公司A_manual-export-x` (19
+    chars) under `公司A`, so an odd file could push a real snapshot out of
+    the keep window — or, with a different name, be deleted itself."""
+    snaps = prune_tree / "snapshots"
+    for day in range(1, 32):  # 31 real snapshots, one over the keep limit
+        (snaps / f"公司A_2026-07-{day:02d}-0900.json").write_text("{}")
+    irregular = [
+        snaps / "公司A_manual-export-x.json",       # 19-char stem: old code keyed it as 公司A
+        snaps / "公司A_2026-07-01-0900_copy.json",  # timestamp not at the end
+        snaps / "notes.json",
+        snaps / "公司A_2026-7-1-900.json",          # wrong digit widths
+    ]
+    for f in irregular:
+        f.write_text("{}")
+
+    main._prune_data()
+
+    real = sorted(f for f in snaps.glob("公司A_2026-??-??-????.json"))
+    assert len(real) == _DEFAULTS.snapshots_keep_per_company
+    assert real[0].name == "公司A_2026-07-02-0900.json"  # exactly the oldest real one went
+    for f in irregular:
+        assert f.exists(), f.name
+
+
+def test_prune_groups_by_full_prefix_even_with_underscores(prune_tree):
+    snaps = prune_tree / "snapshots"
+    for day in range(1, 33):
+        (snaps / f"甲_乙_公司_2026-07-{day:02d}-0900.json").write_text("{}")
+    for day in range(1, 4):
+        (snaps / f"甲_2026-07-{day:02d}-0900.json").write_text("{}")
+
+    main._prune_data()
+
+    assert len(list(snaps.glob("甲_乙_公司_*.json"))) == _DEFAULTS.snapshots_keep_per_company
+    assert len(list(snaps.glob("甲_2026-*.json"))) == 3
+
+
+def test_prune_removes_only_stale_part_files(prune_tree):
+    att = prune_tree / "attachments"
+    stale_part = att / "公司A" / "R1" / "通知书.pdf.part"
+    fresh_part = att / "公司A" / "R2" / "证书.pdf.part"
+    old_pdf = att / "公司A" / "R1" / "通知书.pdf"
+    for f in (stale_part, fresh_part, old_pdf):
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(b"x")
+    _age(stale_part, main._PART_STALE_SECONDS + 60)
+    _age(old_pdf, main._PART_STALE_SECONDS + 60)
+    _age(fresh_part, main._PART_STALE_SECONDS - 60)
+
+    main._prune_data()
+
+    assert not stale_part.exists()
+    assert fresh_part.exists()  # may still be mid-download
+    assert old_pdf.exists()     # never touch finished files, however old
+
+
+def test_prune_writes_disk_stats(prune_tree):
+    from src import diskstat
+
+    snaps = prune_tree / "snapshots"
+    for day in range(1, 36):
+        (snaps / f"公司A_2026-07-{day:02d}-0900.json").write_text("{}")
+    (snaps / "odd.json").write_text("{}")
+
+    main._prune_data()
+
+    stats_file = prune_tree / "control" / "disk_stats.json"
+    assert stats_file.exists()
+    stats = diskstat.read_stats()
+    remaining = len(list(snaps.glob("*.json")))
+    assert remaining == _DEFAULTS.snapshots_keep_per_company + 1
+    assert stats["dirs"]["snapshots"]["files"] == remaining
+    assert "root" in stats and "low_disk" in stats
+
+
+def test_prune_survives_a_failing_stats_write(prune_tree, monkeypatch):
+    from src import diskstat
+
+    def boom(*a, **k):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(diskstat, "atomic_write_text", boom)
+    (prune_tree / "snapshots" / "公司A_2026-07-01-0900.json").write_text("{}")
+
+    main._prune_data()  # must not raise

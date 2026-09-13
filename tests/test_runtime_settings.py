@@ -535,3 +535,29 @@ def test_dashboard_stale_hours_come_from_settings(
 
     _set(isolated_settings, "ops_alerts", stale_hours=10 ** 6)
     assert "数据可能过期" not in web_client.get("/partials/account-grid").text
+
+
+def test_stale_hours_renders_without_a_trailing_zero(
+    isolated_settings, web_client, login_as, fake_accounts, isolated_snapshots
+):
+    """The key accepts a float, and 36.0 must not reach the card as「36.0 小时」."""
+    isolated_snapshots.write("甲 公司", [{"dataRegNo": "R1", "dataRegAuditStatus": 7}])
+    login_as(web_client, *ADMIN)
+
+    _set(isolated_settings, "ops_alerts", stale_hours=36.0)
+    body = web_client.get("/partials/account-grid").text
+    assert "超过 36 小时未巡检成功" in body
+    assert "36.0" not in body
+
+    _set(isolated_settings, "ops_alerts", stale_hours=36.5)
+    assert "超过 36.5 小时未巡检成功" in web_client.get("/partials/account-grid").text
+
+
+def test_an_absurdly_large_integer_falls_back_instead_of_raising(
+    isolated_settings, warnings
+):
+    """A YAML int too big for a float used to raise OverflowError out of
+    math.isfinite — inside run_all, which holds the global run lock."""
+    _set(isolated_settings, "run", account_timeout_seconds=10 ** 400)
+    assert rs.run_settings().account_timeout_seconds == 600
+    assert any("run.account_timeout_seconds" in w for w in warnings)

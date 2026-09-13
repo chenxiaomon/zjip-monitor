@@ -21,7 +21,7 @@ from datetime import timedelta
 import pytest
 from loguru import logger
 
-from src import logging_setup
+from src import logging_setup, runtime_settings
 from src.logging_setup import InterceptHandler, setup_logging
 
 
@@ -256,7 +256,9 @@ def _file_sink_kwargs(monkeypatch):
         ("web", {}, 14),
         ("daemon", {"retention": {"logs_keep_days": 7}}, 7),
         ("web", {"retention": {"web_logs_keep_days": 3}}, 3),
-        ("web", {"retention": {"web_logs_keep_days": "5"}}, 5),
+        # A quoted number is a typo everywhere else in settings.yaml; the
+        # log retention used to be the one key that silently accepted it.
+        ("web", {"retention": {"web_logs_keep_days": "5"}}, 14),
         ("daemon", {"retention": {"logs_keep_days": 0}}, 30),
         ("daemon", {"retention": {"logs_keep_days": -2}}, 30),
         ("daemon", {"retention": {"logs_keep_days": "abc"}}, 30),
@@ -268,7 +270,11 @@ def _file_sink_kwargs(monkeypatch):
 )
 def test_retention_comes_from_settings_with_defaults(fresh_process, monkeypatch, role, settings, expected_days):
     monkeypatch.setenv("ZJIP_LOG_TO_FILE", "1")
-    monkeypatch.setattr(logging_setup, "get_settings", lambda: settings)
+    # Patch at the source settings_cache, not inside logging_setup: the point
+    # of the change under test is that log retention goes through the same
+    # runtime_settings validation as every other numeric key.
+    monkeypatch.setattr(runtime_settings, "get_settings", lambda: settings)
+    runtime_settings.reset_warnings()
     calls = _file_sink_kwargs(monkeypatch)
 
     setup_logging(role)

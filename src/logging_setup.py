@@ -20,7 +20,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from src.settings_cache import get_settings
+from src.runtime_settings import retention_settings
 
 _ROOT = Path(__file__).resolve().parent.parent
 
@@ -29,10 +29,10 @@ _STDERR_FORMAT = "<green>{time:HH:mm:ss}</green> | <level>{level:<8}</level> | {
 # role -> (file name pattern, key under `retention:` in settings.yaml, default days).
 # daemon and cli share run_*.log on purpose: ops grep that name when a scan
 # misbehaves, whichever way it was started.
-_FILE_SINKS: dict[str, tuple[str, str, int]] = {
-    "daemon": ("run_{time:YYYY-MM-DD}.log", "logs_keep_days", 30),
-    "cli": ("run_{time:YYYY-MM-DD}.log", "logs_keep_days", 30),
-    "web": ("web_{time:YYYY-MM-DD}.log", "web_logs_keep_days", 14),
+_FILE_SINKS: dict[str, tuple[str, str]] = {
+    "daemon": ("run_{time:YYYY-MM-DD}.log", "logs_keep_days"),
+    "cli": ("run_{time:YYYY-MM-DD}.log", "logs_keep_days"),
+    "web": ("web_{time:YYYY-MM-DD}.log", "web_logs_keep_days"),
 }
 
 # Loggers that arrive with their own StreamHandlers and propagate=False: the
@@ -77,17 +77,14 @@ class InterceptHandler(logging.Handler):
         logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
 
 
-def _keep_days(key: str, default: int) -> int:
-    """retention.<key> from settings.yaml; anything but a positive whole number falls back."""
-    section = get_settings().get("retention")
-    raw = section.get(key, default) if isinstance(section, dict) else default
-    if isinstance(raw, str) and raw.strip().isdigit():
-        raw = int(raw.strip())
-    # bool is an int subclass — `true` must not silently mean "1 day"
-    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
-        logger.warning(f"settings.yaml retention.{key}={raw!r} 非法 — 使用默认 {default} 天")
-        return default
-    return raw
+def _keep_days(field: str) -> int:
+    """retention.<field> in days, validated by src/runtime_settings.
+
+    Deliberately not a second parser: runtime_settings owns the rules for
+    every numeric key in settings.yaml (integers only, ≥ 1, no bools or
+    numeric strings) and logs one warning per bad key. A private copy here
+    once accepted "30" where every neighbouring key rejected it."""
+    return int(getattr(retention_settings(), field))
 
 
 def _intercept_std_logging() -> None:
@@ -121,8 +118,8 @@ def setup_logging(role: str) -> None:
       * file, DEBUG, rotated at 00:00, utf-8:
           daemon / cli -> <logs>/run_YYYY-MM-DD.log, kept retention.logs_keep_days (30)
           web          -> <logs>/web_YYYY-MM-DD.log, kept retention.web_logs_keep_days (14)
-        Both keys are read from config/settings.yaml; invalid values fall
-        back to the default. <logs> is the repository's logs/ unless
+        Both keys are read from config/settings.yaml through
+        runtime_settings (invalid values fall back to the default there). <logs> is the repository's logs/ unless
         ZJIP_LOG_DIR says otherwise; ZJIP_LOG_TO_FILE=0 disables the file sink
         entirely (tests). A file sink that cannot be opened is reported on
         stderr and skipped — a broken log directory must not take the console
@@ -149,13 +146,13 @@ def setup_logging(role: str) -> None:
     logger.add(stderr, format=_STDERR_FORMAT, level="INFO", colorize=colorize)
 
     if os.getenv("ZJIP_LOG_TO_FILE", "1") != "0":
-        pattern, key, default = _FILE_SINKS[role]
+        pattern, retention_field = _FILE_SINKS[role]
         log_dir = Path(os.getenv("ZJIP_LOG_DIR") or _ROOT / "logs")
         try:
             logger.add(
                 log_dir / pattern,
                 rotation="00:00",
-                retention=timedelta(days=_keep_days(key, default)),
+                retention=timedelta(days=_keep_days(retention_field)),
                 level="DEBUG",
                 encoding="utf-8",
             )

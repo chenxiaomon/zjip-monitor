@@ -141,3 +141,24 @@ def test_file_that_never_settles_is_returned_but_not_cached(tmp_path, monkeypatc
 
     assert settings_cache.get_settings()["base_url"] == "https://x"
     assert settings_cache._cache is None
+
+
+def test_console_save_is_visible_even_if_the_file_key_cannot_change(tmp_path, monkeypatch):
+    """The settings page writes the file and immediately re-reads it to render
+    what was saved. On a filesystem whose mtime is coarse, a same-size rewrite
+    inside one tick keeps the old (mtime_ns, size) — so save_settings drops the
+    cache explicitly instead of trusting the key to move."""
+    from web.services import settings_svc
+
+    f = tmp_path / "settings.yaml"
+    f.write_text("base_url: https://a\n", encoding="utf-8")
+    _point_at(monkeypatch, f)
+    monkeypatch.setattr(settings_svc, "_SETTINGS", f)
+    # Freeze the key: any change must be visible through invalidation alone.
+    monkeypatch.setattr(settings_cache, "_file_key", lambda p: (1, 1))
+
+    assert settings_cache.get_settings()["base_url"] == "https://a"
+
+    settings_svc.save_settings({"base_url": "https://b"})
+
+    assert settings_cache.get_settings()["base_url"] == "https://b"

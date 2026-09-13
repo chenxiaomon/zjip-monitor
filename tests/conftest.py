@@ -45,6 +45,52 @@ def _isolated_status_store(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_diskstat(tmp_path_factory, monkeypatch):
+    """Point the disk guard at an empty temp tree for EVERY test: every way
+    out of run_all()/run_single() now prunes, which sweeps .part files under
+    data/attachments and writes data/control/disk_stats.json as a side
+    effect — none of that may reach the real data/."""
+    from src import diskstat
+    from src import main as src_main
+
+    root = tmp_path_factory.mktemp("diskstat")
+    data = root / "data"
+    monkeypatch.setattr(diskstat, "_ROOT", root)
+    monkeypatch.setattr(diskstat, "_DATA_DIR", data)
+    monkeypatch.setattr(diskstat, "_ATTACHMENTS_DIR", data / "attachments")
+    monkeypatch.setattr(diskstat, "_SNAPSHOTS_DIR", data / "snapshots")
+    monkeypatch.setattr(diskstat, "_REPORTS_DIR", data / "reports")
+    monkeypatch.setattr(diskstat, "_EVENTS_FILE", data / "events.jsonl")
+    monkeypatch.setattr(diskstat, "_LOGS_DIR", root / "logs")
+    monkeypatch.setattr(diskstat, "_STATS_FILE", data / "control" / "disk_stats.json")
+    monkeypatch.setattr(src_main, "_ATTACHMENTS_DIR", data / "attachments")
+    diskstat._read_cache = None
+    yield
+    diskstat._read_cache = None
+
+
+@pytest.fixture(autouse=True)
+def _isolated_settings_file(tmp_path_factory, monkeypatch):
+    """No test may read — or write — the developer's real config/settings.yaml.
+
+    Everything tunable now flows through settings_cache (runtime_settings,
+    logging_setup, the dashboard), and those readers have no monkeypatch
+    seam of their own, so a machine with an unusual settings.yaml would get
+    different results from CI. The file simply does not exist here, which
+    means "all defaults"; `isolated_settings` overrides this with a real
+    file for the tests that need one.
+    """
+    from web.services import settings_svc
+
+    path = tmp_path_factory.mktemp("settings") / "settings.yaml"  # never created
+    monkeypatch.setattr(settings_cache, "_SETTINGS_FILE", path)
+    monkeypatch.setattr(settings_svc, "_SETTINGS", path)
+    settings_cache._cache = None
+    yield
+    settings_cache._cache = None
+
+
+@pytest.fixture(autouse=True)
 def _reset_login_guard():
     """The console login guard keeps process-global counters; a failed-auth
     assertion in one test must not eat another test's lockout budget."""
