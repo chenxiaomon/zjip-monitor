@@ -22,6 +22,8 @@ from web.sse import router as sse_router, start_watcher
 
 _HERE = Path(__file__).parent
 load_dotenv(_HERE.parent / ".env")
+from src.logging_setup import setup_logging  # noqa: E402 — .env may set ZJIP_LOG_* first
+setup_logging("web")
 
 _WEB_USER = os.getenv("WEB_USER", "admin")
 _WEB_PASS = os.getenv("WEB_PASS", "changeme")
