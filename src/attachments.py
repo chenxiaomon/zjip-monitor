@@ -28,7 +28,8 @@ import requests
 from loguru import logger
 
 from .exceptions import TokenExpiredError
-from .scraper import _build_session, _load_settings
+from .fsutil import atomic_write_text
+from .scraper import _build_session, _load_settings, int_or_none
 
 if TYPE_CHECKING:
     from .control import CancelToken
@@ -46,6 +47,10 @@ CERT_STATUSES = {7, 13}
 
 _MANIFEST_NAME = ".sync.json"
 
+# Notices and certificates are small PDFs; anything of this size is a bug or
+# a hostile URL, and the partition it writes to has run at 96% full.
+_MAX_FILE_BYTES = 50 * 1024 * 1024
+
 
 def _safe_name(name: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
@@ -60,24 +65,54 @@ def _url_ext(url: str) -> str:
     return suffix if suffix and len(suffix) <= 6 else ".pdf"
 
 
-def _download_file(url: str, dest: Path, timeout: int = 60) -> bool:
+def _download_file(
+    url: str, dest: Path, timeout: int = 60, max_bytes: int = _MAX_FILE_BYTES
+) -> bool:
     """Download a (typically OSS) file URL to dest. Plain request — the file
-    URLs are pre-signed; never send our platform token to a third-party host."""
+    URLs are pre-signed; never send our platform token to a third-party host.
+
+    Guarantees no `.part` file survives a failure (a mid-stream disconnect used
+    to leave one behind with nothing to clean it up), and refuses a body larger
+    than *max_bytes* — these are notice/certificate PDFs, and the disk they
+    land on has been as full as 96%.
+    """
+    tmp: Path | None = None
     try:
         resp = requests.get(url, timeout=timeout, stream=True)
         if not resp.ok:
             logger.warning(f"Attachment download HTTP {resp.status_code}: {url[:100]}")
             return False
+        declared = resp.headers.get("Content-Length")
+        if declared and declared.isdigit() and int(declared) > max_bytes:
+            logger.warning(
+                f"Attachment refused: Content-Length {int(declared) / 1e6:.1f} MB exceeds "
+                f"{max_bytes / 1e6:.0f} MB — {url[:100]}"
+            )
+            return False
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_suffix(dest.suffix + ".part")
+        written = 0
         with tmp.open("wb") as f:
             for chunk in resp.iter_content(chunk_size=65536):
+                written += len(chunk)
+                if written > max_bytes:
+                    logger.warning(
+                        f"Attachment aborted: body exceeded {max_bytes / 1e6:.0f} MB "
+                        f"— {url[:100]}"
+                    )
+                    return False
                 f.write(chunk)
         tmp.replace(dest)
+        tmp = None  # renamed away; nothing to clean up
         return True
-    except requests.RequestException as exc:
+    except (requests.RequestException, OSError) as exc:
+        # OSError covers ENOSPC: a full disk must fail this one file, not the
+        # whole account's attachment sync.
         logger.warning(f"Attachment download failed: {exc} — {url[:100]}")
         return False
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
 
 
 def _api_data(resp: requests.Response, what: str) -> dict | list | None:
@@ -181,11 +216,14 @@ def sync_attachments(
         for r in records:
             if cancel:
                 cancel.checkpoint()
-            code = r.get("dataRegAuditStatus")
             reg_no = r.get("dataRegNo")
-            if not reg_no or code is None or int(code) not in NOTIFY_STATUSES:
+            # int() on a non-numeric status used to raise straight out of this
+            # loop, so one malformed record silently skipped every remaining
+            # attachment for the account (caught by main.py's broad handler as
+            # a single "non-fatal" warning).
+            code = int_or_none(r.get("dataRegAuditStatus"))
+            if not reg_no or code is None or code not in NOTIFY_STATUSES:
                 continue
-            code = int(code)
 
             rec_dir = _ATTACHMENTS_DIR / _safe_name(company) / _safe_name(reg_no)
             manifest = _load_manifest(rec_dir)
@@ -215,7 +253,12 @@ def sync_attachments(
             # are retried on the next run
             if ok:
                 rec_dir.mkdir(parents=True, exist_ok=True)
-                (rec_dir / _MANIFEST_NAME).write_text(
+                # Atomic like every other persisted file in the project: a
+                # half-written manifest reads back as "never synced" (the
+                # loader swallows the error), so the record would re-request
+                # its documents from the platform on every single run.
+                atomic_write_text(
+                    rec_dir / _MANIFEST_NAME,
                     json.dumps(
                         {
                             "status": code,
@@ -225,7 +268,6 @@ def sync_attachments(
                         ensure_ascii=False,
                         indent=2,
                     ),
-                    encoding="utf-8",
                 )
             if cancel:
                 cancel.wait(0.5)  # polite crawl delay, cancellable

@@ -25,7 +25,8 @@ def list_attachments(company: str, reg_no: str) -> list[str]:
         return []
     return sorted(
         f.name for f in rec_dir.iterdir()
-        if f.is_file() and not f.name.startswith(".")
+        # .part = an in-flight or abandoned download, not a document
+        if f.is_file() and not f.name.startswith(".") and not f.name.endswith(".part")
     )
 
 
