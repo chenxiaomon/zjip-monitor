@@ -8,11 +8,21 @@ Runtime usage:
 Expects:
     config/accounts.enc  — Fernet-encrypted YAML
     .env                 — contains FERNET_KEY
+
+load_accounts() is called on every web request (visible_accounts) and on
+every mid-run re-login (main._current_password), so its result is cached on
+(path, key fingerprint, st_mtime_ns, st_size). Callers get copies and may
+mutate them freely; save_accounts() drops the cache so a same-process write
+is visible at once, while a write from the other process (web ↔ daemon) is
+picked up through the file key.
 """
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -27,6 +37,14 @@ from .fsutil import atomic_write_bytes
 _ROOT = Path(__file__).parent.parent
 _ENC_PATH = _ROOT / "config" / "accounts.enc"
 _ENV_PATH = _ROOT / ".env"
+
+# How many times to re-read when the file changes under us (see load_accounts).
+_MAX_READ_ATTEMPTS = 3
+
+_cache_lock = threading.Lock()
+# ((str(path), key fingerprint, st_mtime_ns, st_size), accounts) — `None`
+# means "nothing cached". Tests reset it directly; keep the name.
+_cache: tuple[tuple[str, str, int, int], list["Account"]] | None = None
 
 
 @dataclass
@@ -45,20 +63,50 @@ class ConfigError(Exception):
     """Raised when account config cannot be loaded or decrypted."""
 
 
+def invalidate_cache() -> None:
+    """Forget the decrypted accounts; the next load_accounts() re-reads the file."""
+    global _cache
+    with _cache_lock:
+        _cache = None
+
+
+def _file_key(path: Path) -> tuple[int, int]:
+    """Identity of the file's current content (see settings_cache._file_key
+    for why mtime alone is not enough). Fernet tokens for equal-length
+    plaintexts have equal length, so a password edit usually changes only
+    st_mtime_ns — that component is what makes cross-process edits visible."""
+    st = path.stat()
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _key_fingerprint(key_str: str) -> str:
+    # Never keep the key itself in the cache key: a rotated FERNET_KEY must
+    # force a fresh decrypt, and a hash prefix is enough to tell keys apart.
+    return hashlib.sha256(key_str.encode("utf-8")).hexdigest()[:16]
+
+
+def _copies(accounts: list[Account]) -> list[Account]:
+    # Callers (account edit/group routes) mutate what they get before saving;
+    # the cache must hold what is on disk, not what a request is about to write.
+    return [dataclasses.replace(a) for a in accounts]
+
+
 def load_accounts() -> list[Account]:
     """Load and decrypt all accounts from config/accounts.enc.
 
     Returns:
-        List of Account dataclasses.
+        List of Account dataclasses (fresh copies — safe to mutate).
 
     Raises:
         ConfigError: File missing, key missing, or decryption failed.
     """
+    global _cache
     load_dotenv(_ENV_PATH)
 
-    if not _ENC_PATH.exists():
+    enc_path = _ENC_PATH  # one consistent value per call (tests monkeypatch it)
+    if not enc_path.exists():
         raise ConfigError(
-            f"{_ENC_PATH} not found. "
+            f"{enc_path} not found. "
             "Run 'python scripts/encrypt_accounts.py' to create it."
         )
 
@@ -69,9 +117,36 @@ def load_accounts() -> list[Account]:
             "Run 'python scripts/encrypt_accounts.py' to generate one."
         )
 
+    identity = (str(enc_path), _key_fingerprint(key_str))
     try:
-        f = Fernet(key_str.encode())
-        plaintext = f.decrypt(_ENC_PATH.read_bytes())
+        file_key = _file_key(enc_path)
+    except OSError as exc:
+        raise ConfigError(f"Unexpected error reading accounts.enc: {exc}") from exc
+
+    with _cache_lock:
+        if _cache is not None and _cache[0] == identity + file_key:
+            return _copies(_cache[1])
+
+    # stat → read → stat, same reasoning as settings_cache.get_settings():
+    # a console save landing between our stat and read must not get filed
+    # under the pre-save key, or the daemon would keep the stale password.
+    ciphertext = b""
+    stable = False
+    for _ in range(_MAX_READ_ATTEMPTS):
+        try:
+            ciphertext = enc_path.read_bytes()
+            after = _file_key(enc_path)
+        except OSError as exc:
+            raise ConfigError(f"Unexpected error reading accounts.enc: {exc}") from exc
+        if after == file_key:
+            stable = True
+            break
+        file_key = after
+
+    # Decrypt outside the lock: it is the slow part, and a miss under
+    # contention is rare (startup, or right after an edit).
+    try:
+        plaintext = Fernet(key_str.encode()).decrypt(ciphertext)
     except InvalidToken as exc:
         raise ConfigError(
             "Failed to decrypt accounts.enc — the FERNET_KEY may be wrong "
@@ -85,7 +160,7 @@ def load_accounts() -> list[Account]:
     except yaml.YAMLError as exc:
         raise ConfigError(f"Decrypted data is not valid YAML: {exc}") from exc
 
-    raw_accounts = data.get("accounts", [])
+    raw_accounts = (data or {}).get("accounts", [])
     if not raw_accounts:
         raise ConfigError("accounts.enc decrypted successfully but contains no accounts.")
 
@@ -117,7 +192,11 @@ def load_accounts() -> list[Account]:
             )
 
     logger.info(f"Loaded {len(accounts)} account(s) from accounts.enc")
-    return accounts
+
+    if stable:
+        with _cache_lock:
+            _cache = (identity + file_key, accounts)
+    return _copies(accounts)
 
 
 def save_accounts(accounts: list[Account]) -> None:
@@ -156,4 +235,7 @@ def save_accounts(accounts: list[Account]) -> None:
         except OSError as exc:
             logger.warning(f"Could not write accounts.enc.bak: {exc}")
     atomic_write_bytes(_ENC_PATH, encrypted)
+    # The file key would change too, but not necessarily within this same
+    # process's next call on a coarse-mtime filesystem — drop it explicitly.
+    invalidate_cache()
     logger.info(f"accounts.enc updated: {len(accounts)} account(s)")
