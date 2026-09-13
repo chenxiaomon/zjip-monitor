@@ -30,7 +30,7 @@ echo "▶ 安装/更新依赖 ..."
 ssh "$SERVER" "cd $REMOTE && .venv/bin/pip install -q -r requirements.txt"
 
 echo "▶ 导入冒烟测试（失败则不重启，老服务继续跑）..."
-ssh "$SERVER" "cd $REMOTE && .venv/bin/python -c 'import sys; sys.path.insert(0, \".\"); import web.app; from src.main import run_all' " \
+ssh "$SERVER" "cd $REMOTE && .venv/bin/python -c 'import sys; sys.path.insert(0, \".\"); import web.app; from src.main import run_all; import run_daemon' " \
   || { echo "✗ 冒烟测试失败，已中止（服务器仍在运行旧版本）"; exit 1; }
 
 echo "▶ 重启 zjip-daemon + zjip-web ..."
