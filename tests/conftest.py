@@ -70,6 +70,18 @@ def _isolated_diskstat(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_ops_alerts(tmp_path_factory, monkeypatch):
+    """Redirect the ops-banner bookkeeping file for EVERY test: any call to
+    ops_alerts.refresh_and_log() (the daemon job, the alert tests) writes it,
+    and a leftover activation would silence the very next run's log lines."""
+    from src import ops_alerts
+
+    path = tmp_path_factory.mktemp("ops_alerts") / "ops_alerts.json"
+    monkeypatch.setattr(ops_alerts, "_STATE_FILE", path)
+    yield path
+
+
+@pytest.fixture(autouse=True)
 def _isolated_settings_file(tmp_path_factory, monkeypatch):
     """No test may read — or write — the developer's real config/settings.yaml.
 

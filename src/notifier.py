@@ -18,7 +18,7 @@ from datetime import datetime, timezone, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
-from typing import Optional
+from typing import Any, Iterable, Optional
 
 import requests
 import yaml
@@ -488,4 +488,64 @@ def notify_batch(
             title, _format_batch_plain(with_changes, fetch_time), email_cfg, tag
         )
 
+    return _report(results, tag)
+
+
+# ---------------------------------------------------------------------------
+# Ops alerts (src/ops_alerts.py)
+# ---------------------------------------------------------------------------
+
+# Severity marks for channels that render neither colour nor CSS.
+_OPS_LEVEL_MARK = {"critical": "🔴", "warning": "🟠", "info": "ℹ️"}
+
+
+def notify_ops(alerts: Iterable[Any]) -> dict[str, bool]:
+    """Push newly activated ops alerts (disk, wedged run, failing accounts…).
+
+    Takes anything with .level/.title/.detail/.hint — deliberately not typed
+    against ops_alerts.Alert, since ops_alerts imports this module.
+
+    Returns {channel: delivered} for the channels that were enabled. All three
+    are disabled in production, so {} is the NORMAL outcome here and must stay
+    silent: the console banner is the primary output, and one "没有启用通知渠道"
+    line per round would be pure noise in logs/daemon_*.log.
+    """
+    alerts = list(alerts)
+    if not alerts:
+        return {}
+
+    ts = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    count = len(alerts)
+    title = f"🛠 运维告警 - {alerts[0].title}" if count == 1 else f"🛠 运维告警 - {count} 项"
+
+    md_lines = ["## 🛠 浙江省数据知识产权平台 - 运维告警", ""]
+    plain_lines = ["浙江省数据知识产权平台 - 运维告警", ""]
+    for a in alerts:
+        mark = _OPS_LEVEL_MARK.get(a.level, "")
+        md_lines += [f"### {mark} {a.title}", f"- {a.detail}", f"- 处理建议：{a.hint}", ""]
+        plain_lines += [f"{mark} {a.title}", f"  {a.detail}", f"  处理建议：{a.hint}", ""]
+    md_lines.append(f"时间：{ts}")
+    plain_lines.append(f"时间：{ts}")
+    md_text = _truncate_md("\n".join(md_lines))
+    plain_text = "\n".join(plain_lines)
+
+    cfg = _load_notify_cfg()
+    tag = "运维告警"
+    results: dict[str, bool] = {}
+
+    dingtalk_cfg = cfg.get("dingtalk", {})
+    if dingtalk_cfg.get("enabled"):
+        results["dingtalk"] = _send_dingtalk_text(title, md_text, dingtalk_cfg, tag)
+
+    wechat_cfg = cfg.get("wechat", {})
+    if wechat_cfg.get("enabled"):
+        results["wechat"] = _send_wechat_text(md_text, wechat_cfg, tag)
+
+    email_cfg = cfg.get("email", {})
+    if email_cfg.get("enabled"):
+        results["email"] = _send_email_text(title, plain_text, email_cfg, tag)
+
+    # _report() logs only the channels that FAILED — silent when nothing ran.
     return _report(results, tag)

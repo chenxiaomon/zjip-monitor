@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from src import status_store
+from src import ops_alerts, status_store
 from src.runtime_settings import ops_alert_settings
 from src.scraper import AUDIT_STATUS
 from web.auth import allowed_usernames, visible_accounts
@@ -44,6 +44,7 @@ def _filtered_events(request: Request, hours: int = 24, limit: int = 50) -> list
 
 def _dashboard_ctx(request: Request, year: int | None = None) -> dict:
     accounts = visible_accounts(request)
+    allowed = allowed_usernames(request)
     all_status = status_store.get_all()
     # Once per request: get_settings() is mtime-cached, so this is a stat().
     stale_hours = ops_alert_settings().stale_hours
@@ -102,6 +103,9 @@ def _dashboard_ctx(request: Request, year: int | None = None) -> dict:
         "pending_correction": pending_correction,
         "account_snapshots": account_snapshots,
         "login_alerts": login_alerts,
+        # Scoped to what this user may see: a group user must never learn from
+        # the banner that another group's company is failing.
+        "ops_alerts": ops_alerts.collect_alerts(allowed),
         "events": events,
         "filter_year": year,
         "stale_hours": stale_hours,
@@ -123,6 +127,18 @@ def partial_metrics(request: Request, year: int | None = None) -> HTMLResponse:
 @router.get("/partials/account-grid", response_class=HTMLResponse)
 def partial_account_grid(request: Request, year: int | None = None) -> HTMLResponse:
     return templates.TemplateResponse(request, "_partials/account_grid.html", _dashboard_ctx(request, year))
+
+
+@router.get("/partials/ops-banner", response_class=HTMLResponse)
+def partial_ops_banner(request: Request) -> HTMLResponse:
+    """The banner alone — the SSE-triggered refresh target. Deliberately does
+    not build the whole dashboard context: this runs on every scan event, and
+    the banner needs none of the per-company snapshot work."""
+    return templates.TemplateResponse(
+        request,
+        "_partials/ops_banner.html",
+        {"ops_alerts": ops_alerts.collect_alerts(allowed_usernames(request))},
+    )
 
 
 @router.get("/partials/timeline", response_class=HTMLResponse)

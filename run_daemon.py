@@ -28,7 +28,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 from loguru import logger
 
-from src import control
+from src import control, ops_alerts
 from src.logging_setup import setup_logging
 from src.main import run_all
 
@@ -64,23 +64,42 @@ def _exit_if_wedged_on_self() -> None:
         os._exit(1)
 
 
+def _refresh_ops_alerts() -> None:
+    """Re-evaluate the console banner's alerts once per round.
+
+    Bookkeeping only: a failure here must never change what the scan reported,
+    so every path swallows its own errors."""
+    try:
+        ops_alerts.refresh_and_log()
+    except Exception as exc:
+        logger.warning(f"运维告警刷新失败（非致命）: {exc!r}")
+
+
 def _job() -> None:
     if control.is_daemon_paused():
         logger.info("巡检已暂停（data/control/pause.flag 存在）— 跳过本轮")
+        _refresh_ops_alerts()  # 暂停本身就是一条横幅告警，也让「已恢复」能被记下
         return
     logger.info("Scheduled job triggered — starting run…")
     try:
         output = run_all(trigger="daemon")
     except Exception as exc:
         logger.exception(f"Scheduled run failed: {exc}")
+        _refresh_ops_alerts()
         return
     if output.get("skipped"):
+        # Refresh BEFORE the wedge probe: a skipped round usually means the
+        # lock holder is stuck, _exit_if_wedged_on_self() may end the process
+        # on the spot, and the banner is where that has to show up.
+        _refresh_ops_alerts()
         _exit_if_wedged_on_self()
         logger.warning("另一巡检进行中（web/CLI 触发）— 本轮跳过")
-    elif output.get("cancelled"):
+        return
+    if output.get("cancelled"):
         logger.info("Scheduled job stopped by user request")
     else:
         logger.info("Scheduled job done")
+    _refresh_ops_alerts()
 
 
 def main() -> int:
