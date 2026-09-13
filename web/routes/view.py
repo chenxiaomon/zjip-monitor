@@ -6,10 +6,35 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 
 from src.scraper import AUDIT_STATUS
+from web import auth
 from web.deps import STATUS_COLORS, account_dot, current_year, in_year, int_or_none, templates
 from web.services.snapshot import get_all_latest_snapshots
 
 router = APIRouter(prefix="/view")
+
+# Search engines must never index the client list.
+_NOINDEX = {"X-Robots-Tag": "noindex, nofollow", "Cache-Control": "no-store"}
+
+
+def _access(request: Request) -> tuple[bool, bool]:
+    """(allowed, should_set_cookie).
+
+    Order: an authenticated console user, then a correct ?t=<token> (which
+    mints the cookie), then a previously minted cookie. With no VIEW_TOKEN
+    configured the page stays open, exactly as it was.
+    """
+    if not auth.VIEW_TOKEN:
+        return True, False
+    if auth.user_from_cookie(request.cookies.get(auth.COOKIE_NAME)):
+        return True, False
+    if auth.view_token_ok(request.query_params.get("t")):
+        return True, True
+    return auth.view_cookie_ok(request.cookies.get(auth.VIEW_COOKIE)), False
+
+
+def _denied() -> HTMLResponse:
+    """404, not 403: the page's existence is not worth confirming."""
+    return HTMLResponse("页面不存在", status_code=404, headers=_NOINDEX)
 
 
 def _build_ctx(year: int | None = None) -> dict:
@@ -55,12 +80,31 @@ def _build_ctx(year: int | None = None) -> dict:
     }
 
 
+def _render(request: Request, template: str, year: int | None) -> HTMLResponse:
+    allowed, set_cookie = _access(request)
+    if not allowed:
+        return _denied()
+    response = templates.TemplateResponse(
+        request, template, _build_ctx(year), headers=dict(_NOINDEX)
+    )
+    if set_cookie:
+        response.set_cookie(
+            auth.VIEW_COOKIE,
+            auth.make_view_cookie(),
+            max_age=auth.VIEW_COOKIE_MAX_AGE,
+            httponly=True,
+            samesite="lax",
+            path="/view",
+        )
+    return response
+
+
 @router.get("/", response_class=HTMLResponse)
 def view_page(request: Request, year: int | None = Query(None)) -> HTMLResponse:
-    return templates.TemplateResponse(request, "view.html", _build_ctx(year))
+    return _render(request, "view.html", year)
 
 
 @router.get("/partial", response_class=HTMLResponse)
 def view_partial(request: Request, year: int | None = Query(None)) -> HTMLResponse:
     """HTMX polling target — returns only the dynamic content region."""
-    return templates.TemplateResponse(request, "_partials/view_content.html", _build_ctx(year))
+    return _render(request, "_partials/view_content.html", year)

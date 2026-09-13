@@ -12,7 +12,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
@@ -159,7 +159,7 @@ async def _auth_middleware(request: Request, call_next) -> Response:  # type: ig
     # 公开路径：只读展示页、静态资源、登录/登出
     if (path == "/view" or path.startswith("/view/")
             or path.startswith("/static/")
-            or path in ("/favicon.ico", "/login", "/logout")):
+            or path in ("/favicon.ico", "/login", "/logout", "/robots.txt")):
         return await call_next(request)
     # 小程序 API：X-API-Key 或 Basic 管理员
     if path.startswith("/api/"):
@@ -189,6 +189,12 @@ app.mount("/static", StaticFiles(directory=_HERE / "static"), name="static")
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon() -> RedirectResponse:
     return RedirectResponse(url="/static/favicon.svg")
+
+
+@app.get("/robots.txt", include_in_schema=False)
+async def robots() -> PlainTextResponse:
+    """Nothing here should ever be indexed — /view lists client companies."""
+    return PlainTextResponse("User-agent: *\nDisallow: /\n")
 
 app.include_router(login.router)
 app.include_router(sse_router)
