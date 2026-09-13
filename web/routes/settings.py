@@ -7,6 +7,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 
 from src import control
+from src.login import DEFAULT_LOGIN_METHOD, LOGIN_METHODS
 from src.scraper import AUDIT_STATUS
 from web.deps import STATUS_COLORS, templates
 from web.services.settings_svc import load_settings, save_settings
@@ -86,11 +87,15 @@ def save_schedule(
 @router.post("/settings/login", response_class=HTMLResponse)
 def save_login(
     request: Request,
+    method: str = Form("auto"),
     token_max_age_hours: int = Form(12),
     headless: str = Form("on"),
 ) -> HTMLResponse:
+    if method not in LOGIN_METHODS:
+        method = DEFAULT_LOGIN_METHOD
     data = load_settings()
     data.setdefault("login", {}).update({
+        "method": method,
         "token_max_age_hours": token_max_age_hours,
         "headless": headless == "on",
     })

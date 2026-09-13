@@ -16,6 +16,7 @@
 .s-pill-15 { background: #F1EFE8; color: #444441; }  /* 撤回审查 */
 .s-pill-16 { background: #F1EFE8; color: #444441; }  /* 撤回补正 */
 .s-pill-17 { background: #EEEDFE; color: #3C3489; }  /* 待发证 */
+.s-pill-x  { background: #F1EFE8; color: #444441; }  /* 未知状态码兜底 */
 
 .dark .s-pill-1  { background: #1e3a5c; color: #93c5fd; }
 .dark .s-pill-2  { background: #452d10; color: #fbbf24; }
@@ -34,3 +35,4 @@
 .dark .s-pill-15 { background: #252524; color: #9ca3af; }
 .dark .s-pill-16 { background: #252524; color: #9ca3af; }
 .dark .s-pill-17 { background: #2e2760; color: #c4b5fd; }
+.dark .s-pill-x  { background: #252524; color: #9ca3af; }

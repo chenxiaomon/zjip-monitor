@@ -84,7 +84,7 @@ def main() -> int:
     # ── Step 2: Fetch records (first 2 pages max for the test) ─────────────
     logger.info("开始抓取登记列表（测试模式：最多 2 页，每页 10 条）…")
     try:
-        records = fetch_all_records(token, page_size=10)
+        records = fetch_all_records(token, page_size=10).records
     except TokenExpiredError as exc:
         logger.error(f"Token 已过期: {exc}")
         return 1

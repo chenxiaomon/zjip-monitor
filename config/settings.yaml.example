@@ -3,13 +3,24 @@ base_url: "https://www.zjip.org.cn"
 scraper:
   page_size: 50
   request_timeout_seconds: 30
+  # 分页安全上限（服务端固定每页约 10 条 → 300 页 ≈ 3000 条）；
+  # 服务端 totalSize 仅作对账参考，翻页以“空页/短页/无新记录”为准
+  max_pages: 300
 
 # 自动下载通知书/证书到 data/attachments/（状态变化时才请求，默认开启）
 attachments:
   enabled: true
 
 login:
+  # auto    — 先走 HTTP 直登（POST /v1/user/login，密码 md5），仅在网络/响应异常时回退浏览器（默认）
+  # http    — 只用 HTTP 直登，失败即报错
+  # browser — 只用 Playwright 浏览器登录（旧方式）
+  method: auto
   token_max_age_hours: 12
+  # 防锁号：同一账号连续 N 次被平台拒绝登录（密码错误等）后，
+  # 定时巡检自动跳过该账号，直到在控制台改密码或手动巡检成功；0 = 不暂停
+  max_consecutive_failures: 3
+  # 以下两项仅浏览器登录（method=browser 或 auto 回退时）生效
   headless: true
   browser: "chromium"
 

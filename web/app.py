@@ -49,6 +49,11 @@ async def _lifespan(app: FastAPI):  # type: ignore[type-arg]
 
     control.request_local_stop()
     deps.executor.shutdown(wait=False, cancel_futures=True)
+    # The verify lane gets the same treatment; a worker wedged inside a
+    # Playwright login stays bounded by the 120s login watchdog.
+    from web.routes import accounts as _accounts_routes
+
+    _accounts_routes._verify_executor.shutdown(wait=False, cancel_futures=True)
     task.cancel()
     try:
         await task

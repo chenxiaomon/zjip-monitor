@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -21,7 +22,7 @@ from typing import Any
 
 from loguru import logger
 
-from . import control
+from . import control, status_store
 from .attachments import sync_attachments
 from .config_loader import Account, ConfigError, load_accounts
 from .control import CancelToken
@@ -29,20 +30,24 @@ from .differ import DiffResult, diff_snapshots
 from .fsutil import atomic_write_text
 from .exceptions import (
     CaptchaRequiredError,
+    CredentialsRejectedError,
     LoginError,
     RunCancelled,
     ScraperError,
     TokenExpiredError,
 )
 from .login import get_token
-from .notifier import notify, notify_batch
+from .notifier import notify, notify_batch, notify_login_failure
 from .reporter import generate_report
-from .scraper import decode_status, fetch_all_records
+from .scraper import FetchResult, decode_status, fetch_all_records
 
 _ROOT = Path(__file__).parent.parent
 _SNAPSHOTS_DIR = _ROOT / "data" / "snapshots"
 _REPORTS_DIR = _ROOT / "data" / "reports"
 _EVENTS_FILE = _ROOT / "data" / "events.jsonl"
+# One-shot manual override for the shrink guard: touch
+# data/control/force_save/{safe_username}.flag to accept the next shrunk fetch.
+_FORCE_SAVE_DIR = _ROOT / "data" / "control" / "force_save"
 
 # Guards concurrent appends from the >10-account thread-pool path
 _EVENTS_LOCK = threading.Lock()
@@ -53,6 +58,7 @@ _REPORTS_KEEP_DAYS = 60
 _EVENTS_ROTATE_BYTES = 5 * 1024 * 1024
 # Snapshot stems end with "_YYYY-MM-DD-HHMM" (16 chars incl. underscore)
 _SNAPSHOT_TS_SUFFIX_LEN = 16
+_SNAPSHOT_TS_RE = re.compile(r"^_\d{4}-\d{2}-\d{2}-\d{4}$")
 
 # Wall-clock ceiling per account in the concurrent (>10 accounts) path.
 # Login (≤120s, see login.LOGIN_HARD_TIMEOUT_SECONDS) + paging + attachments
@@ -128,13 +134,22 @@ def _snapshot_path(company: str, ts: datetime) -> Path:
     return _SNAPSHOTS_DIR / f"{safe_company}_{ts_str}.json"
 
 
-def save_snapshot(company: str, records: list[dict], ts: datetime | None = None) -> Path:
+def save_snapshot(
+    company: str,
+    records: list[dict],
+    ts: datetime | None = None,
+    fetch_meta: dict | None = None,
+) -> Path:
     """Persist a full record list as a JSON snapshot.
 
     Args:
-        company: Company name (used in filename).
-        records: List of raw API record dicts.
-        ts:      Snapshot timestamp (defaults to now UTC).
+        company:    Company name (used in filename).
+        records:    List of raw API record dicts.
+        ts:         Snapshot timestamp (defaults to now UTC).
+        fetch_meta: Optional reconciliation info stored under the additive
+                    "fetch" key (reported_total / fetched_count / complete /
+                    error / merged_with_previous). Old snapshots without the
+                    key stay fully readable — consumers use .get("fetch").
 
     Returns:
         Path to the written snapshot file.
@@ -151,6 +166,8 @@ def save_snapshot(company: str, records: list[dict], ts: datetime | None = None)
         "record_count": len(records),
         "records": records,
     }
+    if fetch_meta:
+        payload["fetch"] = fetch_meta
     atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
     logger.info(f"[{company}] Snapshot saved → {path.name} ({len(records)} records)")
     return path
@@ -167,8 +184,12 @@ def load_latest_snapshot(company: str) -> dict | None:
         return None
 
     safe_company = "".join(c if c.isalnum() or c in "-_" else "_" for c in company)
-    pattern = f"{safe_company}_*.json"
-    files = sorted(_SNAPSHOTS_DIR.glob(pattern))
+    # Anchor the prefix to the timestamp suffix: a plain glob would let
+    # "公司" match "公司_分部_2026-…" and cross-contaminate diffs.
+    files = sorted(
+        f for f in _SNAPSHOTS_DIR.glob(f"{safe_company}_*.json")
+        if _SNAPSHOT_TS_RE.match(f.stem[len(safe_company):])
+    )
     if not files:
         return None
 
@@ -184,12 +205,64 @@ def load_latest_snapshot(company: str) -> dict | None:
 # Per-account processing
 # ---------------------------------------------------------------------------
 
+def _safe_flag_name(username: str) -> str:
+    return "".join(c if c.isalnum() or c in "-_" else "_" for c in username)
+
+
+def _consume_force_save_flag(username: str) -> bool:
+    """One-shot operator override for the shrink guard (check = consume)."""
+    flag = _FORCE_SAVE_DIR / f"{_safe_flag_name(username)}.flag"
+    if flag.exists():
+        flag.unlink(missing_ok=True)
+        return True
+    return False
+
+
+def _current_password(account: Account) -> str:
+    """Re-read the stored password just before a fresh login. A password edited
+    in the web console mid-run must win over this run's stale in-memory copy —
+    otherwise a re-login would cache a token minted with the OLD password and
+    pollute the lockout streak."""
+    try:
+        for a in load_accounts():
+            if a.username == account.username:
+                return a.password
+    except Exception:
+        pass
+    return account.password
+
+
+def _record_login_failure(account: Account, exc: Exception) -> None:
+    """Durable bookkeeping for a failed login. Only genuine credential
+    rejections count toward the lockout streak (a platform outage must not
+    pause scheduled scans); a notification goes out when a new failure streak
+    starts or the account just got auto-paused — at most twice per streak."""
+    status_store.record_scan(
+        account.username, account.company, ok=False, error=str(exc), kind="login_failed"
+    )
+    if not isinstance(exc, CredentialsRejectedError):
+        return
+    flags = status_store.record_login(
+        account.username, account.company, ok=False, error=str(exc)
+    )
+    if flags["streak_started"] or flags["just_paused"]:
+        try:
+            notify_login_failure(
+                account.company, account.username, str(exc), paused=flags["just_paused"]
+            )
+        except Exception as nexc:
+            logger.error(
+                f"[{account.company}] Login-failure notification failed (non-fatal): {nexc!r}"
+            )
+
+
 def scan_account_and_notify(
     account: Account,
     cancel: CancelToken | None = None,
     *,
     force_login: bool = False,
     notify_inline: bool = True,
+    ignore_pause: bool = False,
 ) -> dict | None:
     """Login, fetch, and snapshot one account.
 
@@ -198,6 +271,10 @@ def scan_account_and_notify(
         force_login:   Bypass the token cache and do a fresh browser login.
         notify_inline: Send notifications immediately (single-account scans).
                        run_all() passes False and aggregates at the end instead.
+        ignore_pause:  Attempt the login even when the account is auto-paused
+                       after repeated credential rejections. run_single() (the
+                       manual per-account scan) passes True — a click is an
+                       explicit retry, and a success un-pauses the account.
 
     Returns:
         Dict with keys: account, company, records, snapshot_path, error.
@@ -212,18 +289,29 @@ def scan_account_and_notify(
         "error": None,
     }
 
+    # ── Lockout protection: skip paused accounts without touching the platform
+    if not ignore_pause and status_store.is_login_paused(account.username):
+        msg = "login_paused: 连续登录失败已自动暂停，请在控制台更新密码（手动巡检可强制重试）"
+        logger.warning(f"[{account.company}] {msg}")
+        result["error"] = msg
+        return result
+
     # ── Login ──────────────────────────────────────────────────────────────
     try:
         if cancel:
             cancel.checkpoint(phase="login")
-        token = get_token(account.username, account.password, force_refresh=force_login)
+        token = get_token(account.username, _current_password(account), force_refresh=force_login)
     except CaptchaRequiredError as exc:
         logger.error(f"[{account.company}] Captcha required — skipping: {exc}")
         result["error"] = f"captcha_required: {exc}"
+        status_store.record_scan(
+            account.username, account.company, ok=False, error=str(exc), kind="captcha_required"
+        )
         return result
     except LoginError as exc:
         logger.error(f"[{account.company}] Login failed — skipping: {exc}")
         result["error"] = f"login_failed: {exc}"
+        _record_login_failure(account, exc)
         return result
     except RunCancelled:
         raise
@@ -232,54 +320,136 @@ def scan_account_and_notify(
         # without this, one flaky account would abort the whole run.
         logger.error(f"[{account.company}] Unexpected login failure — skipping: {exc!r}")
         result["error"] = f"login_failed: {exc}"
+        status_store.record_scan(
+            account.username, account.company, ok=False, error=str(exc), kind="login_failed"
+        )
         return result
+    status_store.record_login(account.username, account.company, ok=True)
 
     # ── Fetch records (re-login once on token expiry) ───────────────────────
     try:
         if cancel:
             cancel.checkpoint(phase="fetch")
-        records = fetch_all_records(token, cancel=cancel)
+        fetch: FetchResult = fetch_all_records(token, cancel=cancel)
     except TokenExpiredError:
         logger.warning(f"[{account.company}] Token expired mid-run — re-logging in…")
         try:
-            token = get_token(account.username, account.password, force_refresh=True)
-            records = fetch_all_records(token, cancel=cancel)
+            token = get_token(account.username, _current_password(account), force_refresh=True)
+            fetch = fetch_all_records(token, cancel=cancel)
         except (LoginError, ScraperError) as exc:
             logger.error(f"[{account.company}] Re-login or re-fetch failed: {exc}")
             result["error"] = str(exc)
+            if isinstance(exc, LoginError):
+                _record_login_failure(account, exc)
+            else:
+                status_store.record_scan(
+                    account.username, account.company,
+                    ok=False, error=str(exc), kind="scrape_failed",
+                )
             return result
     except ScraperError as exc:
         logger.error(f"[{account.company}] Scrape failed — skipping: {exc}")
         result["error"] = f"scrape_failed: {exc}"
+        status_store.record_scan(
+            account.username, account.company, ok=False, error=str(exc), kind="scrape_failed"
+        )
         return result
 
+    records = fetch.records
     fetch_time = datetime.now(timezone.utc)
 
     # ── Diff against previous snapshot ────────────────────────────────────
     prev = load_latest_snapshot(account.company)
     prev_records: list[dict] = prev["records"] if prev else []
 
-    # Sanity check: a sudden >50% shrink almost always means a truncated fetch
-    # (server hiccup mid-pagination), not real deletions. Persisting it would
-    # spam "记录消失" alerts and corrupt the next diff — refuse instead.
-    if len(prev_records) >= 10 and len(records) < len(prev_records) * 0.5:
+    if not fetch.complete and not prev_records:
+        # Nothing to merge with: baselining a partial fetch would flood the
+        # next complete run with false 新增 events. Refuse, keep the records
+        # visible in the result, and let the next run establish the baseline.
         msg = (
-            f"suspicious_shrink: fetched {len(records)} records but previous "
-            f"snapshot has {len(prev_records)} — snapshot NOT saved, no diff emitted"
+            f"partial_first_fetch: {fetch.error} — 首次抓取不完整，暂不保存基线，"
+            "下次巡检完整后自动建立"
         )
         logger.error(f"[{account.company}] {msg}")
         result["error"] = msg
         result["records"] = records
+        status_store.record_scan(
+            account.username, account.company, ok=False, error=msg, kind="scrape_failed"
+        )
         return result
+
+    merged_with_previous = False
+    if not fetch.complete and prev_records:
+        # Partial fetch: merge the fetched records over the previous snapshot
+        # so the unfetched tail is neither reported as 消失 nor dropped from
+        # the UI. Fetched records win by dataRegNo; previous keyless records
+        # are dropped (the differ ignores them anyway).
+        prev_by_no = {r["dataRegNo"]: r for r in prev_records if r.get("dataRegNo")}
+        curr_by_no = {r["dataRegNo"]: r for r in records if r.get("dataRegNo")}
+        keyless = [r for r in records if not r.get("dataRegNo")]
+        records = list({**prev_by_no, **curr_by_no}.values()) + keyless
+        merged_with_previous = True
+        logger.warning(
+            f"[{account.company}] Partial fetch ({fetch.error}) — merged "
+            f"{len(curr_by_no)} fetched records over the previous snapshot "
+            f"({len(records)} total)"
+        )
+
+    fetch_meta = {
+        "reported_total": fetch.reported_total,
+        "total_from_server": fetch.total_from_server,
+        "fetched_count": len(fetch.records),
+        "pages_fetched": fetch.pages_fetched,
+        "complete": fetch.complete,
+        "error": fetch.error,
+        "merged_with_previous": merged_with_previous,
+    }
+    result["fetch_meta"] = fetch_meta
+
+    # Sanity check: a sudden >50% shrink almost always means a truncated fetch,
+    # not real deletions (complete fetches only — a merged partial cannot
+    # shrink). Two escape hatches so a genuine large shrink cannot freeze the
+    # account's data forever: the server-reported total confirming the smaller
+    # count, and the one-shot force_save flag.
+    if (
+        fetch.complete
+        and len(prev_records) >= 10
+        and len(records) < len(prev_records) * 0.5
+    ):
+        if (
+            fetch.total_from_server
+            and fetch.reported_total > 0
+            and len(records) == fetch.reported_total
+        ):
+            logger.warning(
+                f"[{account.company}] Large shrink ({len(prev_records)} → {len(records)}) "
+                "matches the server-reported total — accepting as genuine"
+            )
+        elif _consume_force_save_flag(account.username):
+            logger.warning(f"[{account.company}] Large shrink accepted via force_save flag")
+        else:
+            msg = (
+                f"suspicious_shrink: fetched {len(records)} records but previous "
+                f"snapshot has {len(prev_records)} — snapshot NOT saved, no diff emitted"
+            )
+            logger.error(f"[{account.company}] {msg}")
+            result["error"] = msg
+            result["records"] = records
+            status_store.record_scan(
+                account.username, account.company,
+                ok=False, error=msg, kind="shrink_refused", fetch_meta=fetch_meta,
+            )
+            return result
 
     diff = diff_snapshots(account.company, records, prev_records)
 
     # ── Save new snapshot ──────────────────────────────────────────────────
-    snapshot_path = save_snapshot(account.company, records, ts=fetch_time)
+    snapshot_path = save_snapshot(account.company, records, ts=fetch_time, fetch_meta=fetch_meta)
     result["records"] = records
     result["snapshot_path"] = str(snapshot_path)
     result["diff"] = diff
     result["fetch_time"] = fetch_time
+    status_store.record_scan(account.username, account.company, ok=True, fetch_meta=fetch_meta)
 
     # ── Notify if there are changes (non-fatal) ────────────────────────────
     if diff.has_changes and notify_inline:
@@ -290,8 +460,13 @@ def scan_account_and_notify(
     elif not diff.has_changes:
         logger.debug(f"[{account.company}] No changes — notification skipped")
 
-    # ── Append event to events.jsonl ───────────────────────────────────────
-    _append_event(account.username, account.company, diff, fetch_time)
+    # ── Append event to events.jsonl (non-fatal: the snapshot is already
+    # saved and the durable status already says ok — a failed event write must
+    # not bubble into _run_serial's catch-all and flip the status to error) ──
+    try:
+        _append_event(account.username, account.company, diff, fetch_time)
+    except Exception as exc:
+        logger.error(f"[{account.company}] events.jsonl append failed (non-fatal): {exc!r}")
 
     # ── Sync 通知书/证书 attachments (non-fatal) ────────────────────────────
     try:
@@ -302,7 +477,7 @@ def scan_account_and_notify(
         except TokenExpiredError:
             # Token can expire mid-sync on large first runs — re-login once
             logger.warning(f"[{account.company}] Token expired during attachment sync — re-logging in…")
-            token = get_token(account.username, account.password, force_refresh=True)
+            token = get_token(account.username, _current_password(account), force_refresh=True)
             new_files = sync_attachments(token, account.company, records, cancel=cancel)
         if new_files:
             logger.info(f"[{account.company}] Downloaded {len(new_files)} attachment(s)")
@@ -362,6 +537,10 @@ def _run_serial(
             except Exception as exc:
                 logger.error(f"[{account.company}] Unexpected failure — skipping: {exc!r}")
                 results.append(_error_result(account, f"{type(exc).__name__}: {exc}"))
+                status_store.record_scan(
+                    account.username, account.company,
+                    ok=False, error=f"{type(exc).__name__}: {exc}", kind="error",
+                )
             if i < len(accounts) - 1:
                 delay = random.uniform(2.0, 5.0)
                 logger.debug(f"Sleeping {delay:.1f}s before next account…")
@@ -408,6 +587,10 @@ async def _run_concurrent(
             logger.error(
                 f"[{account.company}] Account scan exceeded "
                 f"{ACCOUNT_HARD_TIMEOUT_SECONDS}s — abandoning its worker thread"
+            )
+            status_store.record_scan(
+                account.username, account.company,
+                ok=False, error=f"超过 {ACCOUNT_HARD_TIMEOUT_SECONDS}s 未完成", kind="timeout",
             )
             return _error_result(
                 account, f"timeout: 超过 {ACCOUNT_HARD_TIMEOUT_SECONDS}s 未完成"
@@ -519,7 +702,9 @@ def run_single(account: Account, *, trigger: str = "web") -> dict[str, Any]:
         return {**_error_result(account, ""), "error": None, "skipped": "already_running"}
     try:
         ctx.cancel.checkpoint(account=account.company, index=1, total=1)
-        result = scan_account_and_notify(account, ctx.cancel)
+        # ignore_pause: a manual per-account scan is an explicit retry — it may
+        # attempt the login even when auto-paused, and success un-pauses.
+        result = scan_account_and_notify(account, ctx.cancel, ignore_pause=True)
     except RunCancelled:
         ctx.finish("cancelled")
         return _error_result(account, "cancelled")

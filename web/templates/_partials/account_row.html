@@ -1,6 +1,7 @@
 {% set u = row.account.username %}
 {% set task = row.task %}
 {% set scan_task = row.scan_task %}
+{% set ss = row.scan_status %}
 <tr id="row-{{ u }}"
     {% if task.status == 'pending' %}
     hx-get="/accounts/{{ u }}/token-status"
@@ -46,21 +47,31 @@
   <td class="px-4 py-3 text-xs text-gray-500 dark:text-gray-400">
     <span class="font-mono">{{ u }}</span>
   </td>
-  <!-- Token 状态 -->
+  <!-- Token / 登录状态 -->
   <td class="px-4 py-3">
     {% if task.status == 'pending' %}
     <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs bg-gray-100 dark:bg-gray-700 text-gray-500">
-      <span class="w-1.5 h-1.5 rounded-full bg-gray-400 animate-pulse"></span>重登中…
+      <span class="w-1.5 h-1.5 rounded-full bg-gray-400 animate-pulse"></span>登录中…
     </span>
     {% elif task.status == 'error' %}
-    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400"
-          title="{{ task.msg }}">
-      <i class="ti ti-alert-circle text-sm"></i>重登失败
+    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400">
+      <i class="ti ti-alert-circle text-sm"></i>登录失败
     </span>
+    <div class="mt-1 text-[11px] leading-4 text-red-500 dark:text-red-400 max-w-[16rem] break-words">
+      {{ task.msg }}
+    </div>
     {% else %}
     <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs {{ row.token_status.css }}">
       {{ row.token_status.label }}
     </span>
+    {% endif %}
+    {% if ss and ss.login_paused and task.status != 'pending' %}
+    <div class="mt-1">
+      <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400"
+            title="连续 {{ ss.consecutive_login_failures }} 次登录失败，定时巡检已跳过该账号。点「编辑」更新密码，或点「巡检」手动重试（成功后自动恢复）。">
+        <i class="ti ti-player-pause text-sm"></i>已暂停 · 需更新密码
+      </span>
+    </div>
     {% endif %}
   </td>
   <!-- 记录数 -->
@@ -70,6 +81,30 @@
   <!-- 最后巡检 -->
   <td class="px-4 py-3 text-xs text-gray-400 dark:text-gray-500 font-mono whitespace-nowrap">
     {{ row.last_check | fmt_time }}
+    {% if ss and ss.status and ss.status != 'ok' and scan_task != 'running' %}
+    {% set kind_label = {'partial': '部分抓取', 'login_failed': '登录失败', 'captcha_required': '需验证码',
+                         'scrape_failed': '抓取失败', 'shrink_refused': '数量骤减·未保存',
+                         'timeout': '巡检超时', 'error': '巡检异常'}.get(ss.status, '巡检失败') %}
+    {% if ss.status == 'partial' %}
+    <div class="mt-0.5 font-sans whitespace-normal">
+      <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400"
+            title="上次抓取未完整（{{ ss.error or '' }}），已与上一份快照合并，未丢数据">
+        <i class="ti ti-alert-triangle text-xs"></i>{{ kind_label }} {{ ss.fetched }}{% if ss.reported_total %}/{{ ss.reported_total }}{% endif %}
+      </span>
+    </div>
+    {% else %}
+    <div class="mt-0.5 font-sans whitespace-normal">
+      <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400">
+        <i class="ti ti-alert-circle text-xs"></i>上次巡检失败 · {{ kind_label }}
+      </span>
+      {% if ss.error %}
+      <div class="mt-0.5 text-[11px] leading-4 text-red-400 dark:text-red-500 max-w-[16rem] break-words">
+        {{ ss.error[:160] }}{% if ss.error|length > 160 %}…{% endif %}
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% endif %}
   </td>
   <!-- 操作 -->
   <td class="px-4 py-3">
@@ -83,6 +118,7 @@
       <button hx-post="/accounts/{{ u }}/relogin"
               hx-target="#row-{{ u }}"
               hx-swap="outerHTML"
+              title="用已保存的密码强制重新登录一次"
               class="px-2.5 py-1 text-xs rounded border border-gray-200 dark:border-gray-600
                      text-gray-600 dark:text-gray-300
                      hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors cursor-pointer">
@@ -106,6 +142,16 @@
       </button>
       {% endif %}
       {% if task.status != 'pending' and is_admin %}
+      <button hx-get="/accounts/{{ u }}/edit-form"
+              hx-target="#modal-container"
+              hx-swap="innerHTML"
+              title="修改密码 / 联系人 / 分组"
+              class="flex items-center gap-1 px-2.5 py-1 text-xs rounded border
+                     border-gray-200 dark:border-gray-600
+                     text-gray-600 dark:text-gray-300
+                     hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors cursor-pointer">
+        <i class="ti ti-pencil text-sm"></i>编辑
+      </button>
       <button hx-post="/accounts/{{ u }}/delete"
               hx-target="#row-{{ u }}"
               hx-swap="delete"

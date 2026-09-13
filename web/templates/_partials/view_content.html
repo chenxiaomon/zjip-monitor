@@ -1,5 +1,5 @@
 <div id="view-content"
-     hx-get="/view/partial"
+     hx-get="/view/partial{% if filter_year %}?year={{ filter_year }}{% endif %}"
      hx-trigger="every 5m"
      hx-swap="outerHTML">
 
@@ -35,12 +35,10 @@
       </div>
       {% if card.status_counts %}
       <div class="flex flex-wrap gap-1.5 mb-3">
-        {% for code in [1,2,3,5,6,7,11] %}
-        {% if card.status_counts.get(code, 0) > 0 %}
-        <span class="px-2 py-0.5 rounded-full text-xs s-pill-{{ code }}">
-          {{ AUDIT_STATUS[code] }}×{{ card.status_counts[code] }}
+        {% for code in card.status_counts.keys()|sort %}
+        <span class="px-2 py-0.5 rounded-full text-xs s-pill-{{ code if code in AUDIT_STATUS else 'x' }}">
+          {{ AUDIT_STATUS.get(code, '状态' ~ code) }}×{{ card.status_counts[code] }}
         </span>
-        {% endif %}
         {% endfor %}
       </div>
       {% else %}

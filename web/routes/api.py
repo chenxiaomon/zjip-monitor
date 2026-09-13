@@ -8,30 +8,12 @@ from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
 from src.scraper import AUDIT_STATUS, decode_status
-from web.deps import _fmt_time, detail_url
+from web.deps import _fmt_time, account_dot, detail_url, in_year, int_or_none
 from web.services.snapshot import get_all_latest_snapshots
 
 router = APIRouter(prefix="/api")
 
 _SHANGHAI_TZ = timezone(timedelta(hours=8))
-
-
-def _account_dot(status_counts: dict[int, int]) -> str:
-    # 不予登记 / 异议 需紧急处理 → 红；待补正 → 橙
-    if status_counts.get(6, 0) > 0 or status_counts.get(4, 0) > 0:
-        return "red"
-    if status_counts.get(2, 0) > 0:
-        return "amber"
-    return "green"
-
-
-def _in_year(ms: int | None, year: int | None) -> bool:
-    """True if the ms-timestamp falls in `year`; no filter when year is None."""
-    if year is None:
-        return True
-    if not ms:
-        return False
-    return datetime.fromtimestamp(ms / 1000, tz=_SHANGHAI_TZ).year == year
 
 
 def _ms_to_date(ms: int | None) -> str:
@@ -52,16 +34,16 @@ def api_status(year: int | None = Query(None)) -> JSONResponse:
     for snap in get_all_latest_snapshots():
         status_counts: dict[int, int] = {}
         for r in snap.get("records", []):
-            if not _in_year(r.get("dataRegApplyTime"), year):
+            if not in_year(r.get("dataRegApplyTime"), year):
                 continue
-            code = r.get("dataRegAuditStatus")
+            code = int_or_none(r.get("dataRegAuditStatus"))
             if code is not None:
-                status_counts[int(code)] = status_counts.get(int(code), 0) + 1
+                status_counts[code] = status_counts.get(code, 0) + 1
 
         total = sum(status_counts.values())
         accounts.append({
             "company": snap.get("company", "未知"),
-            "dot": _account_dot(status_counts),
+            "dot": account_dot(status_counts),
             "total": total,
             "status_counts": {str(k): v for k, v in status_counts.items()},
             "last_check": _fmt_time(snap.get("snapshot_time")),
@@ -93,9 +75,9 @@ def api_records(
         if company and snap_company != company:
             continue
         for r in snap.get("records", []):
-            if not _in_year(r.get("dataRegApplyTime"), year):
+            if not in_year(r.get("dataRegApplyTime"), year):
                 continue
-            code = r.get("dataRegAuditStatus")
+            code = int_or_none(r.get("dataRegAuditStatus"))
             if status is not None and code != status:
                 continue
             reg_no = r.get("dataRegNo", "")

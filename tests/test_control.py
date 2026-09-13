@@ -182,10 +182,13 @@ def test_heartbeat_swallows_write_errors(monkeypatch):
     def boom(state):
         raise FileNotFoundError(2, "No such file or directory")
 
-    monkeypatch.setattr(control, "_write_state", boom)
-    ctx.cancel.heartbeat(account="x")   # must not raise
-    ctx.cancel.checkpoint(account="y")  # must not raise either
-    monkeypatch.undo()
+    # Scoped context, NOT monkeypatch.undo(): undo() would also revert the
+    # isolated_control_dir fixture and make ctx.finish() write the real
+    # data/control/state.json.
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(control, "_write_state", boom)
+        ctx.cancel.heartbeat(account="x")   # must not raise
+        ctx.cancel.checkpoint(account="y")  # must not raise either
     ctx.finish("done")
 
 

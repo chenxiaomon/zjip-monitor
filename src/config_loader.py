@@ -103,6 +103,19 @@ def load_accounts() -> list[Account]:
             group=raw.get("group", ""),
         ))
 
+    # Snapshots/attachments/events are keyed by the SANITIZED company name —
+    # compare on that key, since names that differ only in punctuation still
+    # collide on disk and overwrite each other's history.
+    by_company: dict[str, list[str]] = {}
+    for a in accounts:
+        key = "".join(c if c.isalnum() or c in "-_" else "_" for c in a.company)
+        by_company.setdefault(key, []).append(a.username)
+    for key, users in by_company.items():
+        if len(users) > 1:
+            logger.warning(
+                f"公司名称重复（脱敏后同名 {key!r}）：被账号 {users} 共用 — 它们的快照/附件会互相覆盖，请改用不同公司名称"
+            )
+
     logger.info(f"Loaded {len(accounts)} account(s) from accounts.enc")
     return accounts
 

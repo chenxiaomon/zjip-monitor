@@ -1,0 +1,20 @@
+<!-- Count header + table: one HTMX swap unit so the 共N条 count never goes stale -->
+<div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden" id="records-table-box">
+  <div class="px-4 py-2.5 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
+    <span class="text-xs text-gray-500 dark:text-gray-400">共 {{ total }} 条记录（点击行展开原始数据）</span>
+  </div>
+  <table class="w-full">
+    <thead>
+      <tr class="bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-700">
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">公司 / 账号</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">登记编号</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">数据名称</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">行业</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">申请时间</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">状态</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">附件</th>
+      </tr>
+    </thead>
+    {% include "_partials/records_table.html" %}
+  </table>
+</div>

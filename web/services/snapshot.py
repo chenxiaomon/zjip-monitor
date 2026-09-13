@@ -48,7 +48,12 @@ def get_latest_snapshot(company: str) -> dict | None:
     if not _SNAPSHOTS_DIR.exists():
         return None
     prefix = _safe_name(company)
-    files = sorted(_SNAPSHOTS_DIR.glob(f"{prefix}_*.json"))
+    # Anchor the prefix via _DATE_RE: a plain glob lets "公司" also match
+    # "公司_分部_2026-…" and serve another company's snapshot.
+    files = sorted(
+        f for f in _SNAPSHOTS_DIR.glob(f"{prefix}_*.json")
+        if (m := _DATE_RE.match(f.stem)) and m.group(1) == prefix
+    )
     if not files:
         return None
     return _read_cached(files[-1])

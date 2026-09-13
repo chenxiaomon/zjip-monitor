@@ -1,6 +1,18 @@
 import pytest
 
-from src import control
+from src import control, status_store
+
+
+@pytest.fixture(autouse=True)
+def _isolated_status_store(tmp_path_factory, monkeypatch):
+    """Redirect the durable account-status file for EVERY test: deep code
+    paths (scan timeouts, login failures) write it as a side effect, and no
+    test may leak into the real data/control/accounts_status.json."""
+    path = tmp_path_factory.mktemp("status") / "accounts_status.json"
+    monkeypatch.setattr(status_store, "_STATUS_FILE", path)
+    status_store._read_cache = None
+    yield
+    status_store._read_cache = None
 
 
 @pytest.fixture

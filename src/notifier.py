@@ -377,6 +377,53 @@ def notify(diff: DiffResult, fetch_time: Optional[datetime] = None) -> None:
         send_email(diff, fetch_time, email_cfg)
 
 
+def notify_login_failure(company: str, username: str, error: str, *, paused: bool = False) -> None:
+    """Push a login-failure alert on every enabled channel.
+
+    Called by main.py at most twice per failure streak (streak start + the
+    moment the account gets auto-paused), never once per run — no spam.
+    """
+    ts = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    if paused:
+        title = f"⛔ 巡检已暂停 - {company} - 需更新密码"
+        headline = "**连续登录失败，已自动暂停该账号的定时巡检**（防止平台锁号）"
+        action = "请在控制台「账号」页编辑该账号、更新密码；改密或手动巡检成功后自动恢复。"
+    else:
+        title = f"⚠️ 平台登录失败 - {company}"
+        headline = "**账号登录被平台拒绝**，密码可能已失效"
+        action = "请在控制台「账号」页用「测试登录」核实，必要时编辑账号更新密码。"
+
+    md_lines = [
+        "## ⚠️ 浙江省数据知识产权平台 - 登录异常",
+        f"**公司：** {company}",
+        f"**账号：** {username}",
+        headline,
+        "",
+        f"错误信息：{error[:300]}",
+        "",
+        action,
+        f"时间：{ts}",
+    ]
+    md_text = "\n".join(md_lines)
+    plain_text = (
+        f"浙江省数据知识产权平台 - 登录异常\n公司：{company}\n账号：{username}\n"
+        f"{headline.replace('**', '')}\n错误信息：{error[:300]}\n{action}\n时间：{ts}"
+    )
+
+    cfg = _load_notify_cfg()
+    dingtalk_cfg = cfg.get("dingtalk", {})
+    if dingtalk_cfg.get("enabled"):
+        _send_dingtalk_text(title, md_text, dingtalk_cfg, tag=company)
+    wechat_cfg = cfg.get("wechat", {})
+    if wechat_cfg.get("enabled"):
+        _send_wechat_text(md_text, wechat_cfg, tag=company)
+    email_cfg = cfg.get("email", {})
+    if email_cfg.get("enabled"):
+        _send_email_text(title, plain_text, email_cfg, tag=company)
+
+
 def notify_batch(diffs: dict[str, DiffResult], fetch_time: Optional[datetime] = None) -> None:
     """Send ONE aggregated message per channel for a whole run's changes.
 

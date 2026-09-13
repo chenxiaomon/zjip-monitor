@@ -7,8 +7,8 @@ Auth: x-access-token header
 
 from __future__ import annotations
 
-import math
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
@@ -19,7 +19,7 @@ from loguru import logger
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from .exceptions import ScraperError, TokenExpiredError
+from .exceptions import RunCancelled, ScraperError, TokenExpiredError
 from .settings_cache import get_settings
 
 # ---------------------------------------------------------------------------
@@ -105,11 +105,26 @@ AUDIT_STATUS: dict[int, str] = {
 }
 
 
+# Warn once per unknown status code: a new platform code should reach the
+# operator's logs, not silently render as "状态18" forever.
+_warned_unknown_codes: set[int] = set()
+
+
 def decode_status(status_code: int | None) -> str:
     """Convert numeric dataRegAuditStatus to Chinese label."""
     if status_code is None:
         return "未知"
-    return AUDIT_STATUS.get(int(status_code), f"状态{status_code}")
+    try:
+        code = int(status_code)
+    except (TypeError, ValueError):
+        return f"状态{status_code}"
+    if code not in AUDIT_STATUS and code not in _warned_unknown_codes:
+        _warned_unknown_codes.add(code)
+        logger.warning(
+            f"Unknown dataRegAuditStatus code {code} — platform may have added "
+            "a new status; update AUDIT_STATUS in src/scraper.py"
+        )
+    return AUDIT_STATUS.get(code, f"状态{code}")
 
 # ---------------------------------------------------------------------------
 # Settings
@@ -127,12 +142,40 @@ def _load_settings() -> dict:
 # Public API
 # ---------------------------------------------------------------------------
 
+# Hard page cap independent of the server's totalSize (which is advisory only).
+# At the server's fixed ~10 records/page this allows ~3000 records; override
+# via settings.yaml → scraper.max_pages.
+_DEFAULT_MAX_PAGES = 300
+
+
+@dataclass
+class FetchResult:
+    """Outcome of one full pagination sweep.
+
+    complete=False means a mid-pagination error (or the safety cap) truncated
+    the crawl — `records` holds everything fetched up to that point instead of
+    being discarded; `error` says why. `reported_total` is the server's
+    totalSize claim from page 1, kept for reconciliation only — pagination
+    never trusts it.
+    """
+
+    records: list[dict] = field(default_factory=list)
+    reported_total: int = 0
+    pages_fetched: int = 0
+    complete: bool = True
+    error: str | None = None
+    # True only when page 1 actually carried a total field. _parse_response
+    # otherwise synthesizes total from the page length, and that synthetic
+    # value must never "confirm" a shrink (main.py's escape hatch checks this).
+    total_from_server: bool = False
+
+
 def fetch_all_records(
     token: str,
     page_size: int | None = None,
     base_url: str | None = None,
     cancel: "CancelToken | None" = None,
-) -> list[dict]:
+) -> FetchResult:
     """Fetch every datareg record for the authenticated account.
 
     Args:
@@ -141,18 +184,13 @@ def fetch_all_records(
         base_url:  Override the platform base URL (default from settings.yaml).
 
     Returns:
-        List of record dicts, each containing the following keys (as returned by the API;
-        field names are logged on first page so you can verify them):
-            - 登记编号 (registration number)
-            - 数据知识产权名称 (name)
-            - 所属行业 / 行业大类 (industry)
-            - 数据类型 / 数据来源 (data type / source)
-            - 申请时间 (application time)
-            - 审核状态 (audit status)  ← the key field for monitoring
+        FetchResult — .records holds the (deduped) record dicts; .complete is
+        False when a page ≥2 failed or the safety cap was hit, in which case
+        the pages fetched so far are still returned.
 
     Raises:
         TokenExpiredError: API returns 401 or token-expired error code.
-        ScraperError:      Any other fetch failure.
+        ScraperError:      Page 1 failed (nothing worth keeping).
     """
     settings = _load_settings()
     scraper_cfg = settings.get("scraper", {})
@@ -163,59 +201,101 @@ def fetch_all_records(
         base_url = settings.get("base_url", "https://www.zjip.org.cn")
 
     timeout = scraper_cfg.get("request_timeout_seconds", 30)
+    try:
+        max_pages = int(scraper_cfg.get("max_pages", _DEFAULT_MAX_PAGES))
+    except (TypeError, ValueError):
+        max_pages = _DEFAULT_MAX_PAGES
 
     session = _build_session(token, timeout=timeout)
 
     try:
         first_page = _fetch_page(session, base_url, page_num=1, page_size=page_size)
         total, first_records = _parse_response(first_page, page_num=1)
-        logger.info(f"Total records (server): {total}")
-
-        # Server ignores 'size' param and always returns a fixed page size (~10).
-        # Paginate by incrementing 'page' until the last page returns fewer records
-        # than the previous page (meaning we've hit the end).
-        server_page_size = len(first_records)  # actual records per page from server
+        total_from_server = total is not None
+        logger.info(f"Total records (server): {total if total_from_server else '(not reported)'}")
 
         # Deduplicate incrementally (API may return overlapping pages) so the
-        # stop condition below counts unique records — comparing the raw count
-        # against `total` could stop early and truncate the snapshot.
+        # stop conditions below count unique records.
         seen: set[str] = set()
         records: list[dict] = []
 
-        def _add_unique(page_records: list[dict]) -> None:
+        def _add_unique(page_records: list[dict]) -> int:
+            added = 0
             for r in page_records:
                 key = str(r.get("id") or r.get("dataRegNo") or id(r))
                 if key not in seen:
                     seen.add(key)
                     records.append(r)
+                    added += 1
+            return added
 
         _add_unique(first_records)
-        if server_page_size == 0:
-            return records
+        result = FetchResult(
+            records=records,
+            reported_total=total if total_from_server else 0,
+            pages_fetched=1,
+            total_from_server=total_from_server,
+        )
+        if not first_records:
+            return result
 
+        # The server ignores 'size' and returns a fixed page length (~10), but
+        # totalSize has been observed to under-report — so pagination trusts
+        # only what the pages themselves say: stop on an empty page, a page
+        # with no new unique records (server repeating itself), or a page
+        # shorter than the longest page seen so far (end of data; tracking the
+        # max makes a ragged FIRST page harmless too).
+        page_len_max = len(first_records)
         page_num = 2
-        # Safety cap: never fetch more than (total / server_page_size + 5) pages
-        max_pages = math.ceil(total / max(server_page_size, 1)) + 5
 
-        while page_num <= max_pages and len(records) < total:
+        while True:
+            if page_num > max_pages:
+                result.complete = False
+                result.error = f"safety cap scraper.max_pages={max_pages} reached"
+                logger.warning(
+                    f"Pagination stopped at the max_pages cap ({max_pages}) with "
+                    f"{len(records)} records fetched — raise scraper.max_pages in "
+                    "settings.yaml if this account really has more"
+                )
+                break
             if cancel:
                 cancel.wait(0.5)  # polite crawl delay, cancellable per page
             else:
                 time.sleep(0.5)
-            page_data = _fetch_page(session, base_url, page_num=page_num, page_size=page_size)
-            _, page_records = _parse_response(page_data, page_num=page_num)
+            try:
+                page_data = _fetch_page(session, base_url, page_num=page_num, page_size=page_size)
+                _, page_records = _parse_response(page_data, page_num=page_num)
+            except TokenExpiredError:
+                raise  # main.py re-logins and retries the whole fetch
+            except ScraperError as exc:
+                # Keep pages 1..n-1 instead of discarding the whole account.
+                result.complete = False
+                result.error = f"page {page_num}: {exc}"
+                logger.error(
+                    f"Page {page_num} failed ({exc}) — keeping the {len(records)} "
+                    "records fetched so far as a partial result"
+                )
+                break
+            result.pages_fetched += 1
             if not page_records:
                 break
-            _add_unique(page_records)
-            # A short page means the server ran out of records
-            if len(page_records) < server_page_size:
-                break
+            added = _add_unique(page_records)
+            page_len_max = max(page_len_max, len(page_records))
+            if added == 0:
+                break  # server is repeating records — end of data
+            if len(page_records) < page_len_max:
+                break  # short page — server ran out of records
             page_num += 1
 
-        logger.info(f"Fetched {len(records)} records total")
-        return records
+        if result.complete and result.total_from_server and len(records) != result.reported_total:
+            logger.warning(
+                f"Reconciliation mismatch: server reported {result.reported_total} "
+                f"records but {len(records)} were fetched"
+            )
+        logger.info(f"Fetched {len(records)} records total ({result.pages_fetched} pages)")
+        return result
 
-    except (TokenExpiredError, ScraperError):
+    except (TokenExpiredError, ScraperError, RunCancelled):
         raise
     except Exception as exc:
         raise ScraperError(f"Unexpected error during data fetch: {exc}") from exc
@@ -323,14 +403,16 @@ def _fetch_page(
     return data
 
 
-def _parse_response(data: dict[str, Any], page_num: int) -> tuple[int, list[dict]]:
+def _parse_response(data: dict[str, Any], page_num: int) -> tuple[int | None, list[dict]]:
     """Extract total count and record list from an API response.
 
     The API response shape is unknown until first runtime; this function tries
     common patterns used by Chinese government platforms.
 
     Returns:
-        (total_count, records_list)
+        (total_count, records_list) — total_count is None when the response
+        carried no usable total field (flat list, missing/non-numeric keys),
+        so callers can tell a genuine server total from a synthesized one.
 
     Raises:
         ScraperError: If the response has an unexpected shape.
@@ -356,18 +438,20 @@ def _parse_response(data: dict[str, Any], page_num: int) -> tuple[int, list[dict
         )
         # `is not None` checks, not `or`-chaining: totalSize=0 is a legitimate
         # value (empty account) and must not fall through to other keys.
+        # None (no key present) — NOT len(records) — so a synthesized total can
+        # never masquerade as a server-asserted one downstream.
         total = next(
             (
                 inner[k]
                 for k in ("totalSize", "total", "totalCount", "count", "totalNum")
                 if inner.get(k) is not None
             ),
-            len(records),
+            None,
         )
-    # Pattern B: data = [...]  (flat list, only 1 page)
+    # Pattern B: data = [...]  (flat list — no total field exists)
     elif isinstance(inner, list):
         records = inner
-        total = len(records)
+        total = None
     else:
         raise ScraperError(
             f"Unexpected response shape on page {page_num}: "
@@ -379,10 +463,11 @@ def _parse_response(data: dict[str, Any], page_num: int) -> tuple[int, list[dict
             f"Record list is not a list on page {page_num}: type={type(records).__name__}"
         )
 
-    try:
-        total = int(total)
-    except (TypeError, ValueError):
-        total = len(records)
+    if total is not None:
+        try:
+            total = int(total)
+        except (TypeError, ValueError):
+            total = None
 
     logger.debug(f"Page {page_num}: {len(records)} records (total reported: {total})")
     return total, list(records)

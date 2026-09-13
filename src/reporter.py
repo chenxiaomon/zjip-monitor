@@ -26,28 +26,46 @@ _SNAPSHOTS_DIR = _ROOT / "data" / "snapshots"
 # Length of the "_YYYY-MM-DD-HHMM" suffix appended to snapshot file stems
 _SNAPSHOT_TS_SUFFIX_LEN = 16
 
-# Status → (background, text-color)
-# Labels verified against live DOM on 2026-05-19
-_STATUS_STYLE: dict[str, tuple[str, str]] = {
-    "待审核":   ("#0d6efd", "#fff"),
-    "待补正":   ("#ffc107", "#000"),
-    "公示中":   ("#0dcaf0", "#000"),
-    "登记成功": ("#198754", "#fff"),
-    "主动撤回": ("#6c757d", "#fff"),
-    "视为撤回": ("#495057", "#fff"),
-    "不予登记": ("#dc3545", "#fff"),
-    "已消失":   ("#dc3545", "#fff"),
+# Status code → (background, text-color) — all 17 dataRegAuditStatus codes
+# (was keyed by 8 Chinese labels, leaving 待发证/异议/续展登记 etc. gray).
+_STATUS_STYLE: dict[int, tuple[str, str]] = {
+    1:  ("#0d6efd", "#fff"),  # 待审核
+    2:  ("#ffc107", "#000"),  # 待补正
+    3:  ("#0dcaf0", "#000"),  # 公示中
+    4:  ("#fd7e14", "#fff"),  # 异议
+    5:  ("#6c757d", "#fff"),  # 主动撤回
+    6:  ("#dc3545", "#fff"),  # 不予登记
+    7:  ("#198754", "#fff"),  # 登记成功
+    8:  ("#495057", "#fff"),  # 终止登记
+    9:  ("#495057", "#fff"),  # 登记撤销
+    10: ("#6c757d", "#fff"),  # 未续展失效
+    11: ("#495057", "#fff"),  # 视为撤回
+    12: ("#0d6efd", "#fff"),  # 待审核
+    13: ("#198754", "#fff"),  # 续展登记
+    14: ("#dc3545", "#fff"),  # 批量登记失败
+    15: ("#6c757d", "#fff"),  # 撤回审查
+    16: ("#ffc107", "#000"),  # 撤回补正
+    17: ("#6f42c1", "#fff"),  # 待发证
 }
+_REMOVED_STYLE = ("#dc3545", "#fff")  # 已消失（differ 标记，非平台状态）
 _DEFAULT_STYLE = ("#6c757d", "#fff")
 
 
-def _badge_style(status_label: str) -> str:
-    bg, fg = _STATUS_STYLE.get(status_label, _DEFAULT_STYLE)
+def _style_str(bg: str, fg: str) -> str:
     return (
         f"background:{bg};color:{fg};padding:2px 8px;"
         "border-radius:4px;font-size:0.78em;white-space:nowrap;"
         "display:inline-block;font-weight:500;"
     )
+
+
+def _badge_style(status_code) -> str:
+    try:
+        code = int(status_code)
+    except (TypeError, ValueError):
+        code = None
+    bg, fg = _STATUS_STYLE.get(code, _DEFAULT_STYLE)
+    return _style_str(bg, fg)
 
 
 _TEMPLATE = """<!doctype html>
@@ -268,7 +286,7 @@ def generate_report(
                 "data_type":   r.get("dataRegDataType", ""),
                 "apply_time":  _fmt_ts(r.get("dataRegApplyTime")),
                 "status_label": status_label,
-                "badge_style":  _badge_style(status_label),
+                "badge_style":  _badge_style(r.get("dataRegAuditStatus")),
                 "row_class":   row_class,
                 "change_note": change_note,
             })
@@ -282,7 +300,7 @@ def generate_report(
                 "data_type":   r.get("dataRegDataType", ""),
                 "apply_time":  _fmt_ts(r.get("dataRegApplyTime")),
                 "status_label": "已消失",
-                "badge_style":  _badge_style("已消失"),
+                "badge_style":  _style_str(*_REMOVED_STYLE),
                 "row_class":   "row-removed",
                 "change_note": "⚠ 记录消失",
             })

@@ -9,6 +9,15 @@ class LoginError(ZJIPError):
     """Login failed for any reason."""
 
 
+class CredentialsRejectedError(LoginError):
+    """The platform explicitly rejected the account/password pair.
+
+    Distinct from transport failures / unexpected page states so the lockout
+    protection (status_store failure streak) only counts genuine rejections —
+    a platform outage must never pause an account's scheduled scans.
+    """
+
+
 class CaptchaRequiredError(LoginError):
     """Slider captcha appeared — manual intervention required.
 

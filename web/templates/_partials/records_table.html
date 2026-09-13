@@ -18,7 +18,7 @@
     <td class="px-4 py-2.5 text-xs text-gray-400 dark:text-gray-500 whitespace-nowrap">{{ r.industry or '—' }}</td>
     <td class="px-4 py-2.5 font-mono text-xs text-gray-400 dark:text-gray-500 whitespace-nowrap">{{ r.apply_date }}</td>
     <td class="px-4 py-2.5">
-      <span class="px-2 py-0.5 rounded-full text-xs s-pill-{{ r.status_code }}">{{ r.status_label }}</span>
+      <span class="px-2 py-0.5 rounded-full text-xs s-pill-{{ r.status_code if r.status_code in AUDIT_STATUS else 'x' }}">{{ r.status_label }}</span>
     </td>
     <td class="px-4 py-2.5 text-xs whitespace-nowrap">
       {% for f in r.attachments %}

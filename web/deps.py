@@ -62,6 +62,41 @@ STATUS_COLORS: dict[int, dict[str, str]] = {
 }
 
 
+def int_or_none(v) -> int | None:
+    """Coerce a raw JSON status code (sometimes a string) to int, else None."""
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+# Account-dot severity, shared by dashboard / api / view (was three copies).
+# red = needs urgent action; amber = needs correction.
+_DOT_RED_CODES = {6, 4, 8, 14}    # 不予登记 / 异议 / 终止登记 / 批量登记失败
+_DOT_AMBER_CODES = {2, 16}        # 待补正 / 撤回补正
+
+
+def account_dot(status_counts: dict[int, int]) -> str:
+    if any(status_counts.get(c, 0) > 0 for c in _DOT_RED_CODES):
+        return "red"
+    if any(status_counts.get(c, 0) > 0 for c in _DOT_AMBER_CODES):
+        return "amber"
+    return "green"
+
+
+def in_year(ms: int | None, year: int | None) -> bool:
+    """True if the ms-timestamp falls in `year` (Asia/Shanghai); no filter when None."""
+    if year is None:
+        return True
+    if not ms:
+        return False
+    return datetime.fromtimestamp(ms / 1000, tz=_SHANGHAI_TZ).year == year
+
+
+def current_year() -> int:
+    return datetime.now(_SHANGHAI_TZ).year
+
+
 def _fmt_time(ts_str: str | None) -> str:
     """Format ISO timestamp as 'MM-DD HH:MM' in Asia/Shanghai (UTC+8)."""
     if not ts_str:

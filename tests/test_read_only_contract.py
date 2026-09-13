@@ -131,7 +131,7 @@ def test_full_fetch_and_attachment_sync_only_issue_reads(monkeypatch, tmp_path):
 
     monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", fake_send)
 
-    records = scraper.fetch_all_records("tok")
+    records = scraper.fetch_all_records("tok").records
     attachments.sync_attachments("tok", "公司", records)
 
     assert seen, "expected platform calls"
