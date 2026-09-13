@@ -6,9 +6,9 @@ import asyncio
 import base64
 import os
 import secrets
-from urllib.parse import urlparse
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
@@ -16,14 +16,53 @@ from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse,
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
-from web import auth, login_guard
-from web.routes import accounts, api, attachments, changes, dashboard, login, notify, records, reports, settings, view
-from web.sse import router as sse_router, start_watcher
-
+# ---------------------------------------------------------------------------
+# Process set-up — MUST stay above every `web.*` / `src.*` import below.
+#
+# Production runs `uvicorn web.app:app`, so importing this module is the only
+# hook the command line offers, and two things have to happen first:
+#
+#   1. load_dotenv(): web.auth reads WEB_USER/WEB_PASS/SESSION_SECRET/
+#      VIEW_TOKEN from os.environ at IMPORT time, and logging_setup reads the
+#      ZJIP_LOG_* knobs. python-dotenv never overrides an already-set
+#      variable, so a later call cannot repair a module that already read the
+#      unset defaults.
+#   2. setup_logging("web"): that same import-time code also LOGS — web.auth
+#      warns "VIEW_TOKEN 未配置…" whenever the public read-only page is open
+#      to everyone. With the route imports first, that warning was emitted
+#      through loguru's DEFAULT sink, which is bare stderr (ANSI-coloured on a
+#      terminal) and writes no file at all — so the line never reached
+#      logs/web_*.log and was invisible to anyone reading the file log after
+#      the fact. setup_logging() installs the real sinks, so it has to win the
+#      race against the modules that log while being imported.
+#
+# Only the stdlib, dotenv and third-party libraries that configure nothing at
+# import (fastapi, loguru) may sit above this block. The E402s below are
+# deliberate, not leftovers.
+# ---------------------------------------------------------------------------
 _HERE = Path(__file__).parent
 load_dotenv(_HERE.parent / ".env")
+
 from src.logging_setup import setup_logging  # noqa: E402 — .env may set ZJIP_LOG_* first
+
 setup_logging("web")
+
+from web import auth, login_guard  # noqa: E402 — logs at import; needs the sinks above
+from web.routes import (  # noqa: E402 — same reason
+    accounts,
+    api,
+    attachments,
+    changes,
+    dashboard,
+    health,
+    login,
+    notify,
+    records,
+    reports,
+    settings,
+    view,
+)
+from web.sse import router as sse_router, start_watcher  # noqa: E402 — same reason
 
 _WEB_USER = os.getenv("WEB_USER", "admin")
 _WEB_PASS = os.getenv("WEB_PASS", "changeme")
@@ -158,10 +197,12 @@ async def _auth_middleware(request: Request, call_next) -> Response:  # type: ig
             f"path={path}"
         )
         return Response("跨站请求被拒绝", status_code=403)
-    # 公开路径：只读展示页、静态资源、登录/登出
+    # 公开路径：只读展示页、静态资源、登录/登出、健康检查
+    # /health must be here or the deploy probe gets 302→/login, which reads as
+    # "up" to anything that only checks for a non-5xx — see web/routes/health.py.
     if (path == "/view" or path.startswith("/view/")
             or path.startswith("/static/")
-            or path in ("/favicon.ico", "/login", "/logout", "/robots.txt")):
+            or path in ("/favicon.ico", "/health", "/login", "/logout", "/robots.txt")):
         return await call_next(request)
     # 小程序 API：X-API-Key 或 Basic 管理员
     if path.startswith("/api/"):
@@ -203,6 +244,7 @@ async def robots() -> PlainTextResponse:
     """Nothing here should ever be indexed — /view lists client companies."""
     return PlainTextResponse("User-agent: *\nDisallow: /\n")
 
+app.include_router(health.router)
 app.include_router(login.router)
 app.include_router(sse_router)
 app.include_router(dashboard.router)
