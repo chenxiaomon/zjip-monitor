@@ -19,6 +19,10 @@
   {% endfor %}
 </div>
 
+{# 一个 SSE 连接供全页复用：横幅也要跟着巡检自动刷新，所以容器从这里就开始。 #}
+<div hx-ext="sse" sse-connect="/sse">
+{% include "_partials/ops_banner.html" %}
+
 {% if login_alerts %}
 <div class="mb-4 px-4 py-3 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-sm text-red-700 dark:text-red-400">
   <div class="font-medium mb-1"><i class="ti ti-alert-circle"></i> 登录异常，以下账号需要关注：</div>
@@ -33,7 +37,6 @@
 </div>
 {% endif %}
 
-<div hx-ext="sse" sse-connect="/sse">
   {% include "_partials/metric_cards.html" %}
   <h2 class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">账号状态</h2>
   {% include "_partials/account_grid.html" %}
