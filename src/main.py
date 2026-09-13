@@ -707,7 +707,8 @@ def run_all(*, force_login: bool = False, trigger: str = "cli") -> dict[str, Any
     # saved, so unsent changes would never be notified again.
     try:
         sent = notify_batch(diffs, fetch_time=run_time)
-        if diffs and not sent:
+        # `diffs` also holds no-change results, so ask the diffs themselves.
+        if not sent and any(d.has_changes for d in diffs.values()):
             logger.info("有变更但没有启用任何通知渠道 — 变更只在控制台可见")
     except Exception as exc:
         logger.error(f"Batch notification failed (non-fatal): {exc!r}")
