@@ -13,6 +13,10 @@
 - 支持命令行一次运行、定时守护进程和 Web 控制台
 - Web 控制台带 HTTP Basic Auth，默认监听 `127.0.0.1:8000`；「登记记录」页支持按数据名称 / 登记号 / 公司关键字搜索
 - 巡检/登录结果持久化到 `data/control/accounts_status.json`：定时巡检失败、部分抓取、平台总数与本地不一致都会在界面上标出
+- 控制台顶部**运维横幅**：失败账号过多、长时间无成功巡检、磁盘告急、附件超量、巡检进程卡死、定时巡检暂停、公司名脱敏后重名
+- **磁盘守护**：剩余空间低于阈值时停止下载附件；每轮巡检结束清理过期快照/报表并写一份用量快照
+- **`GET /health`** 健康检查端点（免鉴权，`?strict=1` 在系统 degraded 时返回 503），供部署脚本与外部探针使用
+- 三个进程统一的日志配置，控制台进程也落盘到 `logs/web_YYYY-MM-DD.log`
 
 ## 账号管理与改密码
 
@@ -75,6 +79,50 @@ python scripts/decrypt_accounts.py --out config/accounts.yaml   # 导出明文�
   时候恰恰是巡检失败的时候；清理全程持有全局运行锁，不会和另一个进程的写入打架。
 - 每轮结束写一份 `data/control/disk_stats.json`（各目录用量与剩余空间），控制台横幅与
   `/health` 都读它。
+
+## 运维横幅与健康检查
+
+三个通知渠道（钉钉/企业微信/邮件）默认全部关闭，所以运维告警的出口是**控制台顶部横幅**
+和日志。七项检查：
+
+| 检查 | 触发条件 | 阈值来源 |
+|---|---|---|
+| 失败账号过多 | 本轮 status 不是 ok/partial 的账号数达到阈值 | `ops_alerts.min_failed_accounts` |
+| 长时间无成功巡检 | 所有账号最近一次成功距今超过阈值，或从未成功过 | `ops_alerts.stale_hours` |
+| 磁盘告急 | 剩余空间低于阈值（附件下载已暂停） | `disk.min_free_mb` |
+| 附件目录超量 | `data/attachments/` 总量超过阈值 | `attachments.max_total_mb` |
+| 巡检进程卡死 | 持锁进程还活着但心跳已停 | — |
+| 定时巡检已暂停 | 控制台里主动暂停了 | — |
+| 公司名重名 | 两家公司脱敏后同名，快照与附件会互相覆盖 | — |
+
+- 告警去重记在 `data/control/ops_alerts.json`：新激活时打一条 critical/warning 日志，
+  恢复时打一条 info，持续存在的不再刷屏。日志里搜 `运维告警[` 可查全部激活/恢复记录。
+  这个文件可以安全删除，删掉后下一轮会重新激活并重打日志。
+- 分组账号的横幅只统计自己能看到的企业；磁盘、卡死、暂停这类系统级告警对所有人可见。
+- 之后如果启用了任一通知渠道，同样的告警会自动推送，不需要额外配置。
+
+`GET /health` 返回 JSON：版本（来自服务器上的 `RELEASE`）、控制台启动时间、最近一轮巡检、
+上次成功巡检距今小时数、各状态计数、磁盘用量，以及 `checks[]` 逐项结论。
+
+- **它是免鉴权的公开端点**（服务器只有 IP、nginx 只开 80 明文），所以响应里只有计数、时间、
+  状态码和阈值，**绝不能往里加企业名、用户名、错误原文或文件路径**——有测试专门拦这件事。
+- 不带参数永远返回 200（方便直接 curl 读 JSON）；`?strict=1` 才会在任一检查不通过时返回 503。
+- degraded 不等于部署失败：`deploy.sh` 收到 503 会打印 JSON 并警告，仍算部署成功。
+  排查看 `checks[]` 里 `ok: false` 那一项的 `detail`。
+- 全新安装在第一轮巡检成功之前，`?strict=1` 会返回 503（`recent_success` 为红），属预期。
+
+## 日志
+
+三个进程共用 `src/logging_setup.py`：
+
+| 进程 | 文件 | 保留 |
+|---|---|---|
+| `run_daemon.py` / `run_once.py` | `logs/run_YYYY-MM-DD.log` | `retention.logs_keep_days`（默认 30 天） |
+| 控制台（`uvicorn web.app:app`） | `logs/web_YYYY-MM-DD.log` | `retention.web_logs_keep_days`（默认 14 天） |
+
+文件日志是 DEBUG 级、每天 0 点轮转；stderr 是 INFO 级，只有连着终端时才上色（journald 里
+不再有转义码）。uvicorn 与 APScheduler 的日志也汇进同一份文件。
+`ZJIP_LOG_TO_FILE=0` 只输出到 stderr，`ZJIP_LOG_DIR` 改目录。
 
 ## 本地启动
 
