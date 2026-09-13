@@ -79,3 +79,13 @@ def get_settings() -> dict:
         with _lock:
             _cache = (key, data)
     return copy.deepcopy(data)
+
+
+def invalidate() -> None:
+    """Drop the cached parse. Called right after the console writes
+    settings.yaml: the file key normally changes, but on a coarse-mtime
+    filesystem a same-size rewrite inside one tick would otherwise keep
+    serving the previous content to this process."""
+    global _cache
+    with _lock:
+        _cache = None

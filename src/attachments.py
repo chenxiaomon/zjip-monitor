@@ -27,6 +27,7 @@ from urllib.parse import urlparse
 import requests
 from loguru import logger
 
+from . import diskstat
 from .exceptions import TokenExpiredError
 from .fsutil import atomic_write_text
 from .runtime_settings import attachment_settings
@@ -200,12 +201,24 @@ def sync_attachments(
     Idempotent: each record is only re-queried when its audit status differs
     from the manifest written at last successful sync.
 
+    Disk guard: nothing is downloaded while free space is under settings.yaml
+    → disk.min_free_mb — checked once before opening a session and again
+    before every file, since a big first sync can cross the floor mid-way.
+    A record interrupted by the guard keeps no manifest, so it is retried.
+
     Returns:
         List of newly downloaded file paths.
     """
     settings = _load_settings()
     att_cfg = settings.get("attachments", {})
     if not att_cfg.get("enabled", True):
+        return []
+    disk = diskstat.check_free()
+    if disk.low:
+        logger.warning(
+            f"[{company}] 磁盘剩余 {disk.free_mb:.0f}MB 低于 "
+            f"disk.min_free_mb={disk.min_free_mb:g}MB — 本轮跳过附件下载"
+        )
         return []
     # Separate switch for the certificate lookup: it is the one platform call
     # whose path carries a write-sounding name ("confirmation"). It is a query
@@ -217,8 +230,11 @@ def sync_attachments(
 
     session = _build_session(token)
     downloaded: list[Path] = []
+    low_disk = False  # flips once, ends the account's sync, warns once
     try:
         for r in records:
+            if low_disk:
+                break
             if cancel:
                 cancel.checkpoint()
             reg_no = r.get("dataRegNo")
@@ -246,6 +262,16 @@ def sync_attachments(
                 dest = rec_dir / fname
                 if dest.exists():
                     continue
+                disk = diskstat.check_free()
+                if disk.low:
+                    logger.warning(
+                        f"[{company}] 磁盘剩余 {disk.free_mb:.0f}MB 低于 "
+                        f"disk.min_free_mb={disk.min_free_mb:g}MB — 停止本账号后续附件下载，"
+                        "未完成的记录下轮重试"
+                    )
+                    low_disk = True
+                    ok = False  # keep this record un-manifested → retried next run
+                    break
                 if _download_file(item["url"], dest):
                     downloaded.append(dest)
                     if fname not in files:
