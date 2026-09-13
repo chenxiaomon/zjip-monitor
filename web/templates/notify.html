@@ -11,6 +11,7 @@
     <h2 class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">渠道配置</h2>
     {% for channel in ['dingtalk', 'wechat', 'email'] %}
     {% set ch_cfg = cfg.get(channel, {}) %}
+    {% set error = errors.get(channel, '') %}
     {% include "_partials/notify_channel.html" %}
     {% endfor %}
   </div>
