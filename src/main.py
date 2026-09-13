@@ -32,6 +32,7 @@ from .exceptions import (
     CaptchaRequiredError,
     CredentialsRejectedError,
     LoginError,
+    PlatformUnavailableError,
     RunCancelled,
     ScraperError,
     TokenExpiredError,
@@ -236,9 +237,14 @@ def _record_login_failure(account: Account, exc: Exception) -> None:
     """Durable bookkeeping for a failed login. Only genuine credential
     rejections count toward the lockout streak (a platform outage must not
     pause scheduled scans); a notification goes out when a new failure streak
-    starts or the account just got auto-paused — at most twice per streak."""
+    starts or the account just got auto-paused — at most twice per streak.
+
+    A platform-side refusal (captcha demanded / throttled / maintenance) gets
+    its own status so the console can say what to do about it: nothing but
+    wait, as opposed to "go fix the password"."""
+    kind = "platform_error" if isinstance(exc, PlatformUnavailableError) else "login_failed"
     status_store.record_scan(
-        account.username, account.company, ok=False, error=str(exc), kind="login_failed"
+        account.username, account.company, ok=False, error=str(exc), kind=kind
     )
     if not isinstance(exc, CredentialsRejectedError):
         return

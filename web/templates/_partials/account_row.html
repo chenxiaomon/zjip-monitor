@@ -83,7 +83,8 @@
     {{ row.last_check | fmt_time }}
     {% if ss and ss.status and ss.status != 'ok' and scan_task != 'running' %}
     {% set kind_label = {'partial': '部分抓取', 'login_failed': '登录失败', 'captcha_required': '需验证码',
-                         'scrape_failed': '抓取失败', 'shrink_refused': '数量骤减·未保存',
+                         'platform_error': '平台暂时不可用', 'scrape_failed': '抓取失败',
+                         'shrink_refused': '数量骤减·未保存',
                          'timeout': '巡检超时', 'error': '巡检异常'}.get(ss.status, '巡检失败') %}
     {% if ss.status == 'partial' %}
     <div class="mt-0.5 font-sans whitespace-normal">

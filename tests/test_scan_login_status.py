@@ -194,3 +194,25 @@ def test_token_expired_midfetch_drops_cache_and_records_the_real_login(monkeypat
     entry = status_store.get_status("u1")
     assert entry["consecutive_login_failures"] == 0   # the forced re-login really happened
     assert entry["last_login_ok_at"] is not None
+
+
+def test_platform_refusal_gets_its_own_status_and_no_streak(monkeypatch, account, notified):
+    """验证码/限流/维护 is not "go fix the password": it must not count toward
+    the lockout streak, must not notify, and must be labelled as what it is."""
+    from src.exceptions import PlatformUnavailableError
+
+    def _raise_throttled(*a, **k):
+        raise PlatformUnavailableError(
+            "[u1] 平台暂时无法登录（请求过于频繁，code=500）：操作过于频繁", reason="throttled"
+        )
+
+    monkeypatch.setattr(main, "get_token", _raise_throttled)
+    for _ in range(5):
+        assert "login_failed" in main.scan_account_and_notify(account)["error"]
+
+    status_store._read_cache = None
+    entry = status_store.get_status("u1")
+    assert entry["status"] == "platform_error"
+    assert entry["consecutive_login_failures"] == 0
+    assert status_store.is_login_paused("u1") is False
+    assert notified == []

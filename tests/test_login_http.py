@@ -329,3 +329,49 @@ def test_rejection_by_message_pattern_without_known_code(settings, browser_spy, 
     with pytest.raises(CredentialsRejectedError, match="锁定"):
         login.get_token(ACCOUNT, PASSWORD, force_refresh=True)
     assert browser_spy == []
+
+
+# ---------------------------------------------------------------------------
+# Platform-side refusals (captcha / throttled / maintenance): not our password,
+# so they must not feed the lockout streak — but they get their own type so the
+# console can say what the operator should (not) do about it.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "message,reason",
+    [
+        ("请输入验证码", "captcha"),
+        ("操作过于频繁，请稍后再试", "throttled"),
+        ("系统繁忙，请稍后再试", "maintenance"),
+        ("平台维护中", "maintenance"),
+    ],
+)
+def test_platform_refusal_is_typed_with_its_reason(
+    settings, browser_spy, monkeypatch, message, reason
+):
+    from src.exceptions import CredentialsRejectedError, PlatformUnavailableError
+
+    _wire(monkeypatch, lambda r: _response(
+        r, body=json.dumps({"code": 500, "data": None, "message": message}).encode()
+    ))
+    with pytest.raises(PlatformUnavailableError) as excinfo:
+        login.get_token(ACCOUNT, PASSWORD, force_refresh=True)
+
+    assert excinfo.value.reason == reason
+    assert message in str(excinfo.value)
+    assert not isinstance(excinfo.value, CredentialsRejectedError)
+    assert browser_spy == [], "a throttled platform must not also get a Chromium hit"
+    assert not login._session_path(ACCOUNT).exists()
+
+
+def test_unrecognised_platform_code_stays_a_plain_login_error(settings, monkeypatch):
+    """Only messages we can actually classify get the specific type; an unknown
+    code must not be relabelled as "平台暂时不可用" on a guess."""
+    from src.exceptions import PlatformUnavailableError
+
+    _wire(monkeypatch, lambda r: _response(
+        r, body=json.dumps({"code": 9999, "data": None, "message": "unexpected"}).encode()
+    ))
+    with pytest.raises(LoginError) as excinfo:
+        login.get_token(ACCOUNT, PASSWORD, force_refresh=True)
+    assert not isinstance(excinfo.value, PlatformUnavailableError)

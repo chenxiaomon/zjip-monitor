@@ -18,6 +18,21 @@ class CredentialsRejectedError(LoginError):
     """
 
 
+class PlatformUnavailableError(LoginError):
+    """The platform refused the login for a reason that is not our credentials:
+    a captcha demand, rate limiting, or maintenance/busy.
+
+    Kept apart from both CredentialsRejectedError (which feeds the lockout
+    streak) and the generic LoginError so the console can say *why* an account
+    stopped working, and so a throttled platform is never hammered with a
+    browser retry on top of the HTTP attempt.
+    """
+
+    def __init__(self, message: str, reason: str = "unavailable"):
+        super().__init__(message)
+        self.reason = reason  # "captcha" | "throttled" | "maintenance"
+
+
 class CaptchaRequiredError(LoginError):
     """Slider captcha appeared — manual intervention required.
 

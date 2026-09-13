@@ -38,6 +38,7 @@ from .exceptions import (
     CaptchaRequiredError,
     CredentialsRejectedError,
     LoginError,
+    PlatformUnavailableError,
     TokenExtractionError,
 )
 from .fsutil import atomic_write_text
@@ -86,11 +87,34 @@ DEFAULT_LOGIN_METHOD = "auto"
 # does NOT match stays a plain LoginError: the lockout streak (which pauses
 # scheduled scans) must never be fed by a platform outage, maintenance page,
 # rate limit, or "系统繁忙" application code.
+_REASON_LABELS = {"captcha": "需要验证码", "throttled": "请求过于频繁", "maintenance": "平台维护或繁忙"}
+
 _REJECTION_CODES = {1001}  # observed live: 账号或密码错误
 _REJECTION_PATTERNS = (
     "账号或密码", "密码错误", "密码不正确", "账号不存在", "用户不存在",
     "锁定", "禁用", "冻结",
 )
+
+
+# Platform-side refusals. None of them mean the stored password is wrong, so
+# none may feed the lockout streak — but each needs its own name in the console
+# ("请求过频" is not the same operator action as "平台维护").
+_PLATFORM_REASON_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("captcha", ("验证码", "captcha", "滑块", "人机")),
+    # NB "请稍后再试" is deliberately absent: it tails almost every platform
+    # error message and would swallow the maintenance case below.
+    ("throttled", ("过于频繁", "过频", "频繁", "次数过多", "限流", "too many", "rate limit")),
+    ("maintenance", ("维护", "系统繁忙", "服务繁忙", "暂不可用", "升级中", "unavailable")),
+)
+
+
+def _platform_reason(message: str) -> str | None:
+    """Classify a non-rejection platform message, or None when unrecognised."""
+    text = (message or "").lower()
+    for reason, patterns in _PLATFORM_REASON_PATTERNS:
+        if any(p.lower() in text for p in patterns):
+            return reason
+    return None
 
 
 def _is_credential_rejection(code, message: str) -> bool:
@@ -322,9 +346,18 @@ def _login_via_http(account: str, password: str, base_url: str) -> str:
             raise CredentialsRejectedError(
                 f"[{account}] Login rejected by platform (code={code}): {message or '(no message)'}"
             )
-        # Server-side application error (维护/繁忙/限流/未知码): fail loudly but
+        # Server-side application error (验证码/限流/维护/未知码): fail loudly but
         # never as a rejection — a browser retry would get the same envelope,
-        # and the lockout streak must not count it.
+        # and the lockout streak must not count it. Deliberately no browser
+        # fallback either: retrying a throttled platform with a second, heavier
+        # request is the wrong answer.
+        reason = _platform_reason(message)
+        if reason:
+            raise PlatformUnavailableError(
+                f"[{account}] 平台暂时无法登录（{_REASON_LABELS[reason]}，code={code}）："
+                f"{message or '(no message)'}",
+                reason=reason,
+            )
         raise LoginError(
             f"[{account}] Platform login error (code={code}): {message or '(no message)'}"
         )

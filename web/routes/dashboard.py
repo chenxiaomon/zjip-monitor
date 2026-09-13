@@ -64,11 +64,15 @@ def _dashboard_ctx(request: Request, year: int | None = None) -> dict:
         ss = all_status.get(acc.username)
         scan_failed = bool(ss and ss.get("status") not in (None, "ok", "partial"))
         scan_partial = bool(ss and ss.get("status") == "partial")
-        if ss and (ss.get("login_paused") or ss.get("status") == "login_failed"):
+        if ss and (
+            ss.get("login_paused")
+            or ss.get("status") in ("login_failed", "platform_error", "captcha_required")
+        ):
             login_alerts.append({
                 "company": acc.company,
                 "username": acc.username,
                 "paused": bool(ss.get("login_paused")),
+                "kind": ss.get("status"),
                 "error": ss.get("error"),
             })
 
