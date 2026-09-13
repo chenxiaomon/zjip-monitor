@@ -106,12 +106,24 @@ def _prune_data() -> None:
         logger.warning(f"Data pruning failed (non-fatal): {exc!r}")
 
 
-def _append_event(account: str, company: str, diff: DiffResult, ts: datetime) -> None:
-    """Append a diff event to data/events.jsonl and broadcast to web SSE if running."""
+def _append_event(
+    account: str,
+    company: str,
+    diff: DiffResult,
+    ts: datetime,
+    notified: dict[str, bool] | None = None,
+) -> None:
+    """Append a diff event to data/events.jsonl and broadcast to web SSE if running.
+
+    `notified` records what actually happened to the push for this event
+    ({channel: delivered}); None means the push is handled by the run-level
+    batch instead. Absent on historical events — readers must use .get().
+    """
     event: dict = {
         "account": account,
         "company": company,
         "timestamp": ts.isoformat(),
+        "notified": notified,
         "added": diff.added,
         "changed": [
             {
@@ -475,11 +487,13 @@ def scan_account_and_notify(
     status_store.record_scan(account.username, account.company, ok=True, fetch_meta=fetch_meta)
 
     # ── Notify if there are changes (non-fatal) ────────────────────────────
+    notified: dict[str, bool] | None = None
     if diff.has_changes and notify_inline:
         try:
-            notify(diff, fetch_time)
+            notified = notify(diff, fetch_time)
         except Exception as exc:
             logger.error(f"[{account.company}] Notification failed (non-fatal): {exc!r}")
+            notified = {"error": False}
     elif not diff.has_changes:
         logger.debug(f"[{account.company}] No changes — notification skipped")
 
@@ -487,7 +501,7 @@ def scan_account_and_notify(
     # saved and the durable status already says ok — a failed event write must
     # not bubble into _run_serial's catch-all and flip the status to error) ──
     try:
-        _append_event(account.username, account.company, diff, fetch_time)
+        _append_event(account.username, account.company, diff, fetch_time, notified=notified)
     except Exception as exc:
         logger.error(f"[{account.company}] events.jsonl append failed (non-fatal): {exc!r}")
 
@@ -692,7 +706,9 @@ def run_all(*, force_login: bool = False, trigger: str = "cli") -> dict[str, Any
     # Sent even when cancelled: completed accounts' snapshots are already
     # saved, so unsent changes would never be notified again.
     try:
-        notify_batch(diffs, fetch_time=run_time)
+        sent = notify_batch(diffs, fetch_time=run_time)
+        if diffs and not sent:
+            logger.info("有变更但没有启用任何通知渠道 — 变更只在控制台可见")
     except Exception as exc:
         logger.error(f"Batch notification failed (non-fatal): {exc!r}")
 

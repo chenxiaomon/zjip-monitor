@@ -350,34 +350,56 @@ def _send_email_text(subject: str, body: str, cfg: dict, tag: str) -> bool:
 # Dispatcher
 # ---------------------------------------------------------------------------
 
-def notify(diff: DiffResult, fetch_time: Optional[datetime] = None) -> None:
+def _report(results: dict[str, bool], tag: str) -> dict[str, bool]:
+    """Log the channels that failed and hand the outcome back to the caller.
+
+    Every low-level sender already returns False on failure, but the three
+    dispatchers used to throw that away, so a rate-limited webhook or a dead
+    SMTP host produced one ERROR line and nothing else: the snapshot had
+    already been saved, so the same change was never detected — or pushed —
+    again.
+    """
+    failed = [name for name, ok in results.items() if not ok]
+    if failed:
+        logger.warning(f"[{tag}] 推送失败的渠道：{', '.join(failed)} — 本批变更不会再次推送")
+    return results
+
+
+def notify(diff: DiffResult, fetch_time: Optional[datetime] = None) -> dict[str, bool]:
     """Send notifications for *diff* on all enabled channels.
 
-    Silently returns if diff.has_changes is False (caller should check first,
-    but this is a safe guard).
+    Returns {channel: delivered} for the channels that were enabled — an empty
+    dict means nothing was even attempted. Silently returns if
+    diff.has_changes is False (caller should check first, but this is a safe
+    guard).
     """
     if not diff.has_changes:
-        return
+        return {}
 
     if fetch_time is None:
         fetch_time = datetime.now(timezone.utc)
 
     cfg = _load_notify_cfg()
+    results: dict[str, bool] = {}
 
     dingtalk_cfg = cfg.get("dingtalk", {})
     if dingtalk_cfg.get("enabled"):
-        send_dingtalk(diff, fetch_time, dingtalk_cfg)
+        results["dingtalk"] = send_dingtalk(diff, fetch_time, dingtalk_cfg)
 
     wechat_cfg = cfg.get("wechat", {})
     if wechat_cfg.get("enabled"):
-        send_wechat(diff, fetch_time, wechat_cfg)
+        results["wechat"] = send_wechat(diff, fetch_time, wechat_cfg)
 
     email_cfg = cfg.get("email", {})
     if email_cfg.get("enabled"):
-        send_email(diff, fetch_time, email_cfg)
+        results["email"] = send_email(diff, fetch_time, email_cfg)
+
+    return _report(results, diff.company)
 
 
-def notify_login_failure(company: str, username: str, error: str, *, paused: bool = False) -> None:
+def notify_login_failure(
+    company: str, username: str, error: str, *, paused: bool = False
+) -> dict[str, bool]:
     """Push a login-failure alert on every enabled channel.
 
     Called by main.py at most twice per failure streak (streak start + the
@@ -413,18 +435,22 @@ def notify_login_failure(company: str, username: str, error: str, *, paused: boo
     )
 
     cfg = _load_notify_cfg()
+    results: dict[str, bool] = {}
     dingtalk_cfg = cfg.get("dingtalk", {})
     if dingtalk_cfg.get("enabled"):
-        _send_dingtalk_text(title, md_text, dingtalk_cfg, tag=company)
+        results["dingtalk"] = _send_dingtalk_text(title, md_text, dingtalk_cfg, tag=company)
     wechat_cfg = cfg.get("wechat", {})
     if wechat_cfg.get("enabled"):
-        _send_wechat_text(md_text, wechat_cfg, tag=company)
+        results["wechat"] = _send_wechat_text(md_text, wechat_cfg, tag=company)
     email_cfg = cfg.get("email", {})
     if email_cfg.get("enabled"):
-        _send_email_text(title, plain_text, email_cfg, tag=company)
+        results["email"] = _send_email_text(title, plain_text, email_cfg, tag=company)
+    return _report(results, company)
 
 
-def notify_batch(diffs: dict[str, DiffResult], fetch_time: Optional[datetime] = None) -> None:
+def notify_batch(
+    diffs: dict[str, DiffResult], fetch_time: Optional[datetime] = None
+) -> dict[str, bool]:
     """Send ONE aggregated message per channel for a whole run's changes.
 
     Called by run_all() after all accounts finish, instead of one message per
@@ -433,29 +459,33 @@ def notify_batch(diffs: dict[str, DiffResult], fetch_time: Optional[datetime] = 
     """
     with_changes = {c: d for c, d in diffs.items() if d.has_changes}
     if not with_changes:
-        return
+        return {}
     if fetch_time is None:
         fetch_time = datetime.now(timezone.utc)
 
     if len(with_changes) == 1:
         # Single company — keep the familiar per-company message format
-        notify(next(iter(with_changes.values())), fetch_time)
-        return
+        return notify(next(iter(with_changes.values())), fetch_time)
 
     cfg = _load_notify_cfg()
     tag = f"批量 {len(with_changes)} 家"
     title = f"数知产权状态更新 - {len(with_changes)} 家公司有变更"
     md_text = _truncate_md(_format_batch_message(with_changes, fetch_time))
 
+    results: dict[str, bool] = {}
     dingtalk_cfg = cfg.get("dingtalk", {})
     if dingtalk_cfg.get("enabled"):
-        _send_dingtalk_text(title, md_text, dingtalk_cfg, tag)
+        results["dingtalk"] = _send_dingtalk_text(title, md_text, dingtalk_cfg, tag)
 
     wechat_cfg = cfg.get("wechat", {})
     if wechat_cfg.get("enabled"):
-        _send_wechat_text(md_text, wechat_cfg, tag)
+        results["wechat"] = _send_wechat_text(md_text, wechat_cfg, tag)
 
     email_cfg = cfg.get("email", {})
     if email_cfg.get("enabled"):
         # Email has no size limit — send the full plain-text version
-        _send_email_text(title, _format_batch_plain(with_changes, fetch_time), email_cfg, tag)
+        results["email"] = _send_email_text(
+            title, _format_batch_plain(with_changes, fetch_time), email_cfg, tag
+        )
+
+    return _report(results, tag)

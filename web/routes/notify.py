@@ -28,16 +28,26 @@ def _redact_for_display(channel: str, ch_cfg: dict) -> dict:
     return masked
 
 
+_CHANNEL_LABELS = {"dingtalk": "钉钉", "wechat": "企业微信", "email": "邮件"}
+
+
 def _notify_ctx() -> dict:
     cfg = load_settings().get("notify", {})
-    # Recent events with changes (proxy for push log)
+    # These are CHANGE events, not push receipts. The page used to badge every
+    # one of them 「已发送」 purely because some channel was enabled — so a
+    # rate-limited webhook or a dead SMTP host still read as "通知正常".
     all_events = read_events(hours=24 * 30, limit=100)
-    push_log = [
+    change_log = [
         e for e in all_events
         if e.get("changed") or e.get("added") or e.get("removed")
     ][:30]
-    any_enabled = any(cfg.get(ch, {}).get("enabled") for ch in _CHANNELS)
-    return {"cfg": cfg, "push_log": push_log, "any_enabled": any_enabled}
+    enabled = [_CHANNEL_LABELS[ch] for ch in _CHANNELS if cfg.get(ch, {}).get("enabled")]
+    return {
+        "cfg": cfg,
+        "change_log": change_log,
+        "enabled_labels": enabled,
+        "any_enabled": bool(enabled),
+    }
 
 
 @router.get("/notify", response_class=HTMLResponse)
