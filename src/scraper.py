@@ -20,6 +20,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from .exceptions import RunCancelled, ScraperError, TokenExpiredError
+from .runtime_settings import scraper_settings
 from .settings_cache import get_settings
 
 # ---------------------------------------------------------------------------
@@ -215,6 +216,7 @@ def fetch_all_records(
         max_pages = int(scraper_cfg.get("max_pages", _DEFAULT_MAX_PAGES))
     except (TypeError, ValueError):
         max_pages = _DEFAULT_MAX_PAGES
+    page_delay = scraper_settings().page_delay_seconds
 
     session = _build_session(token, timeout=timeout)
 
@@ -277,9 +279,9 @@ def fetch_all_records(
                 )
                 break
             if cancel:
-                cancel.wait(0.5)  # polite crawl delay, cancellable per page
+                cancel.wait(page_delay)  # polite crawl delay, cancellable per page
             else:
-                time.sleep(0.5)
+                time.sleep(page_delay)
             try:
                 page_data = _fetch_page(session, base_url, page_num=page_num, page_size=page_size)
                 _, page_records = _parse_response(page_data, page_num=page_num)

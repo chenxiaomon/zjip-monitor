@@ -1,8 +1,24 @@
-"""Data retention tests for main._prune_data()."""
+"""Data retention tests for main._prune_data().
+
+Limits come from settings.yaml → retention.* (src/runtime_settings.py); the
+tests pin the DEFAULTS, i.e. the literals the code used before they became
+configurable.
+"""
 
 import time
 
+import pytest
+
 from src import main
+from src.runtime_settings import RetentionSettings
+
+_DEFAULTS = RetentionSettings()
+
+
+@pytest.fixture(autouse=True)
+def _defaults_only(isolated_settings):
+    """The temp settings.yaml has no `retention` section, so _prune_data()
+    runs on the defaults — a developer's real config cannot leak in."""
 
 
 def test_prune_keeps_recent_snapshots_per_company(tmp_path, monkeypatch):
@@ -21,7 +37,7 @@ def test_prune_keeps_recent_snapshots_per_company(tmp_path, monkeypatch):
 
     a = sorted(snaps.glob("公司A_*.json"))
     b = sorted(snaps.glob("公司B_*.json"))
-    assert len(a) == main._SNAPSHOTS_KEEP_PER_COMPANY
+    assert len(a) == _DEFAULTS.snapshots_keep_per_company
     assert a[0].name == "公司A_2026-07-11-0900.json"  # oldest 10 removed
     assert len(b) == 5  # untouched
 
@@ -31,7 +47,7 @@ def test_prune_rotates_large_events_file(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "_REPORTS_DIR", tmp_path / "reports")
     events = tmp_path / "events.jsonl"
     monkeypatch.setattr(main, "_EVENTS_FILE", events)
-    events.write_text("x" * (main._EVENTS_ROTATE_BYTES + 1))
+    events.write_text("x" * (_DEFAULTS.events_rotate_bytes + 1))
 
     main._prune_data()
 
@@ -51,7 +67,7 @@ def test_prune_removes_old_reports(tmp_path, monkeypatch):
     new = reports / "report_new.html"
     old.write_text("x")
     new.write_text("x")
-    stale = time.time() - (main._REPORTS_KEEP_DAYS + 1) * 86400
+    stale = time.time() - (_DEFAULTS.reports_keep_days + 1) * 86400
     import os
     os.utime(old, (stale, stale))
 
@@ -74,7 +90,7 @@ def test_prune_bounds_rotated_event_logs(tmp_path, monkeypatch):
     main._prune_data()
 
     kept = sorted(p.name for p in tmp_path.glob("events-*.jsonl"))
-    assert len(kept) == main._EVENTS_ROTATED_KEEP
+    assert len(kept) == _DEFAULTS.events_rotated_keep
     assert kept[0] == "events-20260104-000000.jsonl"  # the 3 oldest are gone
 
 
@@ -83,12 +99,12 @@ def test_rotation_and_pruning_happen_in_one_pass(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "_REPORTS_DIR", tmp_path / "reports")
     events = tmp_path / "events.jsonl"
     monkeypatch.setattr(main, "_EVENTS_FILE", events)
-    events.write_text("x" * (main._EVENTS_ROTATE_BYTES + 1))
+    events.write_text("x" * (_DEFAULTS.events_rotate_bytes + 1))
     for day in range(1, 7):
         (tmp_path / f"events-202601{day:02d}-000000.jsonl").write_text("x")
 
     main._prune_data()
 
     # 6 old + 1 fresh rotation, trimmed back to the keep limit
-    assert len(list(tmp_path.glob("events-*.jsonl"))) == main._EVENTS_ROTATED_KEEP
+    assert len(list(tmp_path.glob("events-*.jsonl"))) == _DEFAULTS.events_rotated_keep
     assert not events.exists()

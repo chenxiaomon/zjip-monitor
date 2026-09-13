@@ -1,34 +1,113 @@
+# zjip-monitor 运行配置示例。复制为 config/settings.yaml 后按需修改：
+#   cp config/settings.yaml.example config/settings.yaml
+#
+# 所有键都有默认值（就是下面写出的值），删掉或不写某个键 = 用默认值。
+# 文件按修改时间缓存，保存后下一次巡检/下一次刷新页面即生效，不用重启服务。
+# 数值类键填错（写成字符串、负数、留空）会回退到默认值，并在日志里提示一次。
+
+# 平台地址。所有平台请求（列表、通知书、证书）都只允许发往这个域名。
 base_url: "https://www.zjip.org.cn"
 
+# 账号分组：key → 界面上显示的中文名。
+# 账号文件 accounts.yaml 里每个账号的 group 字段、以及 .env 里分组用户
+# WEB_USERS="用户名:密码:分组key" 的分组key，都必须是这里的 key。
+groups:
+  group_a: "来源一"
+  group_b: "来源二"
+
+# ── 抓取（登记记录列表）────────────────────────────────────────────────────
 scraper:
+  # 每页请求条数。服务端实际固定返回约 10 条，此值仅作请求参数。默认 50
   page_size: 50
+  # 单次列表请求超时，秒。默认 30
   request_timeout_seconds: 30
-  # 分页安全上限（服务端固定每页约 10 条 → 300 页 ≈ 3000 条）；
-  # 服务端 totalSize 仅作对账参考，翻页以“空页/短页/无新记录”为准
+  # 分页安全上限（服务端每页约 10 条 → 300 页 ≈ 3000 条）；
+  # 服务端 totalSize 仅作对账参考，翻页以"空页/无新记录"为准。默认 300
   max_pages: 300
+  # 翻页之间的礼貌延迟，秒（对平台友好，避免被限流）。默认 0.5
+  page_delay_seconds: 0.5
 
-# 自动下载通知书/证书到 data/attachments/（状态变化时才请求，默认开启）
+# ── 附件（通知书 / 证书自动下载到 data/attachments/）──────────────────────
 attachments:
+  # 总开关。默认 true（记录状态变化时才请求，每条记录每次状态变化最多一次）
   enabled: true
+  # 证书查询开关。证书接口路径名带 confirmation，看起来像"确认"操作，
+  # 实际是只读查询（空请求体、只返回下载地址）；不放心可单独关掉。默认 true
+  certificates_enabled: true
+  # getNotification / confirmation 两个查询接口的超时，秒。默认 30
+  request_timeout_seconds: 30
+  # 文件本体（预签名 OSS 地址）下载超时，秒。默认 60
+  download_timeout_seconds: 60
+  # 每处理完一条记录后的礼貌延迟，秒。默认 0.5
+  crawl_delay_seconds: 0.5
+  # 单个文件大小上限，MB。通知书/证书都是小 PDF，超过即视为异常拒绝下载。默认 50
+  max_file_mb: 50
+  # data/attachments/ 目录总大小告警阈值，MB（超过后运维横幅提示）。默认 1024
+  max_total_mb: 1024
 
+# ── 登录 ────────────────────────────────────────────────────────────────
 login:
   # auto    — 先走 HTTP 直登（POST /v1/user/login，密码 md5），仅在网络/响应异常时回退浏览器（默认）
   # http    — 只用 HTTP 直登，失败即报错
   # browser — 只用 Playwright 浏览器登录（旧方式）
   method: auto
+  # 缓存 token 的最长使用时间，小时。默认 12
   token_max_age_hours: 12
   # 防锁号：同一账号连续 N 次被平台拒绝登录（密码错误等）后，
-  # 定时巡检自动跳过该账号，直到在控制台改密码或手动巡检成功；0 = 不暂停
+  # 定时巡检自动跳过该账号，直到在控制台改密码或手动巡检成功；0 = 不暂停。默认 3
   max_consecutive_failures: 3
   # 以下两项仅浏览器登录（method=browser 或 auto 回退时）生效
   headless: true
   browser: "chromium"
 
+# ── 巡检运行方式 ──────────────────────────────────────────────────────────
+run:
+  # 账号数 ≤ 此值时逐个串行巡检，否则用线程池并发；0 = 始终并发。默认 10
+  serial_max_accounts: 10
+  # 并发线程数。默认 3；生产机只有 1 vCPU / 961MB 内存，可考虑降为 1 或 2，
+  # 并发越高越容易触发平台限流、也越吃内存。
+  max_workers: 3
+  # 串行路径下两个账号之间的随机等待区间，秒（下限 / 上限）。默认 2.0 / 5.0
+  account_delay_min_seconds: 2.0
+  account_delay_max_seconds: 5.0
+  # 并发路径下单个账号的硬超时，秒。登录（≤120 秒）+ 翻页 + 附件通常 2 分钟内完成，
+  # 超过此值视为卡死，放弃该账号继续其余账号，保证本轮一定能结束并释放运行锁。默认 600
+  account_timeout_seconds: 600
+
+# ── 数据保留（每轮巡检结束时清理，防止磁盘被撑满）──────────────────────────
+retention:
+  # 每家企业保留最近多少份快照（data/snapshots/）。默认 30
+  snapshots_keep_per_company: 30
+  # HTML 报告保留天数（data/reports/）。默认 60
+  reports_keep_days: 60
+  # 变更事件日志 data/events.jsonl 超过多少 MB 就轮转成 events-时间戳.jsonl。默认 5
+  events_rotate_mb: 5
+  # 轮转出来的 events-*.jsonl 最多保留几个，多的按时间删除。默认 6
+  events_rotated_keep: 6
+  # 巡检日志 logs/run_*.log 保留天数。默认 30
+  logs_keep_days: 30
+  # 控制台日志 logs/web_*.log 保留天数。默认 14
+  web_logs_keep_days: 14
+
+# ── 运维提醒 ──────────────────────────────────────────────────────────────
+ops_alerts:
+  # 某企业超过多少小时没有巡检成功，账号卡片显示"数据可能过期"。默认 36
+  stale_hours: 36
+  # 本轮巡检失败账号数达到多少个时显示运维横幅。默认 3
+  min_failed_accounts: 3
+
+# ── 磁盘保护 ──────────────────────────────────────────────────────────────
+disk:
+  # 根分区剩余空间低于多少 MB 时：跳过附件下载 + 运维横幅提示。默认 500
+  min_free_mb: 500
+
+# ── 定时计划（cron，服务器时区为 UTC；北京时间 9:00/18:00 = UTC 1:00/10:00）──
 schedule:
   crons:
     - "0 9 * * *"
     - "0 18 * * *"
 
+# ── 通知渠道 ──────────────────────────────────────────────────────────────
 notify:
   dingtalk:
     enabled: false

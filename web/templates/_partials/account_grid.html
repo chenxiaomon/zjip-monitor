@@ -51,7 +51,7 @@
     </div>
     {% elif snap.stale %}
     <div class="text-xs text-gray-400 dark:text-gray-500 mb-1">
-      <i class="ti ti-clock-exclamation"></i> 超过 36 小时未巡检成功，数据可能过期
+      <i class="ti ti-clock-exclamation"></i> 超过 {{ stale_hours }} 小时未巡检成功，数据可能过期
     </div>
     {% endif %}
     <!-- Last check time -->
