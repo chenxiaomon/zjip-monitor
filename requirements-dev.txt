@@ -1,0 +1,7 @@
+# 开发/测试依赖。生产部署只装 requirements.txt（deploy.sh），
+# 这里的包不会进服务器 venv。
+-r requirements.txt
+
+pytest>=8.0
+# fastapi.testclient.TestClient 的硬依赖，用于路由层测试
+httpx>=0.27

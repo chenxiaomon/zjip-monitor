@@ -71,6 +71,20 @@ python run_web.py
 
 浏览器访问 `http://127.0.0.1:8000`，默认 Basic Auth 账号密码来自 `.env` 的 `WEB_USER` / `WEB_PASS`。
 
+## 运行测试
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+`pytest.ini` 已设置 `testpaths=tests` 与 `pythonpath=.`，所以裸 `pytest` 即可运行，
+`scripts/test_login.py`（手动排障脚本，不是测试）不会被收集。测试依赖只在
+`requirements-dev.txt` 中，`deploy.sh` 只安装 `requirements.txt`，不会进生产环境。
+
+测试用例自带隔离：账号状态文件、控制目录、settings.yaml、快照目录都指向临时路径，
+Web 用例通过 `tests/conftest.py` 固定的测试账号登录，不会读写真实数据。
+
 ## 不进仓库的文件
 
 以下文件包含本机配置、账号、token 或运行数据，已在 `.gitignore` 中排除：

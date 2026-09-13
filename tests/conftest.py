@@ -1,6 +1,34 @@
-import pytest
+"""Shared test fixtures.
 
-from src import control, status_store
+The environment is pinned BEFORE anything imports `web.app` / `web.auth`:
+both read os.environ at import time (admin credentials, session secret, API
+key, group users) and their `load_dotenv()` call does not override variables
+that are already set — so these setdefaults win over the developer's real
+`.env` and the suite behaves the same on every machine.
+"""
+
+import json
+import os
+
+os.environ.setdefault("WEB_USER", "admin")
+os.environ.setdefault("WEB_PASS", "test-admin-pass")
+os.environ.setdefault("WEB_USERS", "ga:test-ga-pass:group_a,gb:test-gb-pass:group_b")
+os.environ.setdefault("SESSION_SECRET", "test-session-secret")
+os.environ.setdefault("API_KEY", "test-api-key-0123456789")
+
+from types import SimpleNamespace  # noqa: E402
+
+import pytest  # noqa: E402
+import yaml  # noqa: E402
+
+from src import control, settings_cache, status_store  # noqa: E402
+from src.config_loader import Account  # noqa: E402
+
+# Credentials the web fixtures log in with — keep in sync with the setdefaults.
+ADMIN = ("admin", "test-admin-pass")
+GROUP_A_USER = ("ga", "test-ga-pass")
+GROUP_B_USER = ("gb", "test-gb-pass")
+API_KEY = "test-api-key-0123456789"
 
 
 @pytest.fixture(autouse=True)
@@ -26,3 +54,133 @@ def isolated_control_dir(tmp_path, monkeypatch):
     control._local_stop.clear()
     yield tmp_path
     control._local_stop.clear()
+
+
+# ---------------------------------------------------------------------------
+# Web (route-level) fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def web_client():
+    """A TestClient for the real FastAPI app.
+
+    Deliberately NOT entered as a context manager. Running the lifespan would
+    execute web.app's shutdown handler, which calls
+    `deps.executor.shutdown(cancel_futures=True)` on a module-global pool —
+    every later test in the same process would then fail with "cannot schedule
+    new futures after shutdown". Without the lifespan the SSE watcher task is
+    simply never started, which no route-level test needs.
+    """
+    from fastapi.testclient import TestClient
+
+    from web.app import app
+
+    return TestClient(app)
+
+
+@pytest.fixture
+def login_as():
+    """login_as(client, *ADMIN) -> client with a valid session cookie."""
+
+    def _login(client, username: str, password: str):
+        resp = client.post(
+            "/login",
+            data={"username": username, "password": password},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303, f"login failed: {resp.status_code} {resp.text[:200]}"
+        return client
+
+    return _login
+
+
+@pytest.fixture
+def fake_accounts(monkeypatch):
+    """Replace the encrypted account store with three in-memory accounts.
+
+    Company names deliberately include a space and a middle dot so sanitizer
+    behaviour (snapshot/attachment filenames) stays exercised.
+    """
+    accounts = [
+        Account(company="甲 公司", username="ua1", password="p1", contact="A1", group="group_a"),
+        Account(company="乙·公司", username="ua2", password="p2", contact="A2", group="group_a"),
+        Account(company="丙公司", username="ub1", password="p3", contact="B1", group="group_b"),
+    ]
+
+    from web import auth as web_auth
+    from web.routes import accounts as accounts_routes
+
+    # Both modules imported the symbol into their own namespace.
+    monkeypatch.setattr(web_auth, "load_accounts", lambda: list(accounts))
+    monkeypatch.setattr(accounts_routes, "load_accounts", lambda: list(accounts))
+    return accounts
+
+
+@pytest.fixture
+def isolated_settings(tmp_path, monkeypatch):
+    """A writable temp settings.yaml wired into both the reader and the writer.
+
+    Returns a namespace with `.path`, `.write(dict)` and `.read()`.
+    """
+    from web.services import settings_svc
+
+    path = tmp_path / "settings.yaml"
+    monkeypatch.setattr(settings_cache, "_SETTINGS_FILE", path)
+    monkeypatch.setattr(settings_svc, "_SETTINGS", path)
+
+    def write(data: dict):
+        path.write_text(
+            yaml.dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8"
+        )
+        settings_cache._cache = None  # mtime resolution is coarser than a test
+        return path
+
+    def read() -> dict:
+        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+    write(
+        {
+            "base_url": "https://example.invalid",
+            "groups": {"group_a": "来源一", "group_b": "来源二"},
+            "schedule": {"crons": ["0 9 * * *", "0 18 * * *"]},
+            "login": {"method": "auto", "max_consecutive_failures": 3},
+            "notify": {
+                "dingtalk": {"enabled": False, "webhook": "", "secret": ""},
+                "wechat": {"enabled": False, "webhook": ""},
+                "email": {"enabled": False},
+            },
+        }
+    )
+    settings_cache._cache = None
+    yield SimpleNamespace(path=path, write=write, read=read)
+    settings_cache._cache = None
+
+
+@pytest.fixture
+def isolated_snapshots(tmp_path, monkeypatch):
+    """Temp snapshot dir shared by the web reader and src.main's writer."""
+    from src import main as src_main
+    from web.services import snapshot as snap_svc
+
+    d = tmp_path / "snapshots"
+    d.mkdir()
+    monkeypatch.setattr(snap_svc, "_SNAPSHOTS_DIR", d)
+    monkeypatch.setattr(src_main, "_SNAPSHOTS_DIR", d)
+    snap_svc._cache.clear()
+
+    def write(company: str, records: list[dict], *, ts: str = "2026-01-01-0900", fetch=None):
+        payload = {
+            "company": company,
+            "snapshot_time": "2026-01-01T01:00:00+00:00",
+            "record_count": len(records),
+            "records": records,
+        }
+        if fetch:
+            payload["fetch"] = fetch
+        path = d / f"{snap_svc._safe_name(company)}_{ts}.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        snap_svc._cache.clear()
+        return path
+
+    yield SimpleNamespace(dir=d, write=write)
+    snap_svc._cache.clear()
