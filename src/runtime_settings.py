@@ -83,10 +83,16 @@ class RetentionSettings:
 
 @dataclass(frozen=True)
 class ScraperSettings:
-    """settings.yaml → scraper (only the keys that were literals; page_size /
-    request_timeout_seconds / max_pages keep their original read path)."""
+    """settings.yaml → scraper (the record-list crawl)."""
 
     page_delay_seconds: float = 0.5   # polite pause between list pages
+    # Requested page length. The server ignores it and answers with a fixed
+    # ~10 rows, so this is only ever a request parameter.
+    page_size: int = 50
+    request_timeout_seconds: float = 30
+    # Safety cap: ~10 rows per page → 300 pages ≈ 3000 records. Paging stops
+    # on an empty page or a page with no new records, never on this.
+    max_pages: int = 300
 
 
 @dataclass(frozen=True)
@@ -120,6 +126,19 @@ class OpsAlertSettings:
     stale_hours: float = 36
     # This many failed accounts in one round → banner.
     min_failed_accounts: int = 3
+
+
+@dataclass(frozen=True)
+class LoginSettings:
+    """settings.yaml → login, numeric keys only.
+
+    `method`, `headless` and `max_consecutive_failures` keep their original
+    read paths (they are strings/bools, or already coerced where they are
+    used). This one is here because a quoted "12" reached
+    `timedelta(hours=...)` and raised TypeError out of every single login.
+    """
+
+    token_max_age_hours: int = 12
 
 
 @dataclass(frozen=True)
@@ -163,6 +182,9 @@ _RULES: dict[str, dict[str, _Rule]] = {
     },
     "scraper": {
         "page_delay_seconds": (_NUM, 0, False),
+        "page_size": (_INT, 1, False),
+        "request_timeout_seconds": (_NUM, 0, True),
+        "max_pages": (_INT, 1, False),
     },
     "attachments": {
         "request_timeout_seconds": (_NUM, 0, True),
@@ -178,6 +200,11 @@ _RULES: dict[str, dict[str, _Rule]] = {
     "disk": {
         "min_free_mb": (_NUM, 0, False),
     },
+    "login": {
+        # A cached token older than this is refreshed; 0 would mean "always
+        # expired", i.e. a fresh login for every single request.
+        "token_max_age_hours": (_INT, 1, False),
+    },
 }
 
 _CLASSES: dict[str, type] = {
@@ -187,6 +214,7 @@ _CLASSES: dict[str, type] = {
     "attachments": AttachmentSettings,
     "ops_alerts": OpsAlertSettings,
     "disk": DiskSettings,
+    "login": LoginSettings,
 }
 
 # Every rule table covers exactly its dataclass — checked at import so a new
@@ -343,3 +371,7 @@ def ops_alert_settings() -> OpsAlertSettings:
 
 def disk_settings() -> DiskSettings:
     return _build("disk", DiskSettings)
+
+
+def login_settings() -> LoginSettings:
+    return _build("login", LoginSettings)

@@ -182,16 +182,17 @@ def test_token_expired_mid_pagination_propagates(monkeypatch):
         scraper.fetch_all_records("tok")
 
 
-def test_max_pages_cap_marks_incomplete(monkeypatch):
-    """Hitting the safety cap keeps the records but flags the result."""
+def test_max_pages_cap_marks_incomplete(monkeypatch, isolated_settings):
+    """Hitting the safety cap keeps the records but flags the result.
+
+    The cap is read through runtime_settings (validated like every other
+    numeric key), so it has to be set in the settings file itself — stubbing
+    scraper._load_settings no longer reaches it."""
     def fake_fetch(session, base_url, page_num, page_size):
         return _page_payload([_rec(page_num * 100 + i) for i in range(3)], 10_000)
 
     monkeypatch.setattr(scraper, "_fetch_page", fake_fetch)
-    monkeypatch.setattr(
-        scraper, "_load_settings",
-        lambda: {"scraper": {"max_pages": 4}, "base_url": "https://x"},
-    )
+    isolated_settings.write({"base_url": "https://x", "scraper": {"max_pages": 4}})
     result = scraper.fetch_all_records("tok")
     assert result.complete is False
     assert "max_pages" in result.error

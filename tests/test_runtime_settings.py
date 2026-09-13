@@ -561,3 +561,35 @@ def test_an_absurdly_large_integer_falls_back_instead_of_raising(
     _set(isolated_settings, "run", account_timeout_seconds=10 ** 400)
     assert rs.run_settings().account_timeout_seconds == 600
     assert any("run.account_timeout_seconds" in w for w in warnings)
+
+
+# ---------------------------------------------------------------------------
+# login.token_max_age_hours — the one numeric login key that can break logins
+# ---------------------------------------------------------------------------
+
+def test_login_token_max_age_default_matches_the_old_literal():
+    assert rs.login_settings().token_max_age_hours == 12  # login._compute_expiry
+
+
+def test_login_token_max_age_is_configurable(isolated_settings):
+    _set(isolated_settings, "login", token_max_age_hours=6)
+    assert rs.login_settings().token_max_age_hours == 6
+
+
+@pytest.mark.parametrize("bad", ["12", 0, -1, 1.5, True, None])
+def test_login_token_max_age_falls_back_instead_of_breaking_every_login(
+    isolated_settings, warnings, bad
+):
+    """`token_max_age_hours: "12"` (quoted) used to reach timedelta(hours=str)
+    and raise TypeError out of get_token() — i.e. every account failing to log
+    in, with settings.yaml claiming that bad values fall back."""
+    from datetime import datetime, timedelta, timezone
+
+    from src import login as login_mod
+
+    _set(isolated_settings, "login", token_max_age_hours=bad)
+    assert rs.login_settings().token_max_age_hours == 12
+
+    fetched = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert login_mod._compute_expiry("not-a-jwt", fetched) == fetched + timedelta(hours=12)
+    assert any("login.token_max_age_hours" in w for w in warnings)

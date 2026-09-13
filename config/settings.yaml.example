@@ -2,15 +2,25 @@
 #   cp config/settings.yaml.example config/settings.yaml
 #
 # 所有键都有默认值（就是下面写出的值），删掉或不写某个键 = 用默认值。
-# 文件按修改时间缓存，保存后下一次巡检/下一次刷新页面即生效，不用重启服务。
-# 数值类键填错（写成字符串、负数、留空）会回退到默认值，并在日志里提示一次。
+# 数值类键填错（写成字符串、负数、留空、true/false）会回退到默认值，并在日志里
+# 提示一次；带引号的数字（"30"）也算填错——YAML 里数字不要加引号。
+#
+# 生效时机：文件按修改时间缓存，保存后下一次巡检 / 下一次刷新页面即生效，不用重启。
+# 两个例外需要重启对应进程：
+#   - schedule.crons          调度表只在 zjip-daemon 启动时读一次
+#   - retention.logs_keep_days / web_logs_keep_days   日志 sink 在进程启动时装好
+#
+# 注意：在控制台「设置」页保存任何一项，都会用程序重写 config/settings.yaml，
+# 本文件里的注释会全部消失（值不受影响）。想保留说明请对照这份示例文件看。
 
 # 平台地址。所有平台请求（列表、通知书、证书）都只允许发往这个域名。
 base_url: "https://www.zjip.org.cn"
 
 # 账号分组：key → 界面上显示的中文名。
-# 账号文件 accounts.yaml 里每个账号的 group 字段、以及 .env 里分组用户
-# WEB_USERS="用户名:密码:分组key" 的分组key，都必须是这里的 key。
+# 账号的 group 字段（控制台账号页可改，加密存在 config/accounts.enc 里；
+# 明文模板见 config/accounts.yaml.example）和 .env 里分组用户
+# WEB_USERS="用户名:密码:分组key" 的分组 key，都应当是这里的某个 key。
+# 写了这里没有的 key 不会报错，界面直接按原样显示这个 key。
 groups:
   group_a: "来源一"
   group_b: "来源二"
@@ -51,14 +61,14 @@ login:
   # http    — 只用 HTTP 直登，失败即报错
   # browser — 只用 Playwright 浏览器登录（旧方式）
   method: auto
-  # 缓存 token 的最长使用时间，小时。默认 12
+  # 缓存 token 的最长使用时间，小时（平台返回的 JWT 自带 exp 时以 exp 为准）。默认 12
   token_max_age_hours: 12
   # 防锁号：同一账号连续 N 次被平台拒绝登录（密码错误等）后，
   # 定时巡检自动跳过该账号，直到在控制台改密码或手动巡检成功；0 = 不暂停。默认 3
   max_consecutive_failures: 3
-  # 以下两项仅浏览器登录（method=browser 或 auto 回退时）生效
+  # 仅浏览器登录（method=browser，或 auto 回退到浏览器时）生效：无界面运行。默认 true
+  # 需要人工过验证码时临时改成 false，在有桌面的机器上手动跑一次。
   headless: true
-  browser: "chromium"
 
 # ── 巡检运行方式 ──────────────────────────────────────────────────────────
 run:
@@ -101,7 +111,11 @@ disk:
   # 根分区剩余空间低于多少 MB 时：跳过附件下载 + 运维横幅提示。默认 500
   min_free_mb: 500
 
-# ── 定时计划（cron，服务器时区为 UTC；北京时间 9:00/18:00 = UTC 1:00/10:00）──
+# ── 定时计划 ──────────────────────────────────────────────────────────────
+# cron 表达式按**北京时间 Asia/Shanghai**解释，与服务器系统时区无关
+# （run_daemon.py 固定用这个时区建调度器）。下面两条就是每天 09:00 和 18:00。
+# 服务器系统时区是 UTC，所以日志时间戳比这里早 8 小时：09:00 那一轮在
+# logs/run_*.log 里显示为 01:00。改完要 systemctl restart zjip-daemon 才生效。
 schedule:
   crons:
     - "0 9 * * *"

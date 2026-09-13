@@ -156,7 +156,6 @@ def _load_settings() -> dict:
 # Hard page cap independent of the server's totalSize (which is advisory only).
 # At the server's fixed ~10 records/page this allows ~3000 records; override
 # via settings.yaml → scraper.max_pages.
-_DEFAULT_MAX_PAGES = 300
 
 
 @dataclass
@@ -204,19 +203,19 @@ def fetch_all_records(
         ScraperError:      Page 1 failed (nothing worth keeping).
     """
     settings = _load_settings()
-    scraper_cfg = settings.get("scraper", {})
+    # All four numeric knobs go through the same validation as the rest of
+    # settings.yaml: a quoted "30" for the timeout used to reach requests as
+    # a str, and a bad max_pages was the only one with a fallback.
+    sc = scraper_settings()
 
     if page_size is None:
-        page_size = scraper_cfg.get("page_size", 50)
+        page_size = sc.page_size
     if base_url is None:
         base_url = settings.get("base_url", "https://www.zjip.org.cn")
 
-    timeout = scraper_cfg.get("request_timeout_seconds", 30)
-    try:
-        max_pages = int(scraper_cfg.get("max_pages", _DEFAULT_MAX_PAGES))
-    except (TypeError, ValueError):
-        max_pages = _DEFAULT_MAX_PAGES
-    page_delay = scraper_settings().page_delay_seconds
+    timeout = sc.request_timeout_seconds
+    max_pages = sc.max_pages
+    page_delay = sc.page_delay_seconds
 
     session = _build_session(token, timeout=timeout)
 

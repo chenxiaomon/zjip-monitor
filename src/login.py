@@ -43,6 +43,7 @@ from .exceptions import (
 )
 from .fsutil import atomic_write_text
 from .scraper import ReadOnlyViolation
+from .runtime_settings import login_settings
 from .settings_cache import get_settings
 
 # ---------------------------------------------------------------------------
@@ -437,9 +438,10 @@ def _compute_expiry(token: str, fetched_at: datetime) -> datetime:
     except Exception:
         pass
 
-    settings = _load_settings()
-    max_age_hours: int = settings.get("login", {}).get("token_max_age_hours", 12)
-    return fetched_at + timedelta(hours=max_age_hours)
+    # Validated, not read raw: a quoted `token_max_age_hours: "12"` in
+    # settings.yaml used to reach timedelta() as a str and raise TypeError
+    # here — out of get_token(), i.e. every account failing to log in.
+    return fetched_at + timedelta(hours=login_settings().token_max_age_hours)
 
 
 def _login_via_browser(account: str, password: str) -> str:
