@@ -74,9 +74,11 @@
         <button onclick="toggleDark()" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" title="切换暗色模式">
           <i class="ti ti-sun-moon text-lg"></i>
         </button>
-        <a href="/logout" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" title="退出登录">
-          <i class="ti ti-logout text-lg"></i>
-        </a>
+        <form method="post" action="/logout" class="inline flex">
+          <button type="submit" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors cursor-pointer" title="退出登录">
+            <i class="ti ti-logout text-lg"></i>
+          </button>
+        </form>
       </div>
     </header>
     <!-- Content -->

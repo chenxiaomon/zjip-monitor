@@ -5,7 +5,7 @@
 
 {% block content %}
 <!-- Toolbar -->
-{% set is_admin = request.state.user.role == 'admin' if request.state.user else true %}
+{% set is_admin = request.state.user.role == 'admin' if request.state.user else false %}
 {% if is_admin %}
 <div class="flex items-center justify-between mb-4">
   <div id="run-once-status-wrapper" hx-ext="sse" sse-connect="/sse">

@@ -6,6 +6,7 @@ import asyncio
 import base64
 import os
 import secrets
+from urllib.parse import urlparse
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -69,6 +70,45 @@ app = FastAPI(title="数智通监控", lifespan=_lifespan)
 # 管理员专属页面（分组账号访问返回 403）
 _ADMIN_ONLY_PREFIXES = ("/settings", "/notify", "/reports", "/run-once")
 
+_UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+# Extra origins allowed to submit state-changing requests, e.g. when the
+# console is reached through a second hostname. Comma-separated host[:port].
+_ALLOWED_ORIGINS = {
+    o.strip().lower() for o in os.getenv("WEB_ALLOWED_ORIGINS", "").split(",") if o.strip()
+}
+
+
+def _same_origin_ok(request: Request) -> bool:
+    """Reject cross-site state changes.
+
+    The session cookie is SameSite=Lax, which already blocks cross-site form
+    POSTs — but the Basic-Auth admin fallback is not bound by SameSite at all:
+    once a browser has cached those credentials (an operator using curl or the
+    browser's own auth prompt), a form on any page could POST
+    /accounts/{u}/delete and be authenticated.
+
+    A missing Origin AND Referer is allowed: that is a script/curl, which is
+    not a confused deputy. Browsers send Origin on every cross-site POST and
+    on every htmx XHR.
+    """
+    origin = request.headers.get("origin") or ""
+    if not origin:
+        referer = request.headers.get("referer") or ""
+        if not referer:
+            return True
+        parsed = urlparse(referer)
+        origin_netloc = parsed.netloc
+    else:
+        origin_netloc = urlparse(origin).netloc
+
+    origin_netloc = origin_netloc.lower()
+    # Compare hosts only: nginx may terminate a different scheme than the app
+    # sees, and a scheme mismatch is not what this check is about.
+    return bool(origin_netloc) and (
+        origin_netloc == (request.headers.get("host") or "").lower()
+        or origin_netloc in _ALLOWED_ORIGINS
+    )
+
 
 def _basic_admin_ok(request: Request) -> bool:
     """Basic Auth fallback with admin credentials (for scripts/curl)."""
@@ -88,6 +128,18 @@ def _basic_admin_ok(request: Request) -> bool:
 @app.middleware("http")
 async def _auth_middleware(request: Request, call_next) -> Response:  # type: ignore[return]
     path = request.url.path
+    # 跨站写请求一律拒绝（/api/* 用密钥而非 cookie，不受 CSRF 影响）
+    if (
+        request.method in _UNSAFE_METHODS
+        and not path.startswith("/api/")
+        and not _same_origin_ok(request)
+    ):
+        logger.warning(
+            f"跨站写请求被拒绝 origin={request.headers.get('origin')!r} "
+            f"referer={request.headers.get('referer')!r} host={request.headers.get('host')!r} "
+            f"path={path}"
+        )
+        return Response("跨站请求被拒绝", status_code=403)
     # 公开路径：只读展示页、静态资源、登录/登出
     if (path == "/view" or path.startswith("/view/")
             or path.startswith("/static/")

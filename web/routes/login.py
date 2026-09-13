@@ -45,8 +45,10 @@ async def login_submit(
     return response
 
 
-@router.get("/logout")
+@router.post("/logout")
 def logout() -> RedirectResponse:
+    """POST only: as a GET, any third-party page (or a prefetching client)
+    could log the operator out with a plain <img src="/logout">."""
     response = RedirectResponse(url="/login", status_code=303)
     response.delete_cookie(COOKIE_NAME, path="/")
     return response

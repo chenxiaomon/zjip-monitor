@@ -136,8 +136,16 @@ def current_user(request: Request) -> dict | None:
 
 
 def is_admin(request: Request) -> bool:
+    """No identified user means NO admin rights.
+
+    This used to answer True when request.state.user was unset — i.e. every
+    path the auth middleware does not populate (the public allow-list and the
+    /api/* lane). Nothing reached those helpers from there yet, but the default
+    was "unknown caller = administrator", which is the wrong way round for a
+    helper that also backs require_admin() and visible_accounts().
+    """
     user = current_user(request)
-    return user is None or user.get("role") == "admin"
+    return user is not None and user.get("role") == "admin"
 
 
 def require_admin(request: Request) -> None:
@@ -147,6 +155,9 @@ def require_admin(request: Request) -> None:
 
 def visible_accounts(request: Request) -> list[Account]:
     """Accounts the current user may see (admin → all, group user → own group)."""
+    user = current_user(request)
+    if user is None:
+        return []  # unidentified caller sees nothing
     try:
         accounts = load_accounts()
     except ConfigError as exc:
@@ -156,8 +167,7 @@ def visible_accounts(request: Request) -> list[Account]:
         return []
     if is_admin(request):
         return accounts
-    group = current_user(request).get("group", "")
-    return [a for a in accounts if a.group == group]
+    return [a for a in accounts if a.group == user.get("group", "")]
 
 
 def allowed_usernames(request: Request) -> set[str] | None:

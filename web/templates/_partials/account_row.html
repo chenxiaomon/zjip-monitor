@@ -21,7 +21,7 @@
     {% endif %}
   </td>
   <!-- 分组 -->
-  {% set is_admin = request.state.user.role == 'admin' if request.state.user else true %}
+  {% set is_admin = request.state.user.role == 'admin' if request.state.user else false %}
   <td class="px-4 py-3">
     {% if is_admin %}
     <select name="group"
