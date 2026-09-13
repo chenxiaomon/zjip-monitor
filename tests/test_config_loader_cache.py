@@ -296,3 +296,81 @@ def test_concurrent_loads_are_consistent(store):
     assert len(results) == 160
     assert all(r == [Account("甲公司", "u1", "p1", "c", "")] for r in results)
     assert config_loader._cache is not None
+
+
+# ---------------------------------------------------------------------------
+# Malformed plaintext is a ConfigError, never an AttributeError (F)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "plaintext, fragment",
+    [
+        ("- a\n- b\n", "映射"),                     # top level is a list
+        ("just-a-scalar\n", "映射"),                # top level is a scalar
+        ("accounts: not-a-list\n", "列表"),          # accounts is a scalar
+        ("accounts:\n  - just-a-string\n", "accounts[0]"),  # entry is a scalar
+    ],
+)
+def test_malformed_plaintext_raises_config_error(store, plaintext, fragment):
+    """web/auth.py, web/routes/accounts.py, src/main.py and both scripts only
+    ever catch ConfigError — an AttributeError here 500s the accounts page and
+    escapes out of the daemon."""
+    store.path.write_bytes(Fernet(store.key).encrypt(plaintext.encode("utf-8")))
+    config_loader.invalidate_cache()
+
+    with pytest.raises(ConfigError) as exc_info:
+        load_accounts()
+    assert fragment in str(exc_info.value)
+    assert config_loader._cache is None
+
+
+def test_empty_plaintext_still_reports_no_accounts(store):
+    store.path.write_bytes(Fernet(store.key).encrypt(b"\n"))
+    config_loader.invalidate_cache()
+    with pytest.raises(ConfigError, match="no accounts"):
+        load_accounts()
+
+
+# ---------------------------------------------------------------------------
+# Non-string fields from an older accounts.enc (E)
+# ---------------------------------------------------------------------------
+
+def test_non_string_fields_are_normalized_to_str(store):
+    """An accounts.yaml with an unquoted digit-only password produced an int
+    in the encrypted file; login form-fill, the console templates and
+    decrypt_accounts' masking all assume str."""
+    store.write([{"company": 123, "username": "ua", "password": 456789,
+                  "contact": None, "group": None}])
+    config_loader.invalidate_cache()
+
+    a = load_accounts()[0]
+    assert (a.company, a.username, a.password, a.contact, a.group) == (
+        "123", "ua", "456789", "", "",
+    )
+    assert all(isinstance(v, str) for v in (a.company, a.username, a.password, a.contact, a.group))
+
+
+# ---------------------------------------------------------------------------
+# .env is not re-read on a cache hit (G)
+# ---------------------------------------------------------------------------
+
+def test_cache_hit_does_not_reread_the_env_file(store, monkeypatch):
+    """Every web request calls load_accounts(); parsing .env each time buys
+    nothing, because load_dotenv() never overrides an exported FERNET_KEY."""
+    calls: list[object] = []
+    monkeypatch.setattr(config_loader, "load_dotenv", lambda *a, **kw: calls.append(a))
+
+    load_accounts()
+    load_accounts()
+    assert calls == []
+
+
+def test_env_file_is_still_read_when_key_is_not_exported(store, tmp_path, monkeypatch):
+    """The skip above must stay equivalent: with FERNET_KEY absent from the
+    environment, .env is what supplies it."""
+    env = tmp_path / "env-with-key"
+    env.write_text(f"FERNET_KEY={store.key.decode()}\n", encoding="utf-8")
+    monkeypatch.setattr(config_loader, "_ENV_PATH", env)
+    monkeypatch.delenv("FERNET_KEY")
+
+    assert load_accounts()[0].password == "p1"

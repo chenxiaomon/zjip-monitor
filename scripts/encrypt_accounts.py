@@ -9,7 +9,10 @@ Usage (reuse existing key from .env, skip the overwrite confirmation):
 
 Workflow:
   1. Reads config/accounts.yaml (plain text, NOT committed to git)
-  2. Reads FERNET_KEY from .env; generates and saves one if absent
+  2. Reads FERNET_KEY out of the .env FILE (never out of the environment —
+     see _env_file_key). A key already in .env is reused as-is and never
+     replaced; one is generated only when .env has none, and only after the
+     operator confirms that no unreadable accounts.enc would be orphaned
   3. If config/accounts.enc already exists, decrypts it and prints what
      would change (added / removed / modified accounts — never passwords),
      then asks for a "yes" on an interactive terminal
@@ -26,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -34,7 +38,7 @@ sys.path.insert(0, str(ROOT))
 
 import yaml
 from cryptography.fernet import Fernet
-from dotenv import load_dotenv, set_key
+from dotenv import dotenv_values, set_key
 
 from src.config_loader import Account, ConfigError, load_accounts, save_accounts
 
@@ -44,27 +48,60 @@ _ENV_PATH = ROOT / ".env"
 
 _REQUIRED_FIELDS = ("company", "username", "password")
 
+# What decrypt_accounts.mask_password() produces: "****" plus the last two
+# characters. A genuine password could in principle start with four stars, but
+# refusing it (the operator can still change that one password from the
+# console) is far cheaper than silently masking every password in the file.
+_MASKED_PASSWORD_RE = re.compile(r"^\*{4,}")
 
-def _get_or_create_key() -> bytes:
-    """Load FERNET_KEY from .env, or generate and save a new one."""
-    load_dotenv(_ENV_PATH)
-    key_str = os.getenv("FERNET_KEY", "").strip()
-    if key_str:
-        return key_str.encode()
 
-    print("No FERNET_KEY found in .env — generating a new one…")
+def _env_file_key() -> str:
+    """FERNET_KEY exactly as the .env FILE spells it (empty when absent).
+
+    Deliberately NOT os.getenv(): load_dotenv() never overrides a variable
+    already present in os.environ, and an `export FERNET_KEY=` left over in
+    the shell counts as present. Deciding "does .env have a key?" from the
+    environment therefore used to answer "no" while .env held the real key —
+    and the answer was acted on by overwriting that key. systemd hands the
+    daemon and the web console this same file through EnvironmentFile=, so
+    the file is the only thing that decides what production can decrypt.
+    """
+    return (dotenv_values(_ENV_PATH).get("FERNET_KEY") or "").strip()
+
+
+def _generate_key() -> bytes:
+    """Mint a FERNET_KEY, persist it to .env (0600) and export it.
+
+    Destructive whenever an accounts.enc encrypted with another key exists —
+    every caller must have confirmed that before getting here.
+    """
     key = Fernet.generate_key()
-    # Persist to .env
     _ENV_PATH.touch(exist_ok=True)
     set_key(str(_ENV_PATH), "FERNET_KEY", key.decode())
-    # save_accounts()/load_accounts() re-read .env through load_dotenv(),
-    # which never overrides a variable already present in os.environ — an
-    # empty FERNET_KEY inherited from the shell would therefore shadow the
+    # .env holds the only copy of the key; created under the default umask it
+    # would be 0644, i.e. readable by every account on the box.
+    os.chmod(_ENV_PATH, 0o600)
+    # save_accounts()/load_accounts() read .env through load_dotenv(), which
+    # never overrides a variable already present in os.environ — an empty or
+    # stale FERNET_KEY inherited from the shell would therefore shadow the
     # key we just wrote. Export it explicitly so the very next call uses it.
     os.environ["FERNET_KEY"] = key.decode()
     print(f"  ✓ Key saved to {_ENV_PATH}")
     print("  ⚠  Back up this key — without it you cannot decrypt accounts.enc!")
     return key
+
+
+def _enc_stamp() -> tuple[int, int] | None:
+    """Identity of accounts.enc right now, or None when it does not exist.
+
+    Same (mtime_ns, size) pair config_loader caches on: enough to notice that
+    the web console saved an account while we were waiting for a "yes".
+    """
+    try:
+        st = _ENC_PATH.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
 
 
 def _read_yaml(path: Path) -> object:
@@ -113,12 +150,22 @@ def build_accounts(data: object) -> list[Account]:
             )
         seen[username] = i
 
+        password = _as_text(raw["password"], f"accounts[{i}].password")
+        # decrypt_accounts.py masks passwords by default; saving that listing
+        # as accounts.yaml and re-encrypting it would silently replace every
+        # real password with "****xx" and lock every account out of the site.
+        if _MASKED_PASSWORD_RE.match(password):
+            raise ConfigError(
+                f"accounts[{i}].password 以 4 个以上 * 开头——这看起来是 decrypt_accounts.py "
+                "的打码输出，请用 --show-passwords 或 --out 导出真实密码后再加密"
+            )
+
         contact = raw.get("contact")
         group = raw.get("group")
         accounts.append(Account(
             company=_as_text(raw["company"], f"accounts[{i}].company"),
             username=username,
-            password=_as_text(raw["password"], f"accounts[{i}].password"),
+            password=password,
             contact="" if contact is None else str(contact),
             group="" if group is None else str(group),
         ))
@@ -212,33 +259,73 @@ def main(argv: list[str] | None = None) -> int:
     for acc in accounts:
         print(f"  - {acc.company} ({acc.username})")
 
-    # Key must be in place before load_accounts() looks at the existing file.
-    _get_or_create_key()
-
+    interactive = sys.stdin is not None and sys.stdin.isatty()
     had_existing = _ENC_PATH.exists()
-    if had_existing:
-        interactive = sys.stdin is not None and sys.stdin.isatty()
-        try:
-            existing = load_accounts()
-        except ConfigError as exc:
-            print(f"\n⚠  现有 {_ENC_PATH} 无法用当前密钥读取，无法对比：{exc}")
-            print("   继续将整体覆盖它（旧文件会保留为 accounts.enc.bak）。")
+    # What we are about to compare against. Re-checked just before the write,
+    # because the operator may sit on the confirmation prompt for a while.
+    enc_stamp = _enc_stamp()
+
+    env_key = _env_file_key()
+    if env_key:
+        shell_key = os.environ.get("FERNET_KEY", "").strip()
+        if shell_key and shell_key != env_key:
+            print(f"\nERROR: 当前 shell 的 FERNET_KEY 与 {_ENV_PATH} 里的不一致。")
+            print("  生产的 daemon / web 通过 systemd 的 EnvironmentFile 读取 .env，")
+            print("  用 shell 里的密钥加密会让线上进程解不开 accounts.enc。")
+            print("  请先执行 `unset FERNET_KEY`，再重跑本脚本。")
+            return 1
+        # .env wins: export it so load_accounts()/save_accounts() below use
+        # the same key production will, instead of whatever the shell holds
+        # (load_dotenv() inside them would not override an existing value).
+        os.environ["FERNET_KEY"] = env_key
+
+        if had_existing:
+            try:
+                existing = load_accounts()
+            except ConfigError as exc:
+                print(f"\n⚠  现有 {_ENC_PATH} 无法用当前密钥读取，无法对比：{exc}")
+                print("   继续将整体覆盖它（旧文件会保留为 accounts.enc.bak）。")
+                if not args.yes:
+                    if not interactive:
+                        # Nobody is watching and there is no diff to show — the
+                        # only safe default is to stop and demand an explicit flag.
+                        print("   非交互环境下需要显式传 --yes 才会覆盖无法读取的旧文件。")
+                        return 1
+                    if not _confirm("确认覆盖？输入 yes 继续："):
+                        print("已取消，accounts.enc 未改动。")
+                        return 1
+            else:
+                print()
+                print(summarize_changes(existing, accounts))
+                if not args.yes and interactive:
+                    if not _confirm("确认用 accounts.yaml 的内容覆盖 accounts.enc？输入 yes 继续："):
+                        print("已取消，accounts.enc 未改动。")
+                        return 1
+    else:
+        # No key in .env. Minting one is irreversible for any data encrypted
+        # with the previous key, so confirm FIRST and write .env last: an
+        # aborted run must leave the old key recoverable from a .env backup.
+        if had_existing:
+            print(f"\n⚠  {_ENV_PATH} 里没有 FERNET_KEY，但 {_ENC_PATH} 已存在。")
+            print("   现有文件是用另一把密钥加密的，生成新密钥后它将永久无法解密，")
+            print("   里面的账号会全部丢失。")
+            print("   如果密钥只是没写进 .env，请先把它写回 .env（FERNET_KEY=…）再重跑本脚本。")
             if not args.yes:
                 if not interactive:
-                    # Nobody is watching and there is no diff to show — the
-                    # only safe default is to stop and demand an explicit flag.
-                    print("   非交互环境下需要显式传 --yes 才会覆盖无法读取的旧文件。")
+                    print("   非交互环境下需要显式传 --yes 才会生成新密钥并覆盖它。")
                     return 1
-                if not _confirm("确认覆盖？输入 yes 继续："):
-                    print("已取消，accounts.enc 未改动。")
+                if not _confirm("确认生成新密钥并覆盖现有 accounts.enc？输入 yes 继续："):
+                    print("已取消，.env 与 accounts.enc 均未改动。")
                     return 1
-        else:
-            print()
-            print(summarize_changes(existing, accounts))
-            if not args.yes and interactive:
-                if not _confirm("确认用 accounts.yaml 的内容覆盖 accounts.enc？输入 yes 继续："):
-                    print("已取消，accounts.enc 未改动。")
-                    return 1
+        print("No FERNET_KEY found in .env — generating a new one…")
+        _generate_key()
+
+    # A console save that landed while the operator was reading the diff would
+    # be silently thrown away by the write below; re-running is cheap.
+    if _enc_stamp() != enc_stamp:
+        print(f"\nERROR: {_ENC_PATH} 在确认期间被修改（可能是控制台保存了账号），")
+        print("  已放弃写入，请重新运行本脚本。")
+        return 1
 
     # save_accounts() owns the one-generation .enc.bak and the atomic write.
     try:

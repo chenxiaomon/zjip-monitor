@@ -40,7 +40,13 @@ def mask_password(password: str) -> str:
 
 
 def accounts_to_yaml(accounts: list[Account], *, show_passwords: bool) -> str:
-    """Serialize in the accounts.yaml.example layout (field order preserved)."""
+    """Serialize in the accounts.yaml.example layout (field order preserved).
+
+    Every field is already a str here (config_loader normalizes them), which
+    is what makes yaml.dump quote a digit-only password: an unquoted 123456
+    would read back as an int and encrypt_accounts.py would reject the file,
+    so a --out dump could not be fed back in.
+    """
     data = {
         "accounts": [
             {
@@ -57,16 +63,31 @@ def accounts_to_yaml(accounts: list[Account], *, show_passwords: bool) -> str:
 
 
 def write_private_file(path: Path, text: str) -> None:
-    """Write `text` so the file is 0600 from its first byte.
+    """Write `text` so the file is 0600 from its first byte, never following
+    a symlink.
 
-    os.open applies the mode at creation; a file that already exists (maybe
-    0644 from an earlier manual copy) is tightened BEFORE we put plain-text
-    passwords into it.
+    This script runs as root and PATH comes from the command line, so every
+    step has to act on the file itself rather than on a name that may be a
+    link: chmod-by-path would tighten (and the write would then clobber) the
+    LINK TARGET — pointing --out at a link to config/settings.yaml used to
+    destroy it while reporting success, and a dangling link created a
+    plain-text file wherever it pointed. O_NOFOLLOW fails with ELOOP on a
+    link (dangling ones included); fchmod tightens the descriptor we already
+    hold, which cannot be re-pointed underneath us.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        os.chmod(path, 0o600)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    if path.is_symlink():
+        # Clearer for the operator than the bare ELOOP O_NOFOLLOW would give.
+        raise OSError(f"拒绝写入符号链接：{path}（请把 --out 指向一个普通文件路径）")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    try:
+        # The mode above only applies at creation: an already existing file
+        # (0644 from an earlier manual copy) keeps its own, so tighten it
+        # before any plain-text password reaches the page cache.
+        os.fchmod(fd, 0o600)
+    except OSError:
+        os.close(fd)
+        raise
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(text)
 

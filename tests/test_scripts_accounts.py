@@ -43,6 +43,23 @@ class _TtyStdin(io.StringIO):
         return True
 
 
+class _ReactiveTtyStdin(_TtyStdin):
+    """A tty that runs `callback` the moment the script blocks on input().
+
+    Stands in for "the web console saved an account while the operator was
+    still reading the diff" — input() falls back to sys.stdin.readline() when
+    stdin is not a real interactive file object.
+    """
+
+    def __init__(self, text: str, callback) -> None:
+        super().__init__(text)
+        self._callback = callback
+
+    def readline(self, *args, **kwargs):  # type: ignore[override]
+        self._callback()
+        return super().readline(*args, **kwargs)
+
+
 @pytest.fixture
 def acct_env(tmp_path, monkeypatch):
     """Isolated yaml/.env/.enc trio wired into both scripts and config_loader."""
@@ -88,6 +105,15 @@ def acct_env(tmp_path, monkeypatch):
 def _decrypt_raw(path, key: str) -> list[dict]:
     data = yaml.safe_load(Fernet(key.encode()).decrypt(path.read_bytes()).decode("utf-8"))
     return data["accounts"]
+
+
+def _encrypt_raw(path, key: str, data: object) -> None:
+    """Write an accounts.enc straight from `data`, bypassing every validation
+    the current scripts do — this is how an older version of the script (or a
+    hand-rolled yaml) could leave non-string fields inside the file."""
+    plaintext = yaml.dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False)
+    path.write_bytes(Fernet(key.encode()).encrypt(plaintext.encode("utf-8")))
+    config_loader.invalidate_cache()
 
 
 def _assert_no_passwords(text: str) -> None:
@@ -410,3 +436,236 @@ def test_decrypt_wrong_key_reports_error(acct_env, monkeypatch, capsys):
     captured = capsys.readouterr()
     assert "错误" in captured.err and "Traceback" not in captured.err
     assert captured.out == ""
+
+
+# ---------------------------------------------------------------------------
+# encrypt_accounts.py — FERNET_KEY resolution (.env is the only authority)
+# ---------------------------------------------------------------------------
+
+def test_empty_shell_key_does_not_shadow_the_key_in_env(acct_env, monkeypatch, capsys):
+    """`export FERNET_KEY=` used to make the script believe .env had no key.
+
+    It then replaced the real key in .env with a fresh one — after which the
+    existing accounts.enc (and every backup of it) was unreadable forever.
+    """
+    acct_env.write_yaml(INITIAL)
+    assert encrypt_accounts.main([]) == 0
+    capsys.readouterr()
+    env_before = acct_env.env_path.read_text(encoding="utf-8")
+
+    monkeypatch.setenv("FERNET_KEY", "")  # the destructive shell state
+    acct_env.write_yaml(INITIAL[:2])
+    assert encrypt_accounts.main(["--yes"]) == 0
+
+    out = capsys.readouterr().out
+    assert "No FERNET_KEY found" not in out
+    assert acct_env.env_path.read_text(encoding="utf-8") == env_before
+    assert os.environ["FERNET_KEY"] == acct_env.key
+    assert [a["username"] for a in _decrypt_raw(acct_env.enc_path, acct_env.key)] == ["ua", "ub"]
+
+
+def test_shell_key_differing_from_env_key_aborts_without_writing(acct_env, monkeypatch, capsys):
+    """The production services read .env through systemd's EnvironmentFile=,
+    so encrypting with a different key exported in the shell would hand them
+    a file they cannot decrypt."""
+    acct_env.write_yaml(INITIAL)
+    assert encrypt_accounts.main([]) == 0
+    capsys.readouterr()
+    enc_before = acct_env.enc_path.read_bytes()
+    env_before = acct_env.env_path.read_text(encoding="utf-8")
+
+    monkeypatch.setenv("FERNET_KEY", Fernet.generate_key().decode())
+    acct_env.write_yaml(INITIAL[:1])
+    assert encrypt_accounts.main(["--yes"]) == 1
+
+    out = capsys.readouterr().out
+    assert "unset FERNET_KEY" in out
+    assert acct_env.enc_path.read_bytes() == enc_before
+    assert acct_env.env_path.read_text(encoding="utf-8") == env_before
+    assert not acct_env.bak_path.exists()
+
+
+def test_no_key_in_env_but_enc_exists_refuses_to_generate(acct_env, monkeypatch, capsys):
+    acct_env.write_yaml(INITIAL)
+    assert encrypt_accounts.main([]) == 0
+    capsys.readouterr()
+    enc_before = acct_env.enc_path.read_bytes()
+
+    # The key vanished from .env (restored backup, botched edit…). Minting a
+    # replacement makes the accounts.enc next to it unreadable forever.
+    monkeypatch.delenv("FERNET_KEY")
+    acct_env.env_path.write_text("", encoding="utf-8")
+
+    assert encrypt_accounts.main([]) == 1
+    out = capsys.readouterr().out
+    assert "永久" in out and "--yes" in out
+    assert acct_env.enc_path.read_bytes() == enc_before
+    assert "FERNET_KEY" not in acct_env.env_path.read_text(encoding="utf-8")
+    assert "FERNET_KEY" not in os.environ
+
+
+def test_no_key_in_env_tty_decline_leaves_env_and_enc_untouched(acct_env, monkeypatch, capsys):
+    acct_env.write_yaml(INITIAL)
+    assert encrypt_accounts.main([]) == 0
+    capsys.readouterr()
+    enc_before = acct_env.enc_path.read_bytes()
+
+    monkeypatch.delenv("FERNET_KEY")
+    acct_env.env_path.write_text("", encoding="utf-8")
+    monkeypatch.setattr("sys.stdin", _TtyStdin("no\n"))
+
+    assert encrypt_accounts.main([]) == 1
+    assert "已取消" in capsys.readouterr().out
+    assert acct_env.enc_path.read_bytes() == enc_before
+    assert "FERNET_KEY" not in acct_env.env_path.read_text(encoding="utf-8")
+    assert "FERNET_KEY" not in os.environ
+
+
+def test_no_key_in_env_with_yes_generates_and_overwrites(acct_env, monkeypatch, capsys):
+    acct_env.write_yaml(INITIAL)
+    assert encrypt_accounts.main([]) == 0
+    capsys.readouterr()
+
+    monkeypatch.delenv("FERNET_KEY")
+    acct_env.env_path.write_text("", encoding="utf-8")
+
+    assert encrypt_accounts.main(["--yes"]) == 0
+    out = capsys.readouterr().out
+    assert "generating a new one" in out
+
+    new_key = os.environ["FERNET_KEY"]
+    assert new_key != acct_env.key
+    assert new_key in acct_env.env_path.read_text(encoding="utf-8")
+    assert [a["username"] for a in _decrypt_raw(acct_env.enc_path, new_key)] == ["ua", "ub", "uc"]
+
+
+def test_generated_env_file_is_mode_0600(acct_env, monkeypatch, capsys):
+    monkeypatch.delenv("FERNET_KEY")
+    acct_env.env_path.unlink()  # brand-new box: .env does not exist yet
+    acct_env.write_yaml(INITIAL[:1])
+
+    assert encrypt_accounts.main([]) == 0
+    capsys.readouterr()
+    assert stat.S_IMODE(acct_env.env_path.stat().st_mode) == 0o600
+
+
+# ---------------------------------------------------------------------------
+# encrypt_accounts.py — the masked dump must never be re-encrypted (B)
+# ---------------------------------------------------------------------------
+
+def test_build_accounts_rejects_masked_password_sentinel():
+    with pytest.raises(ConfigError) as exc_info:
+        encrypt_accounts.build_accounts(
+            {"accounts": [{"company": "甲公司", "username": "ua", "password": "****9x"}]}
+        )
+    message = str(exc_info.value)
+    assert "打码" in message and "--show-passwords" in message
+
+
+def test_encrypt_refuses_masked_dump_and_leaves_enc_untouched(acct_env, capsys):
+    acct_env.write_yaml(INITIAL)
+    assert encrypt_accounts.main([]) == 0
+    capsys.readouterr()
+    before = acct_env.enc_path.read_bytes()
+
+    # The operator saved the DEFAULT (masked) decrypt output as accounts.yaml.
+    assert decrypt_accounts.main([]) == 0
+    acct_env.yaml_path.write_text(capsys.readouterr().out, encoding="utf-8")
+
+    assert encrypt_accounts.main(["--yes"]) == 1
+    assert "打码" in capsys.readouterr().out
+    assert acct_env.enc_path.read_bytes() == before
+    assert {a.password for a in load_accounts()} == {PW_A_OLD, PW_B, PW_C}
+
+
+# ---------------------------------------------------------------------------
+# encrypt_accounts.py — accounts.enc re-checked after the confirmation (C)
+# ---------------------------------------------------------------------------
+
+def test_enc_rewritten_during_confirmation_aborts_the_write(acct_env, monkeypatch, capsys):
+    acct_env.write_yaml(INITIAL)
+    assert encrypt_accounts.main([]) == 0
+    capsys.readouterr()
+
+    def console_saves_an_account() -> None:
+        config_loader.save_accounts([Account("丁公司", "ud", PW_D, "赵六", "")])
+
+    monkeypatch.setattr("sys.stdin", _ReactiveTtyStdin("yes\n", console_saves_an_account))
+    acct_env.write_yaml(INITIAL[:1])
+    assert encrypt_accounts.main([]) == 1
+
+    captured = capsys.readouterr()
+    assert "确认期间被修改" in captured.out
+    _assert_no_passwords(captured.out + captured.err)
+    # The console's save survived; nothing was silently overwritten.
+    assert [a.username for a in load_accounts()] == ["ud"]
+
+
+# ---------------------------------------------------------------------------
+# decrypt_accounts.py --out must never follow a symlink (D)
+# ---------------------------------------------------------------------------
+
+def test_decrypt_out_refuses_symlink_and_leaves_target_untouched(acct_env, tmp_path, capsys):
+    acct_env.write_yaml(INITIAL)
+    assert encrypt_accounts.main([]) == 0
+    capsys.readouterr()
+
+    target = tmp_path / "settings.yaml"
+    target.write_text("base_url: https://example.invalid\n", encoding="utf-8")
+    os.chmod(target, 0o644)
+    link = tmp_path / "dump.yaml"
+    link.symlink_to(target)
+
+    assert decrypt_accounts.main(["--out", str(link)]) == 1
+
+    captured = capsys.readouterr()
+    assert "错误" in captured.err and "Traceback" not in captured.err
+    assert target.read_text(encoding="utf-8") == "base_url: https://example.invalid\n"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644
+    assert link.is_symlink()
+    _assert_no_passwords(captured.out + captured.err)
+
+
+def test_decrypt_out_refuses_dangling_symlink(acct_env, tmp_path, capsys):
+    acct_env.write_yaml(INITIAL[:1])
+    assert encrypt_accounts.main([]) == 0
+    capsys.readouterr()
+
+    victim = tmp_path / "not-created-by-us.yaml"
+    link = tmp_path / "dangling.yaml"
+    link.symlink_to(victim)
+
+    assert decrypt_accounts.main(["--out", str(link)]) == 1
+    assert "错误" in capsys.readouterr().err
+    assert not victim.exists()
+    assert link.is_symlink()
+
+
+# ---------------------------------------------------------------------------
+# Legacy accounts.enc with non-string fields (E)
+# ---------------------------------------------------------------------------
+
+def test_legacy_non_string_fields_decrypt_and_round_trip(acct_env, tmp_path, capsys):
+    """An older encrypt script fed `password: 123456` (unquoted in the yaml,
+    therefore an int) straight into the file. Masking used to crash on it and
+    the --out dump was then rejected by build_accounts()."""
+    _encrypt_raw(acct_env.enc_path, acct_env.key, {"accounts": [
+        {"company": "甲公司", "username": "ua", "password": 123456,
+         "contact": 13800000000, "group": None},
+    ]})
+
+    assert decrypt_accounts.main([]) == 0
+    masked = yaml.safe_load(capsys.readouterr().out)
+    assert masked["accounts"][0]["password"] == "****56"
+
+    dump = tmp_path / "plain.yaml"
+    assert decrypt_accounts.main(["--out", str(dump)]) == 0
+    capsys.readouterr()
+    assert "password: '123456'" in dump.read_text(encoding="utf-8")
+
+    acct_env.yaml_path.write_text(dump.read_text(encoding="utf-8"), encoding="utf-8")
+    assert encrypt_accounts.main(["--yes"]) == 0
+    capsys.readouterr()
+
+    reloaded = load_accounts()[0]
+    assert (reloaded.password, reloaded.contact, reloaded.group) == ("123456", "13800000000", "")
