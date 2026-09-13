@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
-from web import auth
+from web import auth, login_guard
 from web.routes import accounts, api, attachments, changes, dashboard, login, notify, records, reports, settings, view
 from web.sse import router as sse_router, start_watcher
 
@@ -111,18 +111,34 @@ def _same_origin_ok(request: Request) -> bool:
 
 
 def _basic_admin_ok(request: Request) -> bool:
-    """Basic Auth fallback with admin credentials (for scripts/curl)."""
+    """Basic Auth fallback with admin credentials (for scripts/curl).
+
+    Shares the login guard's counters with the form login: otherwise the rate
+    limit could simply be walked around by brute-forcing this header instead.
+    """
     header = request.headers.get("Authorization", "")
     if not header.startswith("Basic "):
         return False
+    ip = login_guard.client_ip(request)
     try:
         decoded = base64.b64decode(header[6:]).decode("utf-8")
         username, _, password = decoded.partition(":")
-        user_ok = secrets.compare_digest(username.encode(), _WEB_USER.encode())
-        pass_ok = secrets.compare_digest(password.encode(), _WEB_PASS.encode())
-        return user_ok and pass_ok
     except Exception:
         return False
+
+    guard_key = f"basic:{username}"
+    if login_guard.seconds_locked(ip, guard_key):
+        logger.warning(f"Basic 认证被锁定中 ip={ip} user={login_guard.mask(username)}")
+        return False
+
+    user_ok = secrets.compare_digest(username.encode(), _WEB_USER.encode())
+    pass_ok = secrets.compare_digest(password.encode(), _WEB_PASS.encode())
+    if user_ok and pass_ok:
+        login_guard.record_success(ip, guard_key)
+        return True
+    if login_guard.record_failure(ip, guard_key):
+        logger.error(f"Basic 认证连续失败已锁定 ip={ip} user={login_guard.mask(username)}")
+    return False
 
 
 @app.middleware("http")

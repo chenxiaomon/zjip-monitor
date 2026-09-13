@@ -6,11 +6,17 @@ import asyncio
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from loguru import logger
 
+from web import login_guard
 from web.auth import COOKIE_NAME, SESSION_MAX_AGE, check_login, make_cookie
 from web.deps import templates
 
 router = APIRouter()
+
+# Extra damping for a human at the keyboard; the actual rate limit is
+# login_guard. Module-level so tests can drop it to zero.
+FAILED_LOGIN_DELAY_SECONDS = 0.5
 
 
 @router.get("/login", response_class=HTMLResponse)
@@ -24,15 +30,41 @@ async def login_submit(
     username: str = Form(""),
     password: str = Form(""),
 ):
-    matched = check_login(username.strip(), password)
-    if matched is None:
-        await asyncio.sleep(0.5)  # 减缓暴力尝试
+    username = username.strip()
+    ip = login_guard.client_ip(request)
+
+    wait = login_guard.seconds_locked(ip, username)
+    if wait:
+        logger.warning(
+            f"控制台登录被锁定中 ip={ip} user={login_guard.mask(username)} 剩余 {wait}s"
+        )
         return templates.TemplateResponse(
             request,
             "login.html",
-            {"error": "用户名或密码错误", "form_username": username.strip()},
+            {
+                "error": f"失败次数过多，请 {wait // 60 + 1} 分钟后再试",
+                "form_username": username,
+            },
+            status_code=429,
+            headers={"Retry-After": str(wait)},
+        )
+
+    matched = check_login(username, password)
+    if matched is None:
+        just_locked = login_guard.record_failure(ip, username)
+        await asyncio.sleep(FAILED_LOGIN_DELAY_SECONDS)
+        log = logger.error if just_locked else logger.warning
+        log(
+            f"控制台登录失败 ip={ip} user={login_guard.mask(username)}"
+            + ("（已锁定）" if just_locked else "")
+        )
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"error": "用户名或密码错误", "form_username": username},
             status_code=401,
         )
+    login_guard.record_success(ip, username)
     response = RedirectResponse(url="/", status_code=303)
     response.set_cookie(
         COOKIE_NAME,
