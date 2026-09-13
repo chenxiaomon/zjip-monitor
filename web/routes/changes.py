@@ -14,10 +14,12 @@ router = APIRouter()
 
 
 def _changes_ctx(request: Request, account: str | None) -> dict:
-    rows = read_change_rows(account=account, hours=24 * 30, limit=300)
-    allowed = allowed_usernames(request)
-    if allowed is not None:
-        rows = [r for r in rows if r.get("account") in allowed]
+    # The allow-list goes INTO the reader: filtering afterwards let a busy
+    # account the user may not see push that user's own changes out of the
+    # newest-300 window, leaving them an empty page.
+    rows = read_change_rows(
+        account=account, hours=24 * 30, limit=300, accounts=allowed_usernames(request)
+    )
     accounts_list = visible_accounts(request)
     return {
         "rows": rows,

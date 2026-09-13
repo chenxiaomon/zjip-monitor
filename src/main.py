@@ -57,6 +57,9 @@ _EVENTS_LOCK = threading.Lock()
 _SNAPSHOTS_KEEP_PER_COMPANY = 30
 _REPORTS_KEEP_DAYS = 60
 _EVENTS_ROTATE_BYTES = 5 * 1024 * 1024
+# Rotated events-*.jsonl had no retention at all: 5 MB blocks accumulated
+# forever on a root partition that has been as full as 96%.
+_EVENTS_ROTATED_KEEP = 6
 # Snapshot stems end with "_YYYY-MM-DD-HHMM" (16 chars incl. underscore)
 _SNAPSHOT_TS_SUFFIX_LEN = 16
 _SNAPSHOT_TS_RE = re.compile(r"^_\d{4}-\d{2}-\d{2}-\d{4}$")
@@ -94,6 +97,11 @@ def _prune_data() -> None:
                 rotated = _EVENTS_FILE.with_name(f"events-{ts}.jsonl")
                 _EVENTS_FILE.rename(rotated)
                 logger.info(f"events.jsonl rotated → {rotated.name}")
+            # Names carry a zero-padded UTC stamp, so sorted() is chronological.
+            old_rotations = sorted(_EVENTS_FILE.parent.glob("events-*.jsonl"))
+            for stale in old_rotations[:-_EVENTS_ROTATED_KEEP]:
+                stale.unlink(missing_ok=True)
+                logger.info(f"Pruned rotated event log {stale.name}")
     except Exception as exc:
         logger.warning(f"Data pruning failed (non-fatal): {exc!r}")
 

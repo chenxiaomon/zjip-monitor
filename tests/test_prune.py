@@ -59,3 +59,36 @@ def test_prune_removes_old_reports(tmp_path, monkeypatch):
 
     assert not old.exists()
     assert new.exists()
+
+
+def test_prune_bounds_rotated_event_logs(tmp_path, monkeypatch):
+    """Rotated events-*.jsonl had no retention at all — 5 MB blocks piled up
+    forever on a root partition that has been as full as 96%."""
+    monkeypatch.setattr(main, "_SNAPSHOTS_DIR", tmp_path / "snapshots")
+    monkeypatch.setattr(main, "_REPORTS_DIR", tmp_path / "reports")
+    monkeypatch.setattr(main, "_EVENTS_FILE", tmp_path / "events.jsonl")
+
+    for day in range(1, 10):  # 9 rotations, oldest first
+        (tmp_path / f"events-202601{day:02d}-000000.jsonl").write_text("x")
+
+    main._prune_data()
+
+    kept = sorted(p.name for p in tmp_path.glob("events-*.jsonl"))
+    assert len(kept) == main._EVENTS_ROTATED_KEEP
+    assert kept[0] == "events-20260104-000000.jsonl"  # the 3 oldest are gone
+
+
+def test_rotation_and_pruning_happen_in_one_pass(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "_SNAPSHOTS_DIR", tmp_path / "snapshots")
+    monkeypatch.setattr(main, "_REPORTS_DIR", tmp_path / "reports")
+    events = tmp_path / "events.jsonl"
+    monkeypatch.setattr(main, "_EVENTS_FILE", events)
+    events.write_text("x" * (main._EVENTS_ROTATE_BYTES + 1))
+    for day in range(1, 7):
+        (tmp_path / f"events-202601{day:02d}-000000.jsonl").write_text("x")
+
+    main._prune_data()
+
+    # 6 old + 1 fresh rotation, trimmed back to the keep limit
+    assert len(list(tmp_path.glob("events-*.jsonl"))) == main._EVENTS_ROTATED_KEEP
+    assert not events.exists()
