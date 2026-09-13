@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, HTMLResponse
+from loguru import logger
 
 from src.reporter import generate_report_from_snapshots
 from web.deps import executor as _executor, spawn, templates
@@ -49,8 +50,11 @@ async def _generate_report_async() -> None:
             _gen_status["status"] = "done"
             _gen_status["msg"] = ""
     except Exception as exc:
+        # The raw text can carry filesystem paths; the operator needs the log,
+        # not a truncated traceback fragment in the browser.
+        logger.exception(f"Report generation failed: {exc!r}")
         _gen_status["status"] = "error"
-        _gen_status["msg"] = str(exc)[:80]
+        _gen_status["msg"] = "报表生成失败，请查看服务器日志"
     finally:
         if _gen_status["status"] == "running":  # e.g. cancelled coroutine
             _gen_status["status"] = "error"

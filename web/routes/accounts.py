@@ -101,6 +101,39 @@ def _row(acc: Account, *, task: dict | None = None, scan_task: str | None = None
     }
 
 
+def _row_error(username: str, msg: str = "账号不存在") -> HTMLResponse:
+    """A table row saying why there is nothing to show.
+
+    The username comes straight from the URL path, so it MUST be escaped: the
+    two GET pollers below answer 200 text/html for any unknown username, which
+    made `/accounts/<payload>/token-status` a reflected-XSS sink that a logged
+    -in admin could be walked into by a single link (the session cookie is
+    SameSite=Lax, so a top-level navigation carries it).
+    """
+    u = _html.escape(username, quote=True)
+    cell = f'<td colspan="7" class="px-4 py-2 text-red-500 text-sm">{_html.escape(msg)}</td>'
+    return HTMLResponse(f'<tr id="row-{u}">{cell}</tr>')
+
+
+def _row_empty(username: str) -> HTMLResponse:
+    """Empty row for the polling endpoints: swapping it in stops the poll."""
+    return HTMLResponse(f'<tr id="row-{_html.escape(username, quote=True)}"></tr>')
+
+
+def _public_error(exc: Exception, context: str, *, username: str = "") -> str:
+    """Log the real cause, return something safe and actionable for the page.
+
+    ConfigError text names config paths and the encryption key setup; a save
+    failure can carry a filesystem path. None of it helps whoever is looking
+    at the console, and it travels over plain HTTP.
+    """
+    who = f"[{username}] " if username else ""
+    logger.error(f"{who}{context}: {exc!r}")
+    if isinstance(exc, ConfigError):
+        return "账号库读取失败，请查看服务器日志"
+    return "操作失败，请查看服务器日志"
+
+
 def _build_rows(accounts_list) -> list[dict]:
     return [_row(acc) for acc in accounts_list]
 
@@ -196,7 +229,7 @@ async def relogin(request: Request, username: str) -> HTMLResponse:
     accounts_list = visible_accounts(request)
     acc = next((a for a in accounts_list if a.username == username), None)
     if acc is None:
-        return HTMLResponse(f'<tr id="row-{username}"><td colspan="7" class="px-4 py-2 text-red-500 text-sm">账号不存在</td></tr>')
+        return _row_error(username)
 
     _tasks[username] = {"status": "pending", "msg": ""}
     spawn(_verify_async(username, acc.password, acc.company, seq=_bump_verify_seq(username)))
@@ -213,7 +246,7 @@ def token_status_poll(request: Request, username: str) -> HTMLResponse:
     accounts_list = visible_accounts(request)
     acc = next((a for a in accounts_list if a.username == username), None)
     if acc is None:
-        return HTMLResponse(f'<tr id="row-{username}"></tr>')
+        return _row_empty(username)
 
     return templates.TemplateResponse(
         request,
@@ -227,7 +260,7 @@ async def scan_account(request: Request, username: str) -> HTMLResponse:
     accounts_list = visible_accounts(request)
     acc = next((a for a in accounts_list if a.username == username), None)
     if acc is None:
-        return HTMLResponse(f'<tr id="row-{username}"><td colspan="7" class="px-4 py-2 text-red-500 text-sm">账号不存在</td></tr>')
+        return _row_error(username)
 
     if _scan_tasks.get(username) != "running":
         _scan_tasks[username] = "running"
@@ -243,7 +276,7 @@ def scan_status_poll(request: Request, username: str) -> HTMLResponse:
     accounts_list = visible_accounts(request)
     acc = next((a for a in accounts_list if a.username == username), None)
     if acc is None:
-        return HTMLResponse(f'<tr id="row-{username}"></tr>')
+        return _row_empty(username)
 
     return templates.TemplateResponse(
         request, "_partials/account_row.html", {"row": _row(acc)}
@@ -335,7 +368,7 @@ async def add_account(
         except ConfigError as exc:
             # Never fall back to an empty list: save_accounts() overwrites the
             # whole file, which would wipe every existing account.
-            return _err(f"账号库读取失败，拒绝写入：{exc}")
+            return _err(_public_error(exc, "load_accounts failed, refusing to write", username=username))
         if any(a.username == username for a in accounts_list):
             return _err(f"账号 {username} 已存在")
         if any(_company_key(a.company) == _company_key(company) for a in accounts_list):
@@ -349,7 +382,7 @@ async def add_account(
         try:
             save_accounts(accounts_list)
         except ConfigError as exc:
-            return _err(f"保存失败：{exc}")
+            return _err(_public_error(exc, "save_accounts failed", username=username))
 
     # Auto-trigger first login for the new account
     _tasks[username] = {"status": "pending", "msg": ""}
@@ -386,7 +419,7 @@ async def verify_account(
         try:
             accounts_list = load_accounts()
         except ConfigError as exc:
-            return _result(False, f"账号库读取失败：{exc}")
+            return _result(False, _public_error(exc, "verify: load_accounts failed", username=username))
         acc = next((a for a in accounts_list if a.username == username), None)
         if acc is None:
             return _result(False, f"账号 {username} 尚未保存 — 密码留空时测试的是已保存密码，请先输入密码")
@@ -408,7 +441,7 @@ def edit_account_form(request: Request, username: str) -> HTMLResponse:
     try:
         accounts_list = load_accounts()
     except ConfigError as exc:
-        return HTMLResponse(f"账号库读取失败：{exc}", status_code=500)
+        return HTMLResponse(_public_error(exc, "edit-form: load_accounts failed", username=username), status_code=500)
     acc = next((a for a in accounts_list if a.username == username), None)
     if acc is None:
         return HTMLResponse("账号不存在", status_code=404)
@@ -458,7 +491,7 @@ async def edit_account(
         try:
             accounts_list = load_accounts()
         except ConfigError as exc:
-            return _err(f"账号库读取失败，拒绝写入：{exc}")
+            return _err(_public_error(exc, "load_accounts failed, refusing to write", username=username))
         acc = next((a for a in accounts_list if a.username == username), None)
         if acc is None:
             return _err(f"账号 {username} 不存在")
@@ -469,7 +502,7 @@ async def edit_account(
         try:
             save_accounts(accounts_list)
         except ConfigError as exc:
-            return _err(f"保存失败：{exc}")
+            return _err(_public_error(exc, "save_accounts failed", username=username))
 
     if password:
         # The cached token belongs to the old password's session — drop it so
@@ -504,15 +537,15 @@ def set_account_group(request: Request, username: str, group: str = Form("")) ->
         try:
             accounts_list = load_accounts()
         except ConfigError as exc:
-            return HTMLResponse(f"账号库读取失败，拒绝写入：{exc}", status_code=500)
+            return HTMLResponse(_public_error(exc, "load_accounts failed, refusing to write", username=username), status_code=500)
         acc = next((a for a in accounts_list if a.username == username), None)
         if acc is None:
-            return HTMLResponse(f'<tr id="row-{username}"><td colspan="7" class="px-4 py-2 text-red-500 text-sm">账号不存在</td></tr>')
+            return _row_error(username)
         acc.group = group
         try:
             save_accounts(accounts_list)
         except ConfigError as exc:
-            return HTMLResponse(f"保存失败：{exc}", status_code=500)
+            return HTMLResponse(_public_error(exc, "save_accounts failed", username=username), status_code=500)
 
     return templates.TemplateResponse(request, "_partials/account_row.html", {"row": _row(acc)})
 
@@ -524,14 +557,14 @@ def delete_account(request: Request, username: str) -> HTMLResponse:
         try:
             accounts_list = load_accounts()
         except ConfigError as exc:
-            return HTMLResponse(f"账号库读取失败，拒绝写入：{exc}", status_code=500)
+            return HTMLResponse(_public_error(exc, "load_accounts failed, refusing to write", username=username), status_code=500)
         new_list = [a for a in accounts_list if a.username != username]
         if len(new_list) == len(accounts_list):
             return HTMLResponse(status_code=404)
         try:
             save_accounts(new_list)
         except ConfigError as exc:
-            return HTMLResponse(f"保存失败：{exc}", status_code=500)
+            return HTMLResponse(_public_error(exc, "save_accounts failed", username=username), status_code=500)
     _tasks.pop(username, None)
     status_store.forget_account(username)
     _bump_verify_seq(username)  # an in-flight verify must not recreate the token below
