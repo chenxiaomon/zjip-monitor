@@ -15,6 +15,7 @@ os.environ.setdefault("WEB_PASS", "test-admin-pass")
 os.environ.setdefault("WEB_USERS", "ga:test-ga-pass:group_a,gb:test-gb-pass:group_b")
 os.environ.setdefault("SESSION_SECRET", "test-session-secret")
 os.environ.setdefault("API_KEY", "test-api-key-0123456789")
+os.environ.setdefault("ZJIP_LOG_TO_FILE", "0")
 
 from types import SimpleNamespace  # noqa: E402
 

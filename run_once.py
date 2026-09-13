@@ -17,25 +17,14 @@ sys.path.insert(0, str(ROOT))
 import argparse
 from loguru import logger
 from src import control
+from src.logging_setup import setup_logging
 from src.main import run_all
-
-logger.remove()
-logger.add(
-    sys.stderr,
-    format="<green>{time:HH:mm:ss}</green> | <level>{level:<8}</level> | {message}",
-    level="INFO",
-    colorize=True,
-)
-logger.add(
-    ROOT / "logs" / "run_{time:YYYY-MM-DD}.log",
-    rotation="00:00",
-    retention="30 days",
-    level="DEBUG",
-    encoding="utf-8",
-)
 
 
 def main() -> int:
+    # Before argparse so even `--stop` and a usage error get the same sinks
+    setup_logging("cli")
+
     parser = argparse.ArgumentParser(description="Run one fetch cycle for all accounts")
     parser.add_argument(
         "--force-login",

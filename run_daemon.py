@@ -29,6 +29,7 @@ from apscheduler.triggers.cron import CronTrigger
 from loguru import logger
 
 from src import control
+from src.logging_setup import setup_logging
 from src.main import run_all
 
 _SETTINGS = ROOT / "config" / "settings.yaml"
@@ -46,23 +47,6 @@ def _load_crons() -> list[str]:
     except Exception as exc:
         logger.error(f"读取 settings.yaml 失败（{exc}）— 使用默认计划 {_DEFAULT_CRONS}")
     return _DEFAULT_CRONS
-
-
-def _setup_logger() -> None:
-    logger.remove()
-    logger.add(
-        sys.stderr,
-        format="<green>{time:HH:mm:ss}</green> | <level>{level:<8}</level> | {message}",
-        level="INFO",
-        colorize=True,
-    )
-    logger.add(
-        ROOT / "logs" / "run_{time:YYYY-MM-DD}.log",
-        rotation="00:00",
-        retention="30 days",
-        level="DEBUG",
-        encoding="utf-8",
-    )
 
 
 def _exit_if_wedged_on_self() -> None:
@@ -100,7 +84,7 @@ def _job() -> None:
 
 
 def main() -> int:
-    _setup_logger()
+    setup_logging("daemon")
 
     parser = argparse.ArgumentParser(description="Resident daemon for zjip-monitor")
     parser.add_argument(
