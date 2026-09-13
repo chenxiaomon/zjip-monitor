@@ -30,3 +30,6 @@ build/
 
 # Claude Code 个人权限配置
 .claude/settings.local.json
+
+# 部署脚本的本机配置（服务器地址等），模板见 deploy/deploy.env.example
+deploy/deploy.env

@@ -1,0 +1,19 @@
+# /etc/systemd/system/zjip-web.service
+# Web 控制台（FastAPI/uvicorn，仅监听本机 127.0.0.1:8000，由 nginx 反代对外）。
+# 与生产机上的 unit 语义一致；改动后用 ./deploy.sh install-units 安装（会先 diff 再确认）。
+[Unit]
+Description=Zjip Monitor Web Dashboard
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/opt/zjip-monitor
+# .env 里是 WEB_USER/WEB_PASS/SESSION_SECRET/API_KEY 等，不进仓库、不被 deploy.sh 覆盖
+EnvironmentFile=/opt/zjip-monitor/.env
+# 注意入口是 uvicorn 直接加载 web.app:app，不是 run_web.py
+ExecStart=/opt/zjip-monitor/.venv/bin/uvicorn web.app:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,19 @@
+# /etc/systemd/system/zjip-daemon.service
+# 定时巡检守护进程（APScheduler，按 config/settings.yaml 的 crons 拉取登记状态）。
+# 与生产机上的 unit 语义一致；改动后用 ./deploy.sh install-units 安装（会先 diff 再确认）。
+[Unit]
+Description=Zjip Monitor Daemon (Scheduled Scraper)
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/opt/zjip-monitor
+# .env 里是加密账号的口令等，不进仓库、不被 deploy.sh 覆盖
+EnvironmentFile=/opt/zjip-monitor/.env
+ExecStart=/opt/zjip-monitor/.venv/bin/python run_daemon.py
+Restart=on-failure
+# 比 web 多等 5 秒：Playwright 启动失败时避免和 web 抢 1 vCPU 反复重启
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
