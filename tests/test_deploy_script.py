@@ -374,7 +374,7 @@ def test_requirements_lock_is_pinned_and_documented():
     header = [ln for ln in lines if ln.startswith("#")]
     pins = [ln for ln in lines if ln and not ln.startswith("#")]
     assert header, "lock file needs a header explaining its provenance"
-    assert "2026-09-13" in text
+    assert re.search(r"taken \d{4}-\d{2}-\d{2} \(UTC\)", text), "header must say when the freeze was taken"
     assert "requirements-dev.txt" in text
     assert "3.12" in text
     assert pins and all("==" in ln for ln in pins), pins
