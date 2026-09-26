@@ -224,6 +224,23 @@ python -m archive index    # 增量更新 ~/zjip-archive/archive.sqlite
   `documents_fts`（正文全文检索，3 个字以上用 `MATCH`，更短的词对 `documents.text` 用 `LIKE`）。
 - 例：`sqlite3 ~/zjip-archive/archive.sqlite "select reg_no, deadline, reasons from documents where doc_kind='补正' order by deadline desc limit 5"`
 
+**释放服务器空间**（本机有了经过哈希核对的副本后，把旧文件从服务器删掉）：
+
+```bash
+python -m archive pull && python -m archive index   # 先同步，保证本机副本是最新的
+python -m archive release                          # 预演：列出可释放的文件与合计，服务器上什么都不删
+python -m archive release --company 某企业目录 --yes # 先小范围正式释放
+python -m archive release --yes                    # 全量
+python -m archive restore 企业目录 登记号           # 客户要旧证书时：把这条申请的文件送回服务器
+```
+
+- 哪些可以释放：已办结（登记成功/不予登记/撤回等）且平台 `archive.release_after_terminal_days`（默认 90）天没动过的申请的
+  全部文件，以及被新一轮替换下来的旧通知书。还在办理中的申请一个文件都不动。
+- 服务器端 `scripts/archive_release.py` 不信任本机发来的任何东西：持巡检锁、只接受 `data/attachments/` 下的文件、
+  逐个重算 sha256 与本机副本比对、按**服务器自己**的最新快照和 settings.yaml 复核释放条件，全部通过才删。
+- 删除前先在该记录的 `.sync.json` 里记下 `archived`，所以之后的巡检不会把它重新下载回来；控制台登记记录页显示为
+  灰色「已归档」标记（带归档日期），不再是下载链接。
+
 ## 运行测试
 
 ```bash

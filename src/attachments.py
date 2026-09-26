@@ -20,6 +20,7 @@ the older file is kept under a dated name and the current one takes the plain na
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -242,6 +243,30 @@ def _archive_name(dest: Path) -> Path:
     return candidate
 
 
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _fetch_unless_archived(url: str, dest: Path, archived_sha: str | None) -> tuple[bool, bool]:
+    """dest was released to the laptop's archive (scripts/archive_release.py)
+    before its identity was recorded. Fetch url beside it and keep it only if
+    it is not that same document. Returns (ok, kept)."""
+    incoming = dest.with_name(f".{dest.name}.incoming.part")
+    try:
+        if not _download_file(url, incoming):
+            return False, False
+        if archived_sha and _sha256(incoming) == archived_sha:
+            return True, False
+        incoming.replace(dest)
+        return True, True
+    finally:
+        incoming.unlink(missing_ok=True)
+
+
 def _refresh_document(url: str, dest: Path) -> tuple[bool, Path | None]:
     """dest already holds a document of this type; fetch url and keep both if
     they differ. Returns (ok, archived): ok is False when the download failed
@@ -341,13 +366,16 @@ def sync_attachments(
             files: list[str] = manifest.get("files", []) if manifest else []
             # file name → _identity() of the document stored under it
             sources: dict[str, str] = dict(manifest.get("sources") or {}) if manifest else {}
+            # file name → {sha256, size, archived_at}: released to the laptop's
+            # archive by scripts/archive_release.py, gone from this disk on purpose
+            archived: dict[str, dict] = dict(manifest.get("archived") or {}) if manifest else {}
             for item in wanted:
                 fname = _safe_filename(item["type"]) + _url_ext(item["url"])
                 dest = rec_dir / fname
                 ident = _identity(item)
                 held = next((name for name, i in sources.items() if i == ident), None)
-                if held and (rec_dir / held).exists():
-                    continue  # this very document is already on disk
+                if held and ((rec_dir / held).exists() or held in archived):
+                    continue  # this very document is on disk, or safe in the local archive
                 disk = diskstat.check_free()
                 if disk.low:
                     logger.warning(
@@ -358,6 +386,23 @@ def sync_attachments(
                     low_disk = True
                     ok = False  # keep this record un-manifested → retried next run
                     break
+                if not dest.exists() and fname in archived:
+                    fetched, kept = _fetch_unless_archived(
+                        item["url"], dest, archived[fname].get("sha256")
+                    )
+                    if not fetched:
+                        ok = False
+                        continue
+                    sources[fname] = ident
+                    if kept:
+                        # The platform changed it after the release: the new
+                        # version is current, the old one lives in the archive.
+                        archived.pop(fname)
+                        downloaded.append(dest)
+                        if fname not in files:
+                            files.append(fname)
+                        logger.info(f"[{company}] {reg_no} ← {fname}（平台已更新，旧版在本机归档）")
+                    continue
                 if not dest.exists():
                     if _download_file(item["url"], dest):
                         downloaded.append(dest)
@@ -371,18 +416,18 @@ def sync_attachments(
                 # A document of this type is already here: either this same one,
                 # stored before identities were recorded, or an older round —
                 # a second 补正通知书 has the same type, hence the same name.
-                fetched, archived = _refresh_document(item["url"], dest)
+                fetched, moved = _refresh_document(item["url"], dest)
                 if not fetched:
                     ok = False
                     continue
-                if archived is not None:
+                if moved is not None:
                     if fname in sources:
-                        sources[archived.name] = sources[fname]
-                    if archived.name not in files:
-                        files.append(archived.name)
+                        sources[moved.name] = sources[fname]
+                    if moved.name not in files:
+                        files.append(moved.name)
                     downloaded.append(dest)
                     logger.info(
-                        f"[{company}] {reg_no} ← {fname}（新一轮，旧文件改名为 {archived.name}）"
+                        f"[{company}] {reg_no} ← {fname}（新一轮，旧文件改名为 {moved.name}）"
                     )
                 sources[fname] = ident
 
@@ -402,6 +447,7 @@ def sync_attachments(
                             "synced_at": datetime.now(timezone.utc).isoformat(),
                             "files": files,
                             "sources": sources,
+                            **({"archived": archived} if archived else {}),
                         },
                         ensure_ascii=False,
                         indent=2,

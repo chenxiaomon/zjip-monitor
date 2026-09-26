@@ -29,9 +29,17 @@
          class="inline-flex items-center gap-0.5 mr-1.5 text-blue-600 dark:text-blue-400 hover:underline">
         <i class="ti ti-file-download text-sm"></i>{{ f.rsplit('.', 1)[0] }}
       </a>
-      {% else %}
-      <span class="text-gray-300 dark:text-gray-600">—</span>
       {% endfor %}
+      {# 已释放到本机归档的文件：服务器上没有了，只留一个不可点的灰色标记 #}
+      {% for a in r.archived %}
+      <span title="已归档到本机{{ ' · ' ~ a.archived_on if a.archived_on }}，需要时请找管理员恢复"
+            class="inline-flex items-center gap-0.5 mr-1.5 text-gray-400 dark:text-gray-500 cursor-default">
+        <i class="ti ti-archive text-sm"></i>{{ a.name.rsplit('.', 1)[0] }}<span class="text-[10px]">（已归档）</span>
+      </span>
+      {% endfor %}
+      {% if not r.attachments and not r.archived %}
+      <span class="text-gray-300 dark:text-gray-600">—</span>
+      {% endif %}
     </td>
   </tr>
   <!-- JSON expand row -->

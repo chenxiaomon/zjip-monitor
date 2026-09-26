@@ -12,6 +12,12 @@ Tables:
 Time columns: *_at are UTC ISO instants, *_on / apply_date are calendar dates
 in Beijing time, as the platform and its documents state them.
 
+documents.path is relative to ARCHIVE_DIR: attachments/<企业>/<登记号>/<文件> for
+what the server holds (or held), .overwritten/<时间>/attachments/... for older
+versions rsync moved aside. released_at comes from the pulled .sync.json
+("archived", written by scripts/archive_release.py), so the whole database is
+derived from the files and can be deleted and rebuilt at any time.
+
 Only new or changed files are read on each run (ingested / documents keep
 size + mtime), so a re-run after `pull` takes seconds.
 """
@@ -31,7 +37,7 @@ from src.scraper import AUDIT_STATUS, int_or_none
 from . import pdftext
 from .config import ArchiveConfig
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
@@ -89,8 +95,23 @@ _RECORD_UPSERT = (
 )
 
 
+def _stored_version(path: Path) -> str | None:
+    db = sqlite3.connect(path)
+    try:
+        row = db.execute("SELECT v FROM meta WHERE k = 'schema_version'").fetchone()
+        return row[0] if row else None
+    except sqlite3.DatabaseError:
+        return None
+    finally:
+        db.close()
+
+
 def connect(path: Path) -> sqlite3.Connection:
+    """Open archive.sqlite; one written by another schema version is rebuilt
+    from scratch (everything in it is derived from the files)."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and _stored_version(path) != SCHEMA_VERSION:
+        path.unlink()
     db = sqlite3.connect(path)
     db.executescript(_SCHEMA)
     db.execute("INSERT OR REPLACE INTO meta (k, v) VALUES ('schema_version', ?)", (SCHEMA_VERSION,))
@@ -202,52 +223,100 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _is_document(f: Path) -> bool:
+    return f.is_file() and not f.name.startswith(".") and not f.name.endswith(".part")
+
+
+def _manifest(rec_dir: Path) -> dict:
+    try:
+        data = json.loads((rec_dir / ".sync.json").read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _store_document(
+    db: sqlite3.Connection, root: Path, f: Path, digest: str, *,
+    company_dir: str, reg_no: str, superseded: bool, source: str | None, released_at: str | None,
+) -> None:
+    rel = f.relative_to(root).as_posix()
+    st = f.stat()
+    m = _SUPERSEDED_RE.match(f.stem)
+    doc_type = m.group("stem") if m else f.stem
+    text = pdftext.extract_text(f) if f.suffix.lower() == ".pdf" else ""
+    facts = pdftext.parse(text, doc_type)
+    values = {
+        "path": rel, "company_dir": company_dir, "reg_no": reg_no,
+        "filename": f.name, "doc_type": doc_type, "doc_kind": facts.kind,
+        "superseded": 1 if (superseded or m) else 0, "source": source,
+        "size": st.st_size, "mtime": st.st_mtime, "sha256": digest,
+        "downloaded_at": datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat(),
+        "submitted_on": facts.submitted_on, "issued_on": facts.issued_on,
+        "deadline": facts.deadline, "valid_from": facts.valid_from, "valid_to": facts.valid_to,
+        "name_in_doc": facts.name_in_doc, "reasons": facts.reasons,
+        "fields": json.dumps(facts.fields, ensure_ascii=False) if facts.fields else None,
+        "text": text, "released_at": released_at,
+    }
+    cols = ", ".join(values)
+    updates = ", ".join(f"{c} = excluded.{c}" for c in values if c != "path")
+    db.execute(
+        f"INSERT INTO documents ({cols}) VALUES ({', '.join('?' * len(values))}) "
+        f"ON CONFLICT(path) DO UPDATE SET {updates}",
+        tuple(values.values()),
+    )
+    doc_id = db.execute("SELECT id FROM documents WHERE path = ?", (rel,)).fetchone()[0]
+    db.execute("DELETE FROM documents_fts WHERE rowid = ?", (doc_id,))
+    db.execute(
+        "INSERT INTO documents_fts (rowid, text, reasons) VALUES (?, ?, ?)",
+        (doc_id, text, facts.reasons or ""),
+    )
+
+
 def ingest_documents(db: sqlite3.Connection, root: Path) -> int:
     count = 0
-    attachments = root / "attachments"
-    for rec_dir in sorted(p for p in attachments.glob("*/*") if p.is_dir()):
-        try:
-            sources = json.loads((rec_dir / ".sync.json").read_text(encoding="utf-8")).get("sources") or {}
-        except (OSError, ValueError):
-            sources = {}
+    # What the server holds, or held until it released it to this archive
+    for rec_dir in sorted(p for p in (root / "attachments").glob("*/*") if p.is_dir()):
+        manifest = _manifest(rec_dir)
+        sources = manifest.get("sources") or {}
+        archived = manifest.get("archived") or {}
         for f in sorted(rec_dir.iterdir()):
-            if not f.is_file() or f.name.startswith(".") or f.name.endswith(".part"):
+            if not _is_document(f):
                 continue
-            rel = f.relative_to(attachments).as_posix()
+            meta = archived.get(f.name)
+            released_at = meta.get("archived_at") if isinstance(meta, dict) else None
+            source = sources.get(f.name)
+            rel = f.relative_to(root).as_posix()
             st = f.stat()
-            row = db.execute("SELECT id, size, mtime FROM documents WHERE path = ?", (rel,)).fetchone()
-            if row and row[1] == st.st_size and row[2] == st.st_mtime:
+            row = db.execute(
+                "SELECT size, mtime, source, released_at FROM documents WHERE path = ?", (rel,)
+            ).fetchone()
+            if row and row[0] == st.st_size and row[1] == st.st_mtime:
+                if (row[2], row[3]) != (source, released_at):  # only the manifest moved
+                    db.execute(
+                        "UPDATE documents SET source = ?, released_at = ? WHERE path = ?",
+                        (source, released_at, rel),
+                    )
                 continue
-            m = _SUPERSEDED_RE.match(f.stem)
-            doc_type = m.group("stem") if m else f.stem
-            text = pdftext.extract_text(f) if f.suffix.lower() == ".pdf" else ""
-            facts = pdftext.parse(text, doc_type)
-            values = {
-                "path": rel, "company_dir": rec_dir.parent.name, "reg_no": rec_dir.name,
-                "filename": f.name, "doc_type": doc_type, "doc_kind": facts.kind,
-                "superseded": 1 if m else 0, "source": sources.get(f.name),
-                "size": st.st_size, "mtime": st.st_mtime, "sha256": _sha256(f),
-                "downloaded_at": datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat(),
-                "submitted_on": facts.submitted_on, "issued_on": facts.issued_on,
-                "deadline": facts.deadline, "valid_from": facts.valid_from, "valid_to": facts.valid_to,
-                "name_in_doc": facts.name_in_doc, "reasons": facts.reasons,
-                "fields": json.dumps(facts.fields, ensure_ascii=False) if facts.fields else None,
-                "text": text,
-            }
-            cols = ", ".join(values)
-            updates = ", ".join(f"{c} = excluded.{c}" for c in values if c != "path")
-            db.execute(
-                f"INSERT INTO documents ({cols}) VALUES ({', '.join('?' * len(values))}) "
-                f"ON CONFLICT(path) DO UPDATE SET {updates}",
-                tuple(values.values()),
-            )
-            doc_id = db.execute("SELECT id FROM documents WHERE path = ?", (rel,)).fetchone()[0]
-            db.execute("DELETE FROM documents_fts WHERE rowid = ?", (doc_id,))
-            db.execute(
-                "INSERT INTO documents_fts (rowid, text, reasons) VALUES (?, ?, ?)",
-                (doc_id, text, facts.reasons or ""),
+            _store_document(
+                db, root, f, _sha256(f), company_dir=rec_dir.parent.name, reg_no=rec_dir.name,
+                superseded=False, source=source, released_at=released_at,
             )
             count += 1
+
+    # Older versions `pull` moved aside before rsync overwrote them; a copy
+    # whose bytes are already indexed under another path adds nothing.
+    for f in sorted((root / ".overwritten").glob("*/attachments/*/*/*")):
+        key = f.relative_to(root).as_posix()
+        if not _is_document(f) or _unchanged(db, key, f):
+            continue
+        digest = _sha256(f)
+        if not db.execute("SELECT 1 FROM documents WHERE sha256 = ? AND path <> ?", (digest, key)).fetchone():
+            _store_document(
+                db, root, f, digest, company_dir=f.parent.parent.name, reg_no=f.parent.name,
+                superseded=True, source=None, released_at=None,
+            )
+            count += 1
+        _mark(db, key, f)
     return count
 
 

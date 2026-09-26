@@ -150,6 +150,60 @@ def test_a_half_copied_snapshot_is_retried_on_the_next_run(tmp_path, monkeypatch
     assert _db(root).execute("SELECT count(*) FROM records").fetchone()[0] == 1
 
 
+def test_paths_are_relative_to_the_archive_root(archive_dir):
+    index.build(archive_dir, archive_dir / "archive.sqlite")
+    paths = [p for (p,) in _db(archive_dir).execute("SELECT path FROM documents ORDER BY path")]
+    assert paths == [f"attachments/甲公司/R1/{NOTICE}.pdf", f"attachments/甲公司/R1/{NOTICE}_2026-09-01.pdf"]
+
+
+def test_released_state_comes_from_the_pulled_manifest(archive_dir):
+    """The server records a release in .sync.json; pull brings it here, so the
+    database can always be rebuilt from the files alone."""
+    db_path = archive_dir / "archive.sqlite"
+    index.build(archive_dir, db_path)
+    manifest = archive_dir / "attachments" / "甲公司" / "R1" / ".sync.json"
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    data["archived"] = {f"{NOTICE}_2026-09-01.pdf": {"sha256": "x", "size": 1, "archived_at": "2026-09-27T01:00:00+00:00"}}
+    manifest.write_text(json.dumps(data), encoding="utf-8")
+
+    assert index.build(archive_dir, db_path)["documents"] == 0  # nothing re-parsed
+    rows = dict(_db(archive_dir).execute("SELECT filename, released_at FROM documents"))
+    assert rows == {f"{NOTICE}.pdf": None, f"{NOTICE}_2026-09-01.pdf": "2026-09-27T01:00:00+00:00"}
+
+    db_path.unlink()  # rebuilt from scratch: same answer
+    index.build(archive_dir, db_path)
+    assert dict(_db(archive_dir).execute("SELECT filename, released_at FROM documents")) == rows
+
+
+def test_versions_rsync_moved_aside_are_kept_as_history(archive_dir):
+    db_path = archive_dir / "archive.sqlite"
+    aside = archive_dir / ".overwritten" / "20260927-010000" / "attachments" / "甲公司" / "R1"
+    aside.mkdir(parents=True)
+    (aside / "国家局登记证书.pdf").write_bytes(b"%PDF-cert-v1")
+    (aside / f"{NOTICE}.pdf").write_bytes(b"%PDF-round-1")  # same bytes as the dated copy
+    (aside / ".sync.json").write_text("{}", encoding="utf-8")
+
+    index.build(archive_dir, db_path)
+    rows = _db(archive_dir).execute(
+        "SELECT path, superseded, reg_no FROM documents WHERE path LIKE '.overwritten/%'"
+    ).fetchall()
+    assert rows == [(".overwritten/20260927-010000/attachments/甲公司/R1/国家局登记证书.pdf", 1, "R1")]
+    assert index.build(archive_dir, db_path)["documents"] == 0
+
+
+def test_a_database_from_another_schema_is_rebuilt(archive_dir):
+    db_path = archive_dir / "archive.sqlite"
+    old = sqlite3.connect(db_path)
+    old.execute("CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT)")
+    old.execute("INSERT INTO meta VALUES ('schema_version', '1')")
+    old.execute("CREATE TABLE documents (path TEXT)")
+    old.commit()
+    old.close()
+
+    index.build(archive_dir, db_path)
+    assert index.summary(db_path)["documents"] == 2
+
+
 def test_run_refuses_a_missing_archive_dir(tmp_path, capsys):
     from archive.config import ArchiveConfig
 

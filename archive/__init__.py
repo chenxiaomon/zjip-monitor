@@ -9,6 +9,8 @@ as the long-term record for improving future filings.
 
     python -m archive pull     # rsync the server's data/ here, append-only
     python -m archive index    # update archive.sqlite incrementally
+    python -m archive release  # free server space: dry run unless --yes
+    python -m archive restore <企业目录> <登记号>   # send released files back
 
 Local-only dependency: pypdf (requirements-dev.txt).
 """
