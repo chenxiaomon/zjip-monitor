@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -32,7 +33,7 @@ from urllib.parse import urlparse
 import requests
 from loguru import logger
 
-from . import diskstat
+from . import diskstat, pdftext
 from .exceptions import TokenExpiredError
 from .fsutil import atomic_write_text
 from .runtime_settings import attachment_settings
@@ -201,6 +202,36 @@ def _load_manifest(rec_dir: Path) -> dict | None:
         return None
 
 
+_manifest_cache_lock = threading.Lock()
+_manifest_cache: dict[str, tuple[tuple[int, int], dict]] = {}
+_MANIFEST_CACHE_MAX = 4096
+
+
+def load_manifest_cached(rec_dir: Path) -> dict:
+    """The record's .sync.json for readers (console rows, 待办, the banner),
+    cached on (mtime_ns, size). Writers keep using _load_manifest(): every
+    write here is an atomic replace, so a stale entry cannot survive one.
+    {} when missing or unreadable."""
+    path = rec_dir / _MANIFEST_NAME
+    try:
+        st = path.stat()
+    except OSError:
+        return {}
+    key, stamp = str(path), (st.st_mtime_ns, st.st_size)
+    with _manifest_cache_lock:
+        hit = _manifest_cache.get(key)
+        if hit is not None and hit[0] == stamp:
+            return hit[1]
+    data = _load_manifest(rec_dir)
+    if not isinstance(data, dict):
+        return {}
+    with _manifest_cache_lock:
+        if len(_manifest_cache) >= _MANIFEST_CACHE_MAX:
+            _manifest_cache.clear()
+        _manifest_cache[key] = (stamp, data)
+    return data
+
+
 def _touched_since(record: dict, synced_at: str | None) -> bool:
     """Has the platform updated this record after our last successful sync?
 
@@ -219,6 +250,17 @@ def _touched_since(record: dict, synced_at: str | None) -> bool:
     except ValueError:
         return False
     return updated_ms / 1000 > synced.timestamp()
+
+
+def _note_facts(facts: dict[str, dict], path: Path) -> None:
+    """Parse a just-stored notice for the console: its deadline, dates and
+    reasons live only in the PDF (the platform's auditDeadLine is always
+    null). Certificates and unreadable files simply get no entry."""
+    record = pdftext.notice_facts(path)
+    if record is not None:
+        facts[path.name] = record
+    else:
+        facts.pop(path.name, None)
 
 
 def _identity(item: dict) -> str:
@@ -369,13 +411,19 @@ def sync_attachments(
             # file name → {sha256, size, archived_at}: released to the laptop's
             # archive by scripts/archive_release.py, gone from this disk on purpose
             archived: dict[str, dict] = dict(manifest.get("archived") or {}) if manifest else {}
+            # file name → pdftext.as_record(): what the console shows as 待办
+            facts: dict[str, dict] = dict(manifest.get("facts") or {}) if manifest else {}
             for item in wanted:
                 fname = _safe_filename(item["type"]) + _url_ext(item["url"])
                 dest = rec_dir / fname
                 ident = _identity(item)
                 held = next((name for name, i in sources.items() if i == ident), None)
                 if held and ((rec_dir / held).exists() or held in archived):
-                    continue  # this very document is on disk, or safe in the local archive
+                    # This very document is on disk, or safe in the local
+                    # archive. Stored before facts existed? Parse it now.
+                    if held not in facts and (rec_dir / held).exists():
+                        _note_facts(facts, rec_dir / held)
+                    continue
                 disk = diskstat.check_free()
                 if disk.low:
                     logger.warning(
@@ -401,6 +449,7 @@ def sync_attachments(
                         downloaded.append(dest)
                         if fname not in files:
                             files.append(fname)
+                        _note_facts(facts, dest)
                         logger.info(f"[{company}] {reg_no} ← {fname}（平台已更新，旧版在本机归档）")
                     continue
                 if not dest.exists():
@@ -409,6 +458,7 @@ def sync_attachments(
                         sources[fname] = ident
                         if fname not in files:
                             files.append(fname)
+                        _note_facts(facts, dest)
                         logger.info(f"[{company}] {reg_no} ← {fname}")
                     else:
                         ok = False
@@ -423,6 +473,8 @@ def sync_attachments(
                 if moved is not None:
                     if fname in sources:
                         sources[moved.name] = sources[fname]
+                    if fname in facts:
+                        facts[moved.name] = facts.pop(fname)
                     if moved.name not in files:
                         files.append(moved.name)
                     downloaded.append(dest)
@@ -430,6 +482,8 @@ def sync_attachments(
                         f"[{company}] {reg_no} ← {fname}（新一轮，旧文件改名为 {moved.name}）"
                     )
                 sources[fname] = ident
+                if moved is not None or fname not in facts:
+                    _note_facts(facts, dest)
 
             # Only record the status when everything succeeded, so failures
             # are retried on the next run
@@ -448,6 +502,7 @@ def sync_attachments(
                             "files": files,
                             "sources": sources,
                             **({"archived": archived} if archived else {}),
+                            **({"facts": facts} if facts else {}),
                         },
                         ensure_ascii=False,
                         indent=2,

@@ -19,7 +19,7 @@ from pathlib import Path
 from src.scraper import AUDIT_STATUS
 
 from .config import ArchiveConfig
-from .pdftext import normalize
+from src.pdftext import normalize
 
 # Recurring themes in 补正 reasons, most specific first. A notice can hit several.
 REASON_THEMES = (

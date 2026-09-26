@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from src import ops_alerts, status_store
+from src import ops_alerts, status_store, todo
 from src.runtime_settings import ops_alert_settings
 from src.scraper import AUDIT_STATUS
 from web.auth import allowed_usernames, visible_accounts
@@ -106,6 +106,7 @@ def _dashboard_ctx(request: Request, year: int | None = None) -> dict:
         # Scoped to what this user may see: a group user must never learn from
         # the banner that another group's company is failing.
         "ops_alerts": ops_alerts.collect_alerts(allowed),
+        "todo": todo.build(accounts),
         "events": events,
         "filter_year": year,
         "stale_hours": stale_hours,
@@ -138,6 +139,15 @@ def partial_ops_banner(request: Request) -> HTMLResponse:
         request,
         "_partials/ops_banner.html",
         {"ops_alerts": ops_alerts.collect_alerts(allowed_usernames(request))},
+    )
+
+
+@router.get("/partials/todo", response_class=HTMLResponse)
+def partial_todo(request: Request) -> HTMLResponse:
+    """待办 alone: corrections with deadlines, certificates due for renewal —
+    scoped like everything else to the accounts this user may see."""
+    return templates.TemplateResponse(
+        request, "_partials/todo.html", {"todo": todo.build(visible_accounts(request))},
     )
 
 

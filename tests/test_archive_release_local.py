@@ -6,12 +6,14 @@ is re-checked by the server. These tests fake the ssh/rsync transport.
 
 import hashlib
 import json
+import sqlite3
 import subprocess
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from archive import index, pdftext, release
+from archive import index, release
+from src import pdftext
 from archive.config import ArchiveConfig
 
 OLD = int((datetime.now(timezone.utc) - timedelta(days=200)).timestamp() * 1000)
@@ -102,6 +104,26 @@ def test_a_server_error_is_reported(cfg, monkeypatch, capsys):
     assert release.run_release(cfg, yes=True) == 1
     assert "另一巡检进行中" in capsys.readouterr().out
     assert len(release.select(cfg.db_path, days=90)) == 2
+
+
+def test_push_facts_sends_released_notices_only(cfg, monkeypatch, capsys):
+    db = sqlite3.connect(cfg.db_path)
+    db.execute("UPDATE documents SET doc_kind = '公告', valid_from = '2026-08-08', valid_to = '2029-08-08', "
+               "released_at = '2026-09-26T17:00:00+00:00', reasons = ? WHERE reg_no = 'DONE'", ("r" * 500,))
+    db.execute("UPDATE documents SET doc_kind = '补正', deadline = '2026-10-12' WHERE reg_no = 'ACTIVE' AND superseded = 0")
+    db.commit()
+    db.close()
+
+    payload = release.facts_payload(cfg.db_path)
+    assert list(payload) == ["甲公司/DONE"]  # ACTIVE's notice is still on the server
+    (fact,) = payload["甲公司/DONE"].values()
+    assert (fact["kind"], fact["valid_to"], len(fact["reasons"])) == ("公告", "2029-08-08", 400)
+
+    calls = _fake_transport(monkeypatch, {"records": 1, "parsed": 3, "merged": 1, "unreadable": 0, "dry_run": False})
+    assert release.run_push_facts(cfg) == 0
+    assert calls[0]["argv"][2].endswith("scripts/backfill_notice_facts.py --from-stdin")
+    assert json.loads(calls[0]["input"]) == payload
+    assert "合并 1 份" in capsys.readouterr().out
 
 
 def test_restore_sends_files_back_and_clears_the_marks(cfg, monkeypatch):

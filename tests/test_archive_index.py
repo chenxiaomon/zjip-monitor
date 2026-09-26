@@ -8,7 +8,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from archive import index, pdftext
+from archive import index
+from src import pdftext
 
 from tests.test_archive_pdftext import CORRECTION
 

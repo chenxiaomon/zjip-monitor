@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 
+from src import todo
 from src.scraper import AUDIT_STATUS, decode_status
 from web.auth import visible_accounts
 from web.deps import STATUS_COLORS, int_or_none, templates
@@ -117,6 +118,9 @@ def _build_records(
                 "reg_no": reg_no,
                 "attachments": list_attachments(acc.company, reg_no) if reg_no else [],
                 "archived": archived_attachments(acc.company, reg_no) if reg_no else [],
+                # 待补正 → the notice's deadline; 登记成功 → certificate expiry when near
+                "due": todo.correction_for(acc, r) if reg_no else None,
+                "renewal": todo.renewal_for(acc, r) if reg_no else None,
                 "name": name,
                 "industry": r.get("dataRegIndustry", ""),
                 "data_type": r.get("dataRegDataType", ""),

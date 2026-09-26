@@ -12,6 +12,7 @@ of every page:
     state.json            → 巡检进程卡死（2026-09-04 真实卡了 28 小时）
     pause.flag            → 定时巡检已暂停
     accounts.enc          → 公司名脱敏后重名（快照/附件会互相覆盖）
+    快照 + .sync.json facts → 补正即将到期 / 已逾期（逾期视为撤回登记申请）
 
 Two callers, two jobs:
 
@@ -38,7 +39,7 @@ from typing import Any, Callable
 
 from loguru import logger
 
-from . import control, diskstat, notifier, status_store
+from . import control, diskstat, notifier, status_store, todo
 from .config_loader import Account, ConfigError, load_accounts
 from .fsutil import atomic_write_text
 from .runtime_settings import OpsAlertSettings, attachment_settings, disk_settings, ops_alert_settings
@@ -204,6 +205,36 @@ def _check_no_recent_success(entries: dict[str, dict], stale_hours: float) -> Al
     )
 
 
+def _check_correction_due(accounts: list[Account], warn_days: int) -> Alert | None:
+    """8. 补正即将到期 — settings.yaml → ops_alerts.correction_warn_days.
+
+    The deadline comes from the 补正通知书 itself (src/todo); a record whose
+    notice was never parsed has no deadline and cannot raise this alert."""
+    due = [
+        c for c in todo.build(accounts)["corrections"]
+        if c["days_left"] is not None and c["days_left"] <= warn_days
+    ]
+    if not due:
+        return None
+    overdue = [c for c in due if c["days_left"] < 0]
+    urgent = [c for c in due if 0 <= c["days_left"] <= 2]
+    names = [f"{c['company']} {c['reg_no']}（{c['deadline'][5:]}）" for c in due]
+    if overdue:
+        title = f"{len(overdue)} 条补正已过截止日期"
+        if len(due) > len(overdue):
+            title += f"，另 {len(due) - len(overdue)} 条 {warn_days} 天内到期"
+    else:
+        title = f"{len(due)} 条补正 {warn_days} 天内到期"
+    return Alert(
+        key="correction_due",
+        level="critical" if (overdue or urgent) else "warning",
+        title=title,
+        detail=f"逾期未答复的，平台视为撤回登记申请：{_join_names(names)}。",
+        hint="请尽快在平台提交补正材料；截止日期以通知书为准（仪表盘「待办」可看要点）。",
+        accounts=[c["username"] for c in due],
+    )
+
+
 def _check_disk_low(stats: dict[str, Any] | None) -> Alert | None:
     """3. 磁盘告急 — settings.yaml → disk.min_free_mb."""
     measured_at = None
@@ -354,10 +385,15 @@ def collect_alerts(usernames: set[str] | None = None) -> list[Alert]:
     entries = _safe_read(lambda: _visible_entries(usernames), {}, "账号状态")
     settings = _safe_read(ops_alert_settings, OpsAlertSettings(), "ops_alerts 配置")
     stats = _safe_read(diskstat.read_stats, None, "disk_stats.json")
+    accounts = _safe_read(
+        lambda: [a for a in load_accounts() if usernames is None or a.username in usernames],
+        [], "账号配置",
+    )
 
     checks: tuple[Callable[[], Alert | None], ...] = (
         lambda: _check_failed_accounts(entries, settings.min_failed_accounts),
         lambda: _check_no_recent_success(entries, settings.stale_hours),
+        lambda: _check_correction_due(accounts, settings.correction_warn_days),
         lambda: _check_disk_low(stats),
         lambda: _check_attachments_over_limit(stats),
         _check_run_wedged,

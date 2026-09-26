@@ -2,9 +2,9 @@
 
 Every document seen so far carries a text layer, so no OCR is needed. The
 layout breaks sentences across lines and pads digits and CJK characters with
-spaces; normalize() undoes that before the regexes run. pypdf is imported
-lazily: it is a local-only dependency (requirements-dev.txt), never installed
-on the server.
+spaces; normalize() undoes that before the regexes run. Used by the scan
+(src/attachments.py, at download time) and by the laptop's archive tool;
+pypdf is imported lazily so a missing package costs one warning, not the scan.
 """
 
 from __future__ import annotations
@@ -26,6 +26,10 @@ _KINDS = (
     ("国家局登记证书", "国家局证书"),
     ("浙江省登记证书", "省证书"),
 )
+# The kinds whose facts the scan stores in .sync.json (certificates carry
+# nothing the console needs that the record JSON lacks).
+NOTICE_KINDS = frozenset({"补正", "公示", "公告", "不予登记", "异议"})
+_REASONS_MAX = 400
 
 
 @dataclass
@@ -39,6 +43,34 @@ class Facts:
     name_in_doc: str | None = None    # 文书上写的数据名称（可能与平台现名不同）
     reasons: str | None = None        # 补正理由 / 不予登记理由 / 异议来源
     fields: dict[str, str] = field(default_factory=dict)
+
+
+def as_record(facts: Facts) -> dict:
+    """The JSON-ready subset kept in .sync.json → facts[filename]."""
+    return {
+        "kind": facts.kind,
+        "submitted_on": facts.submitted_on,
+        "issued_on": facts.issued_on,
+        "deadline": facts.deadline,
+        "valid_from": facts.valid_from,
+        "valid_to": facts.valid_to,
+        "reasons": (facts.reasons or "")[:_REASONS_MAX] or None,
+    }
+
+
+def notice_facts(path) -> dict | None:
+    """as_record() for a notice PDF on disk; None for certificates, non-PDFs,
+    files without a text layer, or when pypdf is missing. Never raises."""
+    try:
+        doc_type = re.sub(r"_\d{4}-\d{2}-\d{2}(?:_\d+)?$", "", path.stem)
+        if kind_of(doc_type) not in NOTICE_KINDS or path.suffix.lower() != ".pdf":
+            return None
+        text = extract_text(path)
+        if not text.strip():
+            return None
+        return as_record(parse(text, doc_type))
+    except Exception:  # noqa: BLE001 — a parse failure must never fail a scan
+        return None
 
 
 def extract_text(path) -> str:

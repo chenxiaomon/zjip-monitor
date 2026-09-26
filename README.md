@@ -83,7 +83,7 @@ python scripts/decrypt_accounts.py --out config/accounts.yaml   # 导出明文�
 ## 运维横幅与健康检查
 
 三个通知渠道（钉钉/企业微信/邮件）默认全部关闭，所以运维告警的出口是**控制台顶部横幅**
-和日志。七项检查：
+和日志。八项检查：
 
 | 检查 | 触发条件 | 阈值来源 |
 |---|---|---|
@@ -94,6 +94,7 @@ python scripts/decrypt_accounts.py --out config/accounts.yaml   # 导出明文�
 | 巡检进程卡死 | 持锁进程还活着但心跳已停 | — |
 | 定时巡检已暂停 | 控制台里主动暂停了 | — |
 | 公司名重名 | 两家公司脱敏后同名，快照与附件会互相覆盖 | — |
+| 补正即将到期 | 待补正的截止日期（来自补正通知书）不足 N 天；逾期或不足 2 天为严重 | `ops_alerts.correction_warn_days` |
 
 - 告警去重记在 `data/control/ops_alerts.json`：新激活时打一条 critical/warning 日志，
   恢复时打一条 info，持续存在的不再刷屏。日志里搜 `运维告警[` 可查全部激活/恢复记录。
@@ -110,6 +111,20 @@ python scripts/decrypt_accounts.py --out config/accounts.yaml   # 导出明文�
 - degraded 不等于部署失败：`deploy.sh` 收到 503 会打印 JSON 并警告，仍算部署成功。
   排查看 `checks[]` 里 `ok: false` 那一项的 `detail`。
 - 全新安装在第一轮巡检成功之前，`?strict=1` 会返回 503（`recent_success` 为红），属预期。
+
+## 待办与期限
+
+补正的截止日期和证书的有效期**只写在通知书 PDF 里**（平台记录的 `auditDeadLine` 一直是空的），所以巡检下载通知书时会
+用 `src/pdftext.py`（pypdf）读出落款日、截止日、补正要点、证书有效期，写进该记录 `.sync.json` 的 `facts`。控制台据此显示：
+
+- 仪表盘顶部「待办」：待补正按截止日期排序（剩余天数红/黄/绿，逾期视为撤回登记申请，能看到补正要点）；
+  登记证书期满前 180 天起列入「可续展」（续展登记后不再列出）。分组账号只看自己的企业。
+- 登记记录页：待补正的行带「截止 MM-DD · 剩 N 天」标签，快到期的登记成功记录带「MM-DD 到期」标签。
+- 运维横幅：补正不足 `ops_alerts.correction_warn_days` 天到期时提醒。
+
+历史文件的 `facts` 由 `python scripts/backfill_notice_facts.py` 一次性补齐；已经释放到本机归档、服务器上没有文件的公告，
+用本机的 `python -m archive push-facts` 把解析结果送到服务器。通知书没有文字层或解析失败时，待办里显示「截止日期未知」，
+不会漏掉这条申请。
 
 ## 日志
 
@@ -235,6 +250,7 @@ python -m archive release                          # 预演：列出可释放的
 python -m archive release --company 某企业目录 --yes # 先小范围正式释放
 python -m archive release --yes                    # 全量
 python -m archive restore 企业目录 登记号           # 客户要旧证书时：把这条申请的文件送回服务器
+python -m archive push-facts                       # 把已释放公告的证书有效期等送到服务器，供控制台「可续展」显示
 ```
 
 - 哪些可以释放：已办结（登记成功/不予登记/撤回等）且平台 `archive.release_after_terminal_days`（默认 90）天没动过的申请的

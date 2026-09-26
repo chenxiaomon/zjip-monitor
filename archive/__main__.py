@@ -25,6 +25,7 @@ def main(argv: list[str] | None = None) -> int:
     p_rel.add_argument("--days", type=int, default=release.DEFAULT_DAYS,
                        help=f"办结后多少天没有变动才释放（默认 {release.DEFAULT_DAYS}；服务器按自己的配置再核一遍）")
     p_rel.add_argument("--company", metavar="企业目录", help="只处理这一家（先小范围试）")
+    sub.add_parser("push-facts", help="把已释放通知书的解析结果（证书有效期等）送到服务器，供控制台显示")
     p_res = sub.add_parser("restore", help="把某条申请已释放的文件送回服务器")
     p_res.add_argument("company_dir", metavar="企业目录")
     p_res.add_argument("reg_no", metavar="登记号")
@@ -42,6 +43,8 @@ def main(argv: list[str] | None = None) -> int:
         return release.run_release(cfg, yes=args.yes, days=args.days, company=args.company)
     if args.command == "restore":
         return release.run_restore(cfg, args.company_dir, args.reg_no)
+    if args.command == "push-facts":
+        return release.run_push_facts(cfg)
     if args.command == "search":
         return report.run_search(cfg, args.term, kind=args.kind, limit=args.limit)
     if args.command == "report":
