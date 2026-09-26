@@ -1,8 +1,10 @@
 <div id="timeline-section"
      class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg"
+     {% if standalone is not defined or standalone %}
      hx-get="/partials/timeline"
      hx-trigger="sse:update"
-     hx-swap="outerHTML">
+     hx-swap="outerHTML"
+     {% endif %}>
   <div class="px-5 py-3 border-b border-gray-100 dark:border-gray-700">
     <span class="text-sm font-medium text-gray-700 dark:text-gray-200">近 24 小时变更</span>
   </div>

@@ -23,6 +23,7 @@ from src.login import _save_token, verify_credentials
 from src.main import run_all, run_single
 from web.auth import is_admin, require_admin, visible_accounts
 from web.deps import executor as _executor, get_groups, spawn, templates
+from web.services.run_state import run_state_ctx
 from web.services.session import _SESSIONS_DIR, _safe_name, get_session, token_status
 from web.services.snapshot import get_latest_snapshot
 from web.sse import broadcast
@@ -76,24 +77,6 @@ def _company_key(company: str) -> str:
     """Same sanitizer the snapshot/attachment filenames use — duplicates must
     be detected on the SANITIZED name, since that's what collides on disk."""
     return "".join(c if c.isalnum() or c in "-_" else "_" for c in company)
-
-
-def run_state_ctx() -> dict:
-    """Template context for the global run status, read from data/control/state.json.
-
-    Cross-process: also reflects (and can stop) runs started by the daemon or CLI.
-    """
-    state = control.read_state()
-    if not state:
-        return {"status": "idle", "msg": "", "progress": {}, "trigger": None}
-    return {
-        "status": state.get("status", "idle"),
-        "msg": state.get("error") or "",
-        "progress": state.get("progress") or {},
-        "trigger": state.get("trigger"),
-        "pid": state.get("pid"),
-        "holder_alive": bool(state.get("holder_alive")),
-    }
 
 
 # ---------------------------------------------------------------------------

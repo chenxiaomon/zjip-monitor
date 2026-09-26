@@ -1,7 +1,10 @@
 """SSE broadcast and /sse endpoint.
 
 The daemon writes to data/events.jsonl; this module tails that file and pushes
-new lines to all connected browser clients via Server-Sent Events.
+new lines to all connected browser clients via Server-Sent Events. It also
+watches data/control/state.json so a page learns within seconds that a scan
+started or ended — including the daemon's scheduled ones, which no browser
+request ever triggers.
 """
 
 from __future__ import annotations
@@ -17,7 +20,9 @@ from sse_starlette.sse import EventSourceResponse
 
 from web.auth import allowed_usernames
 
-_EVENTS_FILE = Path(__file__).parent.parent / "data" / "events.jsonl"
+_DATA_DIR = Path(__file__).parent.parent / "data"
+_EVENTS_FILE = _DATA_DIR / "events.jsonl"
+_STATE_FILE = _DATA_DIR / "control" / "state.json"
 
 router = APIRouter()
 
@@ -37,42 +42,71 @@ async def broadcast(data: str) -> None:
             pass
 
 
-async def start_watcher() -> None:
-    """Background task: tail events.jsonl and push new lines to subscribers.
+def _run_key() -> tuple | None:
+    """What identifies a run *transition*: not the file's mtime — the heartbeat
+    rewrites state.json for every account, and a dashboard rebuild per
+    account would be 25 rebuilds per scan."""
+    try:
+        state = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(state, dict):
+        return None
+    return (state.get("run_id"), state.get("status"), state.get("finished_at"))
 
-    Survives file deletion/rotation (re-reads from the start when the file
-    shrinks) and any unexpected error (logs and keeps polling) — it must
-    never die silently, or the UI stops updating until a restart.
+
+async def _tick(cursor: dict) -> None:
+    """One poll: new event lines and run transitions → broadcast.
+
+    `cursor` carries the position between polls: {"events_size", "run_key"}.
+    """
+    if not _EVENTS_FILE.exists():
+        cursor["events_size"] = 0
+    else:
+        try:
+            size = _EVENTS_FILE.stat().st_size
+        except OSError:
+            size = None
+        if size is not None:
+            if size < cursor["events_size"]:
+                cursor["events_size"] = 0  # file truncated or rotated — start over
+            if size != cursor["events_size"]:
+                try:
+                    with _EVENTS_FILE.open("r", encoding="utf-8") as f:
+                        f.seek(cursor["events_size"])
+                        new_content = f.read()
+                        cursor["events_size"] = f.tell()
+                except OSError:
+                    new_content = ""
+                for line in new_content.splitlines():
+                    line = line.strip()
+                    if line:
+                        await broadcast(line)
+
+    key = _run_key()
+    if key != cursor.get("run_key"):
+        cursor["run_key"] = key
+        if key is not None:
+            # No `account` field: every viewer may know a scan started/ended.
+            await broadcast(json.dumps({"kind": "run", "status": key[1]}))
+
+
+async def start_watcher() -> None:
+    """Background task: poll every 2s, forever.
+
+    Survives file deletion/rotation and any unexpected error (logs and keeps
+    polling) — it must never die silently, or the UI stops updating until a
+    restart.
     """
     try:
-        last_size = _EVENTS_FILE.stat().st_size
+        events_size = _EVENTS_FILE.stat().st_size
     except OSError:
-        last_size = 0
+        events_size = 0
+    cursor = {"events_size": events_size, "run_key": _run_key()}
     while True:
         await asyncio.sleep(2)
         try:
-            if not _EVENTS_FILE.exists():
-                last_size = 0
-                continue
-            try:
-                size = _EVENTS_FILE.stat().st_size
-            except OSError:
-                continue
-            if size < last_size:
-                last_size = 0  # file truncated or rotated — start over
-            if size == last_size:
-                continue
-            try:
-                with _EVENTS_FILE.open("r", encoding="utf-8") as f:
-                    f.seek(last_size)
-                    new_content = f.read()
-                    last_size = f.tell()
-            except OSError:
-                continue
-            for line in new_content.splitlines():
-                line = line.strip()
-                if line:
-                    await broadcast(line)
+            await _tick(cursor)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

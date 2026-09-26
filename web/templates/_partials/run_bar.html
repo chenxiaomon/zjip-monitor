@@ -1,0 +1,25 @@
+{# A scan in progress — the daemon's scheduled ones included. Polls itself while
+   running; the SSE `run` message re-renders the body when a run starts or ends. #}
+<div id="run-bar"
+     {% if run.status in ('running', 'stopping') %}
+     hx-get="/partials/run-bar"
+     hx-trigger="every 3s"
+     hx-swap="outerHTML"
+     {% endif %}>
+  {% if run.status == 'running' %}
+  <div class="mb-4 px-4 py-2.5 rounded-lg bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 text-xs text-blue-700 dark:text-blue-300 flex items-center gap-2">
+    <span class="inline-block w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse"></span>
+    <span>
+      巡检进行中{% if run.trigger == 'daemon' %}（定时任务）{% elif run.trigger == 'cli' %}（命令行）{% elif run.trigger %}（手动）{% endif %}
+      {%- if run.progress.account %}：{{ run.progress.account }}{% if run.progress.total %}（{{ run.progress.index }}/{{ run.progress.total }}）{% endif %}
+      {%- elif run.progress.total %}：{{ run.progress.index }}/{{ run.progress.total }}{% endif %}
+      … 结束后本页自动更新
+    </span>
+  </div>
+  {% elif run.status == 'stopping' %}
+  <div class="mb-4 px-4 py-2.5 rounded-lg bg-orange-50 dark:bg-orange-950/40 border border-orange-200 dark:border-orange-800 text-xs text-orange-700 dark:text-orange-300 flex items-center gap-2">
+    <span class="inline-block w-2.5 h-2.5 rounded-full bg-orange-400 animate-pulse"></span>
+    <span>巡检正在停止，等待当前账号结束…</span>
+  </div>
+  {% endif %}
+</div>

@@ -4,43 +4,27 @@
 {% block page_title %}仪表盘{% endblock %}
 
 {% block content %}
-<div class="flex gap-2 mb-4">
+<div class="flex flex-wrap items-center gap-2 mb-4">
   <a href="/"
      class="px-3 py-1 rounded-full text-xs transition-colors
             {% if not filter_year %}bg-blue-600 text-white{% else %}bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600{% endif %}">
     全部年份
   </a>
-  {% for y in [2025, 2026] %}
+  {# The years actually present in the visible snapshots' application dates #}
+  {% for y in years %}
   <a href="/?year={{ y }}"
      class="px-3 py-1 rounded-full text-xs transition-colors
             {% if filter_year == y %}bg-blue-600 text-white{% else %}bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600{% endif %}">
     {{ y }}
   </a>
   {% endfor %}
+  <span class="ml-auto text-xs text-gray-400 dark:text-gray-500" title="可见账号中最近一次巡检成功的时间">
+    上次成功巡检：{{ last_success_at | fmt_time if last_success_at else '尚无' }}
+  </span>
 </div>
 
-{# 一个 SSE 连接供全页复用：横幅也要跟着巡检自动刷新，所以容器从这里就开始。 #}
+{# One SSE connection, one refresh target: every event re-renders the body below in a single request. #}
 <div hx-ext="sse" sse-connect="/sse">
-{% include "_partials/ops_banner.html" %}
-
-{% if login_alerts %}
-<div class="mb-4 px-4 py-3 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-sm text-red-700 dark:text-red-400">
-  <div class="font-medium mb-1"><i class="ti ti-alert-circle"></i> 登录异常，以下账号需要关注：</div>
-  <ul class="text-xs space-y-0.5">
-    {% for a in login_alerts %}
-    <li>
-      <span class="font-medium">{{ a.company }}</span>（{{ a.username }}）—
-      {% if a.paused %}连续登录失败，定时巡检已自动暂停，请<a href="/accounts" class="underline">更新密码</a>{% elif a.kind == 'platform_error' %}平台暂时不可用（无需改密码，下轮巡检自动重试）{% if a.error %}：{{ a.error[:120] }}{% endif %}{% elif a.kind == 'captcha_required' %}平台要求验证码{% if a.error %}：{{ a.error[:120] }}{% endif %}{% else %}登录失败{% if a.error %}：{{ a.error[:120] }}{% endif %}{% endif %}
-    </li>
-    {% endfor %}
-  </ul>
-</div>
-{% endif %}
-
-  {% include "_partials/metric_cards.html" %}
-  {% include "_partials/todo.html" %}
-  <h2 class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">账号状态</h2>
-  {% include "_partials/account_grid.html" %}
-  {% include "_partials/timeline.html" %}
+  {% include "_partials/dashboard_body.html" %}
 </div>
 {% endblock %}
