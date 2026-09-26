@@ -125,6 +125,7 @@ RSYNC_EXCLUDES=(
   --exclude='.git'
   --exclude='deploy.sh'
   --exclude='deploy/deploy.env'
+  --exclude='archive/archive.env'
   --exclude='.pytest_cache/'
   --exclude='.claude/'
   --exclude='RELEASE'

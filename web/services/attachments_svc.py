@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -28,6 +29,23 @@ def list_attachments(company: str, reg_no: str) -> list[str]:
         # .part = an in-flight or abandoned download, not a document
         if f.is_file() and not f.name.startswith(".") and not f.name.endswith(".part")
     )
+
+
+def archived_attachments(company: str, reg_no: str) -> list[dict]:
+    """Files released to the operator's local archive (scripts/archive_release.py):
+    [{name, archived_on}] from the record's .sync.json, for a greyed-out marker."""
+    manifest = _ATTACHMENTS_DIR / _safe_name(company) / _safe_name(reg_no) / ".sync.json"
+    try:
+        archived = json.loads(manifest.read_text(encoding="utf-8")).get("archived") or {}
+    except (OSError, ValueError, AttributeError):
+        return []
+    if not isinstance(archived, dict):
+        return []
+    return [
+        {"name": name, "archived_on": str((meta or {}).get("archived_at") or "")[:10]}
+        for name, meta in sorted(archived.items())
+        if isinstance(meta, dict)
+    ]
 
 
 def download_name(company: str, reg_no: str, filename: str) -> str:

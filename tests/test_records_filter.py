@@ -21,6 +21,7 @@ def _snap(recs, fetch=None):
 @pytest.fixture(autouse=True)
 def _no_attachments(monkeypatch):
     monkeypatch.setattr(records, "list_attachments", lambda company, reg_no: [])
+    monkeypatch.setattr(records, "archived_attachments", lambda company, reg_no: [])
 
 
 def test_string_status_code_matches_int_filter(monkeypatch):

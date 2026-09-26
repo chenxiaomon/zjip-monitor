@@ -33,3 +33,6 @@ build/
 
 # 部署脚本的本机配置（服务器地址等），模板见 deploy/deploy.env.example
 deploy/deploy.env
+
+# 本机归档工具的配置（服务器地址、归档目录），模板见 archive/archive.env.example
+archive/archive.env

@@ -149,6 +149,16 @@ class DiskSettings:
     min_free_mb: float = 500
 
 
+@dataclass(frozen=True)
+class ArchiveSettings:
+    """settings.yaml → archive (scripts/archive_release.py, src/archive_policy)."""
+
+    # A finished record (登记成功/不予登记/撤回…) the platform has not touched
+    # for this many days may have its files released from the server once
+    # the laptop holds a verified copy. Older rounds are released regardless.
+    release_after_terminal_days: int = 90
+
+
 # ---------------------------------------------------------------------------
 # Validation rules: field → (kind, lower bound, bound is exclusive)
 # ---------------------------------------------------------------------------
@@ -205,6 +215,10 @@ _RULES: dict[str, dict[str, _Rule]] = {
         # expired", i.e. a fresh login for every single request.
         "token_max_age_hours": (_INT, 1, False),
     },
+    "archive": {
+        # 0 is meaningful: "as soon as the record is finished".
+        "release_after_terminal_days": (_INT, 0, False),
+    },
 }
 
 _CLASSES: dict[str, type] = {
@@ -215,6 +229,7 @@ _CLASSES: dict[str, type] = {
     "ops_alerts": OpsAlertSettings,
     "disk": DiskSettings,
     "login": LoginSettings,
+    "archive": ArchiveSettings,
 }
 
 # Every rule table covers exactly its dataclass — checked at import so a new
@@ -375,3 +390,7 @@ def disk_settings() -> DiskSettings:
 
 def login_settings() -> LoginSettings:
     return _build("login", LoginSettings)
+
+
+def archive_settings() -> ArchiveSettings:
+    return _build("archive", ArchiveSettings)

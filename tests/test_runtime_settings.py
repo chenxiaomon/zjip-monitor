@@ -32,6 +32,7 @@ SECTIONS = {
     "attachments": (rs.AttachmentSettings, rs.attachment_settings),
     "ops_alerts": (rs.OpsAlertSettings, rs.ops_alert_settings),
     "disk": (rs.DiskSettings, rs.disk_settings),
+    "archive": (rs.ArchiveSettings, rs.archive_settings),
 }
 
 

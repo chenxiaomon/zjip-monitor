@@ -5,3 +5,5 @@
 pytest>=8.0
 # fastapi.testclient.TestClient 的硬依赖，用于路由层测试
 httpx>=0.27
+# 本机归档工具 archive/ 抽取通知书与证书正文用；只在本机，不进服务器
+pypdf>=4.0

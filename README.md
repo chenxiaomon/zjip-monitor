@@ -205,6 +205,42 @@ python run_web.py
 - systemd unit 模板在 `deploy/`，改动后用 `./deploy.sh install-units`（先 diff、再确认、
   不自动重启）。
 
+## 本机归档（archive）
+
+服务器上的 `data/` 只是工作缓存：快照每家只留 30 份、事件日志满 5MB 就轮转，被新一轮替换掉的旧通知书平台上也不再提供。
+`archive/` 是**只在本机运行**的归档工具，把这些都拉回本地长期保存，并建成一个可查询的 SQLite 库。
+
+```bash
+cp archive/archive.env.example archive/archive.env   # 可选：改服务器地址或归档目录（默认 ~/zjip-archive）
+pip install -r requirements-dev.txt                   # 需要 pypdf（只装在本机）
+python -m archive pull     # rsync 拉取附件、快照、事件日志
+python -m archive index    # 增量更新 ~/zjip-archive/archive.sqlite
+```
+
+- **只增不减**：`pull` 永远不带 `--delete`。服务器删掉的快照、轮转掉的日志，本地都留着；服务器原地改写过的文件，
+  rsync 会先把本地旧版挪到 `.overwritten/<时间>/`。归档目录是正本，请纳入 Time Machine 等备份。
+- `archive.sqlite` 里有：`records`（每条登记申请的首次出现时间与最新状态）、`status_events`（全部状态变化）、
+  `documents`（每个文件的哈希，以及从正文解析出的落款日、补正截止日、补正理由、公告里的证书有效期、证书编号等）、
+  `documents_fts`（正文全文检索，3 个字以上用 `MATCH`，更短的词对 `documents.text` 用 `LIKE`）。
+- 例：`sqlite3 ~/zjip-archive/archive.sqlite "select reg_no, deadline, reasons from documents where doc_kind='补正' order by deadline desc limit 5"`
+
+**释放服务器空间**（本机有了经过哈希核对的副本后，把旧文件从服务器删掉）：
+
+```bash
+python -m archive pull && python -m archive index   # 先同步，保证本机副本是最新的
+python -m archive release                          # 预演：列出可释放的文件与合计，服务器上什么都不删
+python -m archive release --company 某企业目录 --yes # 先小范围正式释放
+python -m archive release --yes                    # 全量
+python -m archive restore 企业目录 登记号           # 客户要旧证书时：把这条申请的文件送回服务器
+```
+
+- 哪些可以释放：已办结（登记成功/不予登记/撤回等）且平台 `archive.release_after_terminal_days`（默认 90）天没动过的申请的
+  全部文件，以及被新一轮替换下来的旧通知书。还在办理中的申请一个文件都不动。
+- 服务器端 `scripts/archive_release.py` 不信任本机发来的任何东西：持巡检锁、只接受 `data/attachments/` 下的文件、
+  逐个重算 sha256 与本机副本比对、按**服务器自己**的最新快照和 settings.yaml 复核释放条件，全部通过才删。
+- 删除前先在该记录的 `.sync.json` 里记下 `archived`，所以之后的巡检不会把它重新下载回来；控制台登记记录页显示为
+  灰色「已归档」标记（带归档日期），不再是下载链接。
+
 ## 运行测试
 
 ```bash

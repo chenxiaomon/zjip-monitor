@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse
 from src.scraper import AUDIT_STATUS, decode_status
 from web.auth import visible_accounts
 from web.deps import STATUS_COLORS, int_or_none, templates
-from web.services.attachments_svc import list_attachments
+from web.services.attachments_svc import archived_attachments, list_attachments
 from web.services.snapshot import get_latest_snapshot
 
 router = APIRouter()
@@ -116,6 +116,7 @@ def _build_records(
                 "username": acc.username,
                 "reg_no": reg_no,
                 "attachments": list_attachments(acc.company, reg_no) if reg_no else [],
+                "archived": archived_attachments(acc.company, reg_no) if reg_no else [],
                 "name": name,
                 "industry": r.get("dataRegIndustry", ""),
                 "data_type": r.get("dataRegDataType", ""),
