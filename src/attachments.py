@@ -10,8 +10,12 @@ Endpoints (verified against the platform frontend bundle, 2026-07):
 
 Files are stored under data/attachments/{company}/{dataRegNo}/ with a .sync.json
 manifest per record recording the audit status at last sync; a record is re-synced
-only when its status changes, so each record costs at most one API round-trip per
-status transition.
+only when its status changes or the platform has updated the record since (its
+updateTime), so each record costs one API round-trip per change on the platform.
+
+getNotification lists only the record's *current* notice. A second 补正 round
+replaces the first on the platform but arrives under the same file name here, so
+the older file is kept under a dated name and the current one takes the plain name.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
@@ -48,6 +52,9 @@ NOTIFY_STATUSES = {2, 3, 4, 6, 7, 8, 9, 13, 17}
 CERT_STATUSES = {7, 13}
 
 _MANIFEST_NAME = ".sync.json"
+
+# Archived file names carry the day the operator's side of the world saw them.
+_SHANGHAI_TZ = timezone(timedelta(hours=8))
 
 
 def _safe_name(name: str) -> str:
@@ -140,7 +147,7 @@ def _api_data(resp: requests.Response, what: str) -> dict | list | None:
 
 
 def _fetch_notifications(session: requests.Session, base_url: str, reg_no: str) -> list[dict]:
-    """Return [{type, url}, ...] for a record's 通知书 list."""
+    """Return [{type, url, id}, ...] for a record's 通知书 list."""
     resp = session.get(
         f"{base_url}/v1/datareg/getNotification",
         params={"dataRegNo": reg_no},
@@ -153,7 +160,11 @@ def _fetch_notifications(session: requests.Session, base_url: str, reg_no: str) 
     for item in data:
         url = item.get("dataMailFileUrl")
         if url:
-            out.append({"type": item.get("dataMailType") or "通知书", "url": url})
+            out.append({
+                "type": item.get("dataMailType") or "通知书",
+                "url": url,
+                "id": item.get("id"),
+            })
     return out
 
 
@@ -189,6 +200,71 @@ def _load_manifest(rec_dir: Path) -> dict | None:
         return None
 
 
+def _touched_since(record: dict, synced_at: str | None) -> bool:
+    """Has the platform updated this record after our last successful sync?
+
+    Status alone cannot tell: a record that went 待补正 → 待审核 → 待补正 still
+    matches a manifest that says 2 (待审核 is not a notify status, so nothing
+    rewrote it), and the new round's notice was never fetched — seen 2026-09,
+    when the console kept serving an 08-31 notice whose deadline had passed
+    while the live one said 10-12. updateTime moves on every such transition,
+    including one that starts and ends between two scans.
+    """
+    updated_ms = int_or_none(record.get("updateTime"))
+    if updated_ms is None or not synced_at:
+        return False
+    try:
+        synced = datetime.fromisoformat(synced_at)
+    except ValueError:
+        return False
+    return updated_ms / 1000 > synced.timestamp()
+
+
+def _identity(item: dict) -> str:
+    """What makes two platform documents the same one: the notice id when the
+    API gives one, else the URL path (links may be pre-signed, so the query
+    string can differ on every call for the very same file)."""
+    if item.get("id") is not None:
+        return f"id:{item['id']}"
+    return "path:" + urlparse(item["url"]).path
+
+
+def _archive_name(dest: Path) -> Path:
+    """Where the older document moves when a newer one of the same type
+    arrives: same stem plus the day it was downloaded. Sorted by name, the
+    console then lists the current document first and older rounds after it."""
+    day = datetime.fromtimestamp(dest.stat().st_mtime, _SHANGHAI_TZ).strftime("%Y-%m-%d")
+    candidate = dest.with_name(f"{dest.stem}_{day}{dest.suffix}")
+    n = 2
+    while candidate.exists():
+        candidate = dest.with_name(f"{dest.stem}_{day}_{n}{dest.suffix}")
+        n += 1
+    return candidate
+
+
+def _refresh_document(url: str, dest: Path) -> tuple[bool, Path | None]:
+    """dest already holds a document of this type; fetch url and keep both if
+    they differ. Returns (ok, archived): ok is False when the download failed
+    (dest untouched), archived is where the old file went, or None when the
+    platform served the very same bytes.
+
+    The incoming copy ends in .part so it stays hidden from the console and
+    main._prune_stale_parts() sweeps it if the process dies mid-swap.
+    """
+    incoming = dest.with_name(f".{dest.name}.incoming.part")
+    try:
+        if not _download_file(url, incoming):
+            return False, None
+        if incoming.stat().st_size == dest.stat().st_size and incoming.read_bytes() == dest.read_bytes():
+            return True, None
+        archived = _archive_name(dest)
+        dest.replace(archived)
+        incoming.replace(dest)
+        return True, archived
+    finally:
+        incoming.unlink(missing_ok=True)
+
+
 def sync_attachments(
     token: str,
     company: str,
@@ -198,8 +274,10 @@ def sync_attachments(
 ) -> list[Path]:
     """Download missing 通知书/证书 for all eligible records of one account.
 
-    Idempotent: each record is only re-queried when its audit status differs
-    from the manifest written at last successful sync.
+    Idempotent: a record is only re-queried when its audit status differs from
+    the manifest written at last successful sync, or the platform updated the
+    record after that sync (a new 补正 round keeps the status at 2). A document
+    already on disk under the same identity is never downloaded twice.
 
     Disk guard: nothing is downloaded while free space is under settings.yaml
     → disk.min_free_mb — checked once before opening a session and again
@@ -248,8 +326,12 @@ def sync_attachments(
 
             rec_dir = _ATTACHMENTS_DIR / _safe_name(company) / _safe_name(reg_no)
             manifest = _load_manifest(rec_dir)
-            if manifest and manifest.get("status") == code:
-                continue  # already synced at this status
+            if (
+                manifest
+                and manifest.get("status") == code
+                and not _touched_since(r, manifest.get("synced_at"))
+            ):
+                continue  # synced at this status, nothing moved on the platform since
 
             wanted = _fetch_notifications(session, base_url, reg_no)
             if code in CERT_STATUSES and certificates_enabled:
@@ -257,11 +339,15 @@ def sync_attachments(
 
             ok = True
             files: list[str] = manifest.get("files", []) if manifest else []
+            # file name → _identity() of the document stored under it
+            sources: dict[str, str] = dict(manifest.get("sources") or {}) if manifest else {}
             for item in wanted:
                 fname = _safe_filename(item["type"]) + _url_ext(item["url"])
                 dest = rec_dir / fname
-                if dest.exists():
-                    continue
+                ident = _identity(item)
+                held = next((name for name, i in sources.items() if i == ident), None)
+                if held and (rec_dir / held).exists():
+                    continue  # this very document is already on disk
                 disk = diskstat.check_free()
                 if disk.low:
                     logger.warning(
@@ -272,13 +358,33 @@ def sync_attachments(
                     low_disk = True
                     ok = False  # keep this record un-manifested → retried next run
                     break
-                if _download_file(item["url"], dest):
-                    downloaded.append(dest)
-                    if fname not in files:
-                        files.append(fname)
-                    logger.info(f"[{company}] {reg_no} ← {fname}")
-                else:
+                if not dest.exists():
+                    if _download_file(item["url"], dest):
+                        downloaded.append(dest)
+                        sources[fname] = ident
+                        if fname not in files:
+                            files.append(fname)
+                        logger.info(f"[{company}] {reg_no} ← {fname}")
+                    else:
+                        ok = False
+                    continue
+                # A document of this type is already here: either this same one,
+                # stored before identities were recorded, or an older round —
+                # a second 补正通知书 has the same type, hence the same name.
+                fetched, archived = _refresh_document(item["url"], dest)
+                if not fetched:
                     ok = False
+                    continue
+                if archived is not None:
+                    if fname in sources:
+                        sources[archived.name] = sources[fname]
+                    if archived.name not in files:
+                        files.append(archived.name)
+                    downloaded.append(dest)
+                    logger.info(
+                        f"[{company}] {reg_no} ← {fname}（新一轮，旧文件改名为 {archived.name}）"
+                    )
+                sources[fname] = ident
 
             # Only record the status when everything succeeded, so failures
             # are retried on the next run
@@ -295,6 +401,7 @@ def sync_attachments(
                             "status": code,
                             "synced_at": datetime.now(timezone.utc).isoformat(),
                             "files": files,
+                            "sources": sources,
                         },
                         ensure_ascii=False,
                         indent=2,
