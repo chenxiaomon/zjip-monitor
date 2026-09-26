@@ -223,6 +223,9 @@ python -m archive index    # 增量更新 ~/zjip-archive/archive.sqlite
   `documents`（每个文件的哈希，以及从正文解析出的落款日、补正截止日、补正理由、公告里的证书有效期、证书编号等）、
   `documents_fts`（正文全文检索，3 个字以上用 `MATCH`，更短的词对 `documents.text` 用 `LIKE`）。
 - 例：`sqlite3 ~/zjip-archive/archive.sqlite "select reg_no, deadline, reasons from documents where doc_kind='补正' order by deadline desc limit 5"`
+- 不写 SQL 也能用：`python -m archive search 固定数据量`（可加 `--kind 补正`）在全部通知书与证书正文里搜；
+  `python -m archive report` 输出补正理由分布、补正轮数、从申请到公告的用时、一年内到期且尚未续展的证书，
+  并存到 `~/zjip-archive/reports/`。已续展的证书不会被当成即将到期（公告里写的是第一届有效期）。
 
 **释放服务器空间**（本机有了经过哈希核对的副本后，把旧文件从服务器删掉）：
 

@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import index, pull, release
+from . import index, pull, release, report
 from .config import load_config
 
 
@@ -28,6 +28,11 @@ def main(argv: list[str] | None = None) -> int:
     p_res = sub.add_parser("restore", help="把某条申请已释放的文件送回服务器")
     p_res.add_argument("company_dir", metavar="企业目录")
     p_res.add_argument("reg_no", metavar="登记号")
+    p_s = sub.add_parser("search", help="在全部通知书与证书正文里搜关键词")
+    p_s.add_argument("term", metavar="关键词")
+    p_s.add_argument("--kind", help="只看某一类：补正 / 公示 / 公告 / 不予登记 / 异议 / 国家局证书 / 省证书")
+    p_s.add_argument("--limit", type=int, default=20)
+    sub.add_parser("report", help="补正理由、补正轮数、登记用时、将到期证书的统计报告")
     args = parser.parse_args(argv)
 
     cfg = load_config(Path(args.env) if args.env else None)
@@ -37,6 +42,10 @@ def main(argv: list[str] | None = None) -> int:
         return release.run_release(cfg, yes=args.yes, days=args.days, company=args.company)
     if args.command == "restore":
         return release.run_restore(cfg, args.company_dir, args.reg_no)
+    if args.command == "search":
+        return report.run_search(cfg, args.term, kind=args.kind, limit=args.limit)
+    if args.command == "report":
+        return report.run_report(cfg)
     return index.run(cfg)
 
 
