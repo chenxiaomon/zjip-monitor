@@ -1,8 +1,11 @@
+{# Standalone (its own route) it refreshes itself; inside dashboard_body.html the body does. #}
 <div id="account-grid-section"
      class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6"
+     {% if standalone is not defined or standalone %}
      hx-get="/partials/account-grid{% if filter_year %}?year={{ filter_year }}{% endif %}"
      hx-trigger="sse:update"
-     hx-swap="outerHTML">
+     hx-swap="outerHTML"
+     {% endif %}>
   {% for snap in account_snapshots %}
   <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 relative">
     <!-- Status dot (gray ring = last scan failed or data stale) -->
@@ -14,9 +17,10 @@
     {% else %}
     <span class="absolute top-3 right-3 w-2.5 h-2.5 rounded-full bg-green-500{{ ring }}"></span>
     {% endif %}
-    <!-- Company & account -->
+    <!-- Company & account: the name opens this company's records -->
     <div class="pr-6">
-      <div class="text-sm font-medium text-gray-800 dark:text-gray-100 mb-0.5">{{ snap.account.company }}</div>
+      <a href="/records?account={{ snap.account.username | urlencode }}"
+         class="block text-sm font-medium text-gray-800 dark:text-gray-100 mb-0.5 hover:text-blue-600 dark:hover:text-blue-400">{{ snap.account.company }}</a>
       <div class="flex items-center gap-2 mb-3">
         <span class="font-mono text-xs text-gray-400 dark:text-gray-500">{{ snap.account.username }}</span>
         {% if request.state.user and request.state.user.role == 'admin' %}
@@ -26,23 +30,24 @@
         {% endif %}
       </div>
     </div>
-    <!-- Status pills: every status actually present, not a hard-coded subset -->
+    <!-- Status pills: every status actually present; each opens the filtered records -->
     {% if snap.status_counts %}
     <div class="flex flex-wrap gap-1.5 mb-3">
       {% for code in snap.status_counts.keys()|sort %}
-      <span class="px-2 py-0.5 rounded-full text-xs s-pill-{{ code if code in AUDIT_STATUS else 'x' }}">
+      <a href="/records?account={{ snap.account.username | urlencode }}&status={{ code }}"
+         class="px-2 py-0.5 rounded-full text-xs s-pill-{{ code if code in AUDIT_STATUS else 'x' }} hover:ring-1 hover:ring-blue-300">
         {{ AUDIT_STATUS.get(code, '状态' ~ code) }}×{{ snap.status_counts[code] }}
-      </span>
+      </a>
       {% endfor %}
     </div>
     {% else %}
     <div class="text-xs text-gray-400 dark:text-gray-500 mb-3">暂无数据</div>
     {% endif %}
-    <!-- Scan health -->
+    <!-- Scan health: the reason is visible, not hidden in a tooltip -->
     {% if snap.scan_failed %}
-    <div class="text-xs text-red-500 dark:text-red-400 mb-1"
-         {% if snap.scan_status and snap.scan_status.error %}title="{{ snap.scan_status.error }}"{% endif %}>
+    <div class="text-xs text-red-500 dark:text-red-400 mb-1" {% if snap.scan_status and snap.scan_status.error %}title="{{ snap.scan_status.error }}"{% endif %}>
       <i class="ti ti-alert-circle"></i> 上次巡检失败，数据为旧快照
+      {%- if snap.scan_status and snap.scan_status.error %}：{{ snap.scan_status.error[:100] }}{% if snap.scan_status.error|length > 100 %}…{% endif %}{% endif %}
     </div>
     {% elif snap.scan_partial %}
     <div class="text-xs text-amber-600 dark:text-amber-400 mb-1">
@@ -54,9 +59,9 @@
       <i class="ti ti-clock-exclamation"></i> 超过 {{ "%g"|format(stale_hours) }} 小时未巡检成功，数据可能过期
     </div>
     {% endif %}
-    <!-- Last check time -->
+    <!-- Last successful scan of this account (falls back to the snapshot time) -->
     <div class="text-xs text-gray-400 dark:text-gray-500">
-      最后巡检：{{ snap.last_check | fmt_time }}
+      最后巡检：{{ snap.last_success | fmt_time }}
     </div>
   </div>
   {% else %}

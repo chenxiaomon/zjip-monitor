@@ -1,4 +1,10 @@
-"""Dashboard route: / and partial refresh endpoints."""
+"""Dashboard route: / and its partials.
+
+One SSE event → one request: the whole body below the year chips is a single
+htmx target (/partials/dashboard). The per-section routes remain for the
+tests and for anything that wants just one piece; when a section is rendered
+inside the body it carries no refresh attributes of its own.
+"""
 
 from __future__ import annotations
 
@@ -10,9 +16,10 @@ from fastapi.responses import HTMLResponse
 from src import ops_alerts, status_store, todo
 from src.runtime_settings import ops_alert_settings
 from src.scraper import AUDIT_STATUS
-from web.auth import allowed_usernames, visible_accounts
+from web.auth import allowed_usernames, is_admin, visible_accounts
 from web.deps import STATUS_COLORS, account_dot, in_year, int_or_none, templates
 from web.services.events import read_events
+from web.services.run_state import run_state_ctx
 from web.services.snapshot import get_latest_snapshot
 
 router = APIRouter()
@@ -40,6 +47,22 @@ def _filtered_events(request: Request, hours: int = 24, limit: int = 20) -> list
     return read_events(hours=hours, limit=limit, accounts=allowed_usernames(request), with_changes=True)
 
 
+def _apply_year(ms) -> int | None:
+    ms = int_or_none(ms)
+    return datetime.fromtimestamp(ms / 1000, _SHANGHAI_TZ).year if ms else None
+
+
+def _run_ctx(request: Request) -> dict:
+    """The global run state for the run bar. A group user sees that a scan is
+    running, but not the name of a company outside their group."""
+    run = run_state_ctx()
+    progress = dict(run.get("progress") or {})
+    if progress.get("account") and not is_admin(request):
+        if progress["account"] not in {a.company for a in visible_accounts(request)}:
+            progress["account"] = None
+    return {**run, "progress": progress}
+
+
 def _dashboard_ctx(request: Request, year: int | None = None) -> dict:
     accounts = visible_accounts(request)
     allowed = allowed_usernames(request)
@@ -49,12 +72,15 @@ def _dashboard_ctx(request: Request, year: int | None = None) -> dict:
 
     account_snapshots = []
     login_alerts = []
+    years: set[int] = set()
     for acc in accounts:
         snap = get_latest_snapshot(acc.company)
         status_counts: dict[int, int] = {}
         last_check = None
         if snap:
             for r in snap.get("records", []):
+                if (y := _apply_year(r.get("dataRegApplyTime"))) is not None:
+                    years.add(y)
                 if not in_year(r.get("dataRegApplyTime"), year):
                     continue
                 code = int_or_none(r.get("dataRegAuditStatus"))
@@ -81,6 +107,10 @@ def _dashboard_ctx(request: Request, year: int | None = None) -> dict:
             "account": acc,
             "status_counts": status_counts,
             "last_check": last_check,
+            # The durable per-account record beats the snapshot's timestamp:
+            # a failed scan leaves the old snapshot in place, and its time
+            # would then be read as "last scanned".
+            "last_success": (ss or {}).get("last_success_at") or last_check,
             "dot": account_dot(status_counts),
             "total": sum(status_counts.values()),
             "scan_status": ss,
@@ -93,6 +123,11 @@ def _dashboard_ctx(request: Request, year: int | None = None) -> dict:
     success_count = sum(s["status_counts"].get(7, 0) for s in account_snapshots)
     pending_correction = sum(s["status_counts"].get(2, 0) for s in account_snapshots)
     events = _filtered_events(request)
+    successes = [
+        (ss or {}).get("last_success_at")
+        for u, ss in all_status.items()
+        if isinstance(ss, dict) and (allowed is None or u in allowed)
+    ]
 
     return {
         "account_count": len(accounts),
@@ -106,6 +141,9 @@ def _dashboard_ctx(request: Request, year: int | None = None) -> dict:
         "ops_alerts": ops_alerts.collect_alerts(allowed),
         "todo": todo.build(accounts),
         "events": events,
+        "run": _run_ctx(request),
+        "years": sorted(years, reverse=True),
+        "last_success_at": max((s for s in successes if s), default=None),
         "filter_year": year,
         "stale_hours": stale_hours,
         "STATUS_COLORS": STATUS_COLORS,
@@ -116,6 +154,18 @@ def _dashboard_ctx(request: Request, year: int | None = None) -> dict:
 @router.get("/", response_class=HTMLResponse)
 def dashboard_page(request: Request, year: int | None = None) -> HTMLResponse:
     return templates.TemplateResponse(request, "dashboard.html", _dashboard_ctx(request, year))
+
+
+@router.get("/partials/dashboard", response_class=HTMLResponse)
+def partial_dashboard(request: Request, year: int | None = None) -> HTMLResponse:
+    """Everything below the year chips, in one response — the SSE target."""
+    return templates.TemplateResponse(request, "_partials/dashboard_body.html", _dashboard_ctx(request, year))
+
+
+@router.get("/partials/run-bar", response_class=HTMLResponse)
+def partial_run_bar(request: Request) -> HTMLResponse:
+    """Polled every 3s while a scan runs, by every logged-in user."""
+    return templates.TemplateResponse(request, "_partials/run_bar.html", {"run": _run_ctx(request)})
 
 
 @router.get("/partials/metrics", response_class=HTMLResponse)
@@ -130,9 +180,8 @@ def partial_account_grid(request: Request, year: int | None = None) -> HTMLRespo
 
 @router.get("/partials/ops-banner", response_class=HTMLResponse)
 def partial_ops_banner(request: Request) -> HTMLResponse:
-    """The banner alone — the SSE-triggered refresh target. Deliberately does
-    not build the whole dashboard context: this runs on every scan event, and
-    the banner needs none of the per-company snapshot work."""
+    """The banner alone. Deliberately does not build the whole dashboard
+    context: the banner needs none of the per-company snapshot work."""
     return templates.TemplateResponse(
         request,
         "_partials/ops_banner.html",

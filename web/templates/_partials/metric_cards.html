@@ -1,26 +1,29 @@
+{# Standalone (its own route) it refreshes itself; inside dashboard_body.html the body does. #}
 <div id="metrics-section"
      class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6"
+     {% if standalone is not defined or standalone %}
      hx-get="/partials/metrics{% if filter_year %}?year={{ filter_year }}{% endif %}"
      hx-trigger="sse:update"
-     hx-swap="outerHTML">
+     hx-swap="outerHTML"
+     {% endif %}>
   <!-- 监控账号数 -->
-  <div class="bg-gray-100 dark:bg-gray-800 rounded-xl p-5">
+  <a href="/accounts" class="bg-gray-100 dark:bg-gray-800 rounded-xl p-5 hover:ring-2 hover:ring-blue-300 transition">
     <div class="text-xs text-gray-500 dark:text-gray-400 mb-2">监控账号数</div>
     <div class="text-2xl font-medium text-gray-800 dark:text-gray-100">{{ account_count }}</div>
-  </div>
+  </a>
   <!-- 登记总数 -->
-  <div class="bg-gray-100 dark:bg-gray-800 rounded-xl p-5">
+  <a href="/records" class="bg-gray-100 dark:bg-gray-800 rounded-xl p-5 hover:ring-2 hover:ring-blue-300 transition">
     <div class="text-xs text-gray-500 dark:text-gray-400 mb-2">登记总数</div>
     <div class="text-2xl font-medium text-gray-800 dark:text-gray-100">{{ total_records }}</div>
-  </div>
+  </a>
   <!-- 登记成功 -->
-  <div class="bg-gray-100 dark:bg-gray-800 rounded-xl p-5">
+  <a href="/records?status=7" class="bg-gray-100 dark:bg-gray-800 rounded-xl p-5 hover:ring-2 hover:ring-blue-300 transition">
     <div class="text-xs text-gray-500 dark:text-gray-400 mb-2">登记成功</div>
     <div class="text-2xl font-medium text-gray-800 dark:text-gray-100">{{ success_count }}</div>
-  </div>
+  </a>
   <!-- 待补正（警示色） -->
-  <div class="bg-amber-50 dark:bg-amber-950/40 rounded-xl p-5">
+  <a href="/records?status=2" class="bg-amber-50 dark:bg-amber-950/40 rounded-xl p-5 hover:ring-2 hover:ring-amber-300 transition">
     <div class="text-xs text-amber-700 dark:text-amber-400 mb-2">待补正</div>
     <div class="text-2xl font-medium text-amber-800 dark:text-amber-300">{{ pending_correction }}</div>
-  </div>
+  </a>
 </div>

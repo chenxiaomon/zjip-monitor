@@ -1,7 +1,7 @@
 {#
   运维横幅：钉钉/企业微信/邮件三个渠道都未启用，这里是运维告警唯一的出口。
-  外层容器始终渲染（无告警时是个空 div）——它带着 hx-get，被 swap 掉就再也
-  收不到下一次 sse:update，横幅会一直空到手动刷新整页为止。
+  外层容器始终渲染（无告警时是个空 div）。单独渲染时它带着自己的 hx-get，被 swap 掉
+  就再也收不到下一次 sse:update；在仪表盘 body 里则由 body 统一刷新（standalone=false）。
 #}
 {% set ops_level_style = {
   'critical': 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-800 text-red-700 dark:text-red-400',
@@ -14,9 +14,11 @@
   'info':     'ti-info-circle'
 } %}
 <div id="ops-banner"
+     {% if standalone is not defined or standalone %}
      hx-get="/partials/ops-banner"
      hx-trigger="sse:update"
-     hx-swap="outerHTML">
+     hx-swap="outerHTML"
+     {% endif %}>
   {% for a in ops_alerts or [] %}
   <div class="mb-4 px-4 py-3 rounded-lg border text-sm {{ ops_level_style.get(a.level, ops_level_style['info']) }}">
     <div class="font-medium mb-1">

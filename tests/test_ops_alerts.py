@@ -408,11 +408,12 @@ def test_dashboard_banner_renders_an_empty_but_refreshable_container(
 ):
     login_as(web_client, *ADMIN)
     body = web_client.get("/").text
-    # 没有告警时不渲染任何一条，但容器要留着——它带着 hx-get，被换掉就再也收不到
-    # 下一次 sse:update。
+    # 没有告警时不渲染任何一条，但容器要留着。仪表盘上由整个 body 带着 hx-get 统一
+    # 随 sse:update 刷新（单独的 /partials/ops-banner 仍自带刷新，见下一条用例）。
     assert 'id="ops-banner"' in body
-    assert 'hx-get="/partials/ops-banner"' in body
+    assert 'hx-get="/partials/dashboard"' in body
     assert "处理建议：" not in body
+    assert 'hx-get="/partials/ops-banner"' in web_client.get("/partials/ops-banner").text
 
 
 def test_dashboard_banner_shows_up_on_the_full_page(
