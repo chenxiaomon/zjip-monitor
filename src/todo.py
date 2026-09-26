@@ -181,7 +181,10 @@ def renewal_for(acc: Account, record: dict, today: date | None = None) -> Renewa
     today = today or today_local()
     reg_no = str(record.get("dataRegNo") or "")
     notice = _current_notice(record_facts(acc.company, reg_no), "公告") or {}
-    days_left = _days(notice.get("valid_to"), today)
+    valid_from, valid_to = notice.get("valid_from"), notice.get("valid_to")
+    if valid_from and valid_to and valid_to <= valid_from:
+        return None  # the notice itself is wrong (facts stored before the parser refused these)
+    days_left = _days(valid_to, today)
     if days_left is None or days_left > RENEWAL_WINDOW_DAYS:
         return None
     return Renewal(

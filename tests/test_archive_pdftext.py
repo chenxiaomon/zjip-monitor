@@ -100,6 +100,15 @@ def test_announcement_certificate_validity():
     assert f.name_in_doc == "某港区出运窗口安全评估数据"
 
 
+def test_announcement_with_an_impossible_validity_keeps_the_text_not_the_dates():
+    """Nine real 2024 notices say 自2024年09月07日至2024年08月26日: listing those
+    certificates as expired two years ago would be wrong twice over."""
+    text = ANNOUNCEMENT.replace("2026 年 8 月 8 日至 2029 年 8 月 8 日", "2024年09月07日至\n2024年08月26日")
+    f = pdftext.parse(text, "《浙江省数据知识产权登记登记公告通知书》")
+    assert (f.valid_from, f.valid_to) == (None, None)
+    assert f.fields["有效期原文"] == "自2024年09月07日至2024年08月26日"
+
+
 def test_rejection_reason_in_the_older_layout():
     f = pdftext.parse(REJECTION, "《浙江省数据知识产权登记不予登记通知书》")
     assert f.kind == "不予登记"
