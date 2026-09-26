@@ -1,6 +1,6 @@
 """A second 补正 round must reach the console.
 
-Seen 2026-09: DIP2026000010599 went 待补正 → 待审核 → 待补正 three times, but the
+Seen 2026-09: a record went 待补正 → 待审核 → 待补正 three times, but the
 manifest still said status 2 from the first round, so the sync never asked the
 platform again — and a newer notice would have hit the same file name anyway.
 The console kept serving the 08-31 notice (deadline 09-14) while the live one
@@ -62,7 +62,7 @@ def _platform(monkeypatch, notices, bodies):
 
 def _first_round_on_disk(root, *, sources=None):
     """What production looked like: the first notice plus a status-2 manifest."""
-    rec = root / "易航海" / "R1"
+    rec = root / "甲公司" / "R1"
     rec.mkdir(parents=True)
     (rec / FNAME).write_bytes(b"round-1")
     os.utime(rec / FNAME, (FIRST_DOWNLOAD, FIRST_DOWNLOAD))
@@ -92,7 +92,7 @@ def test_same_status_but_platform_touched_the_record_is_queried_again(env, monke
     _first_round_on_disk(env)
     queried, _ = _platform(monkeypatch, [], {})
 
-    attachments.sync_attachments("tok", "易航海", [_record(SYNCED_AT + timedelta(days=20))])
+    attachments.sync_attachments("tok", "甲公司", [_record(SYNCED_AT + timedelta(days=20))])
 
     assert queried == ["R1"]
 
@@ -101,7 +101,7 @@ def test_untouched_record_at_the_same_status_is_not_queried(env, monkeypatch):
     _first_round_on_disk(env)
     queried, _ = _platform(monkeypatch, [], {})
 
-    attachments.sync_attachments("tok", "易航海", [_record(SYNCED_AT - timedelta(hours=2))])
+    attachments.sync_attachments("tok", "甲公司", [_record(SYNCED_AT - timedelta(hours=2))])
 
     assert queried == []
 
@@ -110,7 +110,7 @@ def test_record_without_update_time_keeps_status_only_behaviour(env, monkeypatch
     _first_round_on_disk(env)
     queried, _ = _platform(monkeypatch, [], {})
 
-    attachments.sync_attachments("tok", "易航海", [_record(None)])
+    attachments.sync_attachments("tok", "甲公司", [_record(None)])
 
     assert queried == []
 
@@ -124,7 +124,7 @@ def test_newer_round_takes_the_plain_name_and_the_old_one_is_archived(env, monke
     _platform(monkeypatch, [{"type": NOTICE, "url": "https://x/n3.pdf", "id": 152216}],
               {"https://x/n3.pdf": b"round-3"})
 
-    got = attachments.sync_attachments("tok", "易航海", [_record(SYNCED_AT + timedelta(days=20))])
+    got = attachments.sync_attachments("tok", "甲公司", [_record(SYNCED_AT + timedelta(days=20))])
 
     archived = f"{NOTICE}_2026-09-01.pdf"
     assert (rec / FNAME).read_bytes() == b"round-3"
@@ -143,7 +143,7 @@ def test_same_document_on_an_old_manifest_is_not_duplicated(env, monkeypatch):
     _platform(monkeypatch, [{"type": NOTICE, "url": "https://x/n1.pdf", "id": 1}],
               {"https://x/n1.pdf": b"round-1"})
 
-    got = attachments.sync_attachments("tok", "易航海", [_record(SYNCED_AT + timedelta(days=1))])
+    got = attachments.sync_attachments("tok", "甲公司", [_record(SYNCED_AT + timedelta(days=1))])
 
     assert got == []
     assert sorted(p.name for p in rec.iterdir()) == sorted([FNAME, attachments._MANIFEST_NAME])
@@ -154,7 +154,7 @@ def test_known_document_is_not_downloaded_again(env, monkeypatch):
     rec = _first_round_on_disk(env, sources={FNAME: "id:1"})
     _, fetched = _platform(monkeypatch, [{"type": NOTICE, "url": "https://x/n1.pdf", "id": 1}], {})
 
-    attachments.sync_attachments("tok", "易航海", [_record(SYNCED_AT + timedelta(days=1))])
+    attachments.sync_attachments("tok", "甲公司", [_record(SYNCED_AT + timedelta(days=1))])
 
     assert fetched == []
     assert (rec / FNAME).read_bytes() == b"round-1"
@@ -165,7 +165,7 @@ def test_failed_download_of_a_newer_round_keeps_the_old_file_and_retries(env, mo
     before = _manifest(rec)
     _platform(monkeypatch, [{"type": NOTICE, "url": "https://x/n3.pdf", "id": 152216}], {})
 
-    attachments.sync_attachments("tok", "易航海", [_record(SYNCED_AT + timedelta(days=20))])
+    attachments.sync_attachments("tok", "甲公司", [_record(SYNCED_AT + timedelta(days=20))])
 
     assert (rec / FNAME).read_bytes() == b"round-1"
     assert _manifest(rec) == before  # unwritten → the next run asks again
@@ -178,7 +178,7 @@ def test_archive_names_do_not_collide(env, monkeypatch):
     _platform(monkeypatch, [{"type": NOTICE, "url": "https://x/n3.pdf", "id": 3}],
               {"https://x/n3.pdf": b"round-3"})
 
-    attachments.sync_attachments("tok", "易航海", [_record(SYNCED_AT + timedelta(days=20))])
+    attachments.sync_attachments("tok", "甲公司", [_record(SYNCED_AT + timedelta(days=20))])
 
     assert (rec / f"{NOTICE}_2026-09-01.pdf").read_bytes() == b"round-0"
     assert (rec / f"{NOTICE}_2026-09-01_2.pdf").read_bytes() == b"round-1"
