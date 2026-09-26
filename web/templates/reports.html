@@ -5,7 +5,8 @@
 
 {% block content %}
 <div class="flex items-center justify-between mb-4">
-  <div id="gen-status" class="text-sm text-gray-400">{{ reports|length }} 份报表</div>
+  {# The status element polls only while a job runs; it is never replaced by anything but itself. #}
+  {% include "_partials/report_gen_status.html" %}
   <button hx-post="/reports/generate"
           hx-target="#gen-status"
           hx-swap="outerHTML"

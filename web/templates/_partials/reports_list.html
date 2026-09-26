@@ -1,19 +1,45 @@
-<div id="reports-list" class="grid gap-3">
+<div id="reports-list" class="grid gap-3"{% if oob %} hx-swap-oob="true"{% endif %}>
   {% for r in reports %}
   <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-5 py-3.5 flex items-center justify-between">
     <div>
       <div class="text-sm font-medium text-gray-800 dark:text-gray-100">{{ r.datetime }}</div>
       <div class="font-mono text-xs text-gray-400 dark:text-gray-500 mt-0.5">{{ r.filename }} · {{ r.size }}</div>
     </div>
-    <a href="/reports/view/{{ r.filename }}" target="_blank"
-       class="flex items-center gap-1 px-3 py-1.5 text-xs rounded-md
-              border border-gray-200 dark:border-gray-600
-              text-gray-600 dark:text-gray-300
-              hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
-      <i class="ti ti-external-link text-sm"></i>查看
-    </a>
+    <div class="flex items-center gap-2">
+      <a href="/reports/view/{{ r.filename }}" target="_blank"
+         class="flex items-center gap-1 px-3 py-1.5 text-xs rounded-md
+                border border-gray-200 dark:border-gray-600
+                text-gray-600 dark:text-gray-300
+                hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+        <i class="ti ti-external-link text-sm"></i>查看
+      </a>
+      <button hx-post="/reports/delete/{{ r.filename }}?page={{ page }}"
+              hx-confirm="删除报表 {{ r.filename }}？"
+              hx-target="#reports-list"
+              hx-swap="outerHTML"
+              class="flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md
+                     border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400
+                     hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors cursor-pointer">
+        <i class="ti ti-trash text-sm"></i>删除
+      </button>
+    </div>
   </div>
   {% else %}
-  <div class="py-10 text-center text-sm text-gray-400 dark:text-gray-500">暂无报表，点击"生成报表"运行一次全量巡检</div>
+  <div class="py-10 text-center text-sm text-gray-400 dark:text-gray-500">暂无报表，点击「生成新报表」按现有快照汇总一份</div>
   {% endfor %}
+  {% if pages > 1 %}
+  <div class="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 px-1">
+    <span>共 {{ total }} 份 · 第 {{ page }}/{{ pages }} 页</span>
+    <span class="flex gap-2">
+      {% if page > 1 %}
+      <a href="/reports?page={{ page-1 }}" hx-get="/reports/list?page={{ page-1 }}" hx-target="#reports-list" hx-swap="outerHTML"
+         class="px-2 py-0.5 rounded border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700">上一页</a>
+      {% endif %}
+      {% if page < pages %}
+      <a href="/reports?page={{ page+1 }}" hx-get="/reports/list?page={{ page+1 }}" hx-target="#reports-list" hx-swap="outerHTML"
+         class="px-2 py-0.5 rounded border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700">下一页</a>
+      {% endif %}
+    </span>
+  </div>
+  {% endif %}
 </div>

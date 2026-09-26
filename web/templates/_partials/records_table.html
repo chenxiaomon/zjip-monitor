@@ -1,7 +1,7 @@
 <tbody id="records-tbody">
   {% for r in rows %}
   <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors border-b border-gray-100 dark:border-gray-700/50 cursor-pointer"
-      onclick="var j=document.getElementById('json-{{ r.reg_no | e }}');j.classList.toggle('hidden')">
+      onclick="var j=document.getElementById('json-{{ loop.index }}');j.classList.toggle('hidden')">
     <td class="px-4 py-2.5 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap">
       {{ r.company[:8] }}{% if r.company|length > 8 %}…{% endif %}
       <div class="font-mono text-gray-400 dark:text-gray-500">{{ r.username }}</div>
@@ -50,7 +50,8 @@
     </td>
   </tr>
   <!-- JSON expand row -->
-  <tr id="json-{{ r.reg_no | e }}" class="hidden">
+  {# id by row position: an empty or duplicated 登记号 must not make two rows share one #}
+  <tr id="json-{{ loop.index }}" class="hidden">
     <td colspan="7" class="px-4 py-3 bg-gray-50 dark:bg-gray-900/50 border-b border-gray-100 dark:border-gray-700/50">
       <pre class="text-xs text-gray-600 dark:text-gray-300 overflow-auto max-h-56 whitespace-pre-wrap">{{ r._raw | tojson }}</pre>
     </td>

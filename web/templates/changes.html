@@ -4,21 +4,40 @@
 {% block page_title %}变更历史{% endblock %}
 
 {% block content %}
-<!-- Account filter bar -->
+<!-- Account filter bar: every link keeps the date range -->
 <div class="flex flex-wrap gap-2 mb-4">
-  <a href="/changes"
+  <a href="{{ changes_url(account='', page=1) }}"
      class="px-3 py-1 rounded-full text-xs transition-colors
             {% if not filter_account %}bg-blue-600 text-white{% else %}bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600{% endif %}">
     全部账号
   </a>
   {% for acc in accounts_list %}
-  <a href="/changes?account={{ acc.username }}"
+  <a href="{{ changes_url(account=acc.username, page=1) }}"
      class="px-3 py-1 rounded-full text-xs transition-colors
             {% if filter_account == acc.username %}bg-blue-600 text-white{% else %}bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600{% endif %}">
     {{ acc.company }}
   </a>
   {% endfor %}
 </div>
+
+<!-- Date range: a plain GET so the address bar carries the window -->
+<form method="get" action="/changes" class="flex flex-wrap items-center gap-2 mb-4">
+  <input type="hidden" name="account" value="{{ filter_account or '' }}">
+  <label class="text-xs text-gray-500 dark:text-gray-400">变更时间</label>
+  <input type="date" name="start_date" value="{{ start_date }}"
+         class="px-2 py-1 text-xs rounded border border-gray-200 dark:border-gray-600
+                bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-400">
+  <span class="text-xs text-gray-400">至</span>
+  <input type="date" name="end_date" value="{{ end_date }}"
+         class="px-2 py-1 text-xs rounded border border-gray-200 dark:border-gray-600
+                bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-400">
+  <button type="submit" class="px-2.5 py-1 text-xs rounded border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700">查询</button>
+  {% if start_date or end_date %}
+  <a href="{{ changes_url(start_date='', end_date='', page=1) }}" class="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">清除（最近 {{ default_days }} 天）</a>
+  {% else %}
+  <span class="text-xs text-gray-400">不填 = 最近 {{ default_days }} 天</span>
+  {% endif %}
+</form>
 
 <div hx-ext="sse" sse-connect="/sse">
   {% include "_partials/changes_list.html" %}

@@ -1,8 +1,24 @@
+{# The refresh URL carries the current account / dates / page, so an SSE update re-renders THIS view. #}
 <div id="changes-section"
      class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden"
-     hx-get="/partials/changes{% if filter_account %}?account={{ filter_account }}{% endif %}"
+     hx-get="{{ changes_url(partial=True) }}"
      hx-trigger="sse:update"
      hx-swap="outerHTML">
+  <div class="px-4 py-2.5 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+    <span>共 {{ total }} 条变更{% if pages > 1 %} · 第 {{ page }}/{{ pages }} 页{% endif %}</span>
+    {% if pages > 1 %}
+    <span class="flex items-center gap-2">
+      {% if page > 1 %}
+      <a href="{{ changes_url(page=page-1) }}" hx-get="{{ changes_url(partial=True, page=page-1) }}" hx-target="#changes-section" hx-swap="outerHTML"
+         class="px-2 py-0.5 rounded border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700">上一页</a>
+      {% endif %}
+      {% if page < pages %}
+      <a href="{{ changes_url(page=page+1) }}" hx-get="{{ changes_url(partial=True, page=page+1) }}" hx-target="#changes-section" hx-swap="outerHTML"
+         class="px-2 py-0.5 rounded border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700">下一页</a>
+      {% endif %}
+    </span>
+    {% endif %}
+  </div>
   {% if rows %}
   <table class="w-full text-sm">
     <thead>
@@ -55,7 +71,7 @@
   </table>
   {% else %}
   <div class="px-5 py-12 text-center text-sm text-gray-400 dark:text-gray-500">
-    {% if filter_account %}该账号暂无变更记录{% else %}暂无变更记录{% endif %}
+    {% if filter_account %}该账号在此时间段没有变更{% else %}此时间段没有变更记录{% endif %}
   </div>
   {% endif %}
 </div>

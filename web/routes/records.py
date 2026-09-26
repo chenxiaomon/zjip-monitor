@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import csv
+import io
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 
 from src import todo
 from src.scraper import AUDIT_STATUS, decode_status
@@ -15,6 +18,16 @@ from web.services.attachments_svc import archived_attachments, list_attachments
 from web.services.snapshot import get_latest_snapshot
 
 router = APIRouter()
+
+PAGE_SIZE = 50
+_SHANGHAI_TZ = timezone(timedelta(hours=8))
+
+
+def _page_number(page: str | None) -> int:
+    try:
+        return max(1, int(page or 1))
+    except ValueError:
+        return 1
 
 
 def _ms_to_date(ms: int | None) -> str:
@@ -134,6 +147,17 @@ def _build_records(
     return rows, missing_accounts, fetch_warnings
 
 
+def _all_rows(request: Request, account: str | None, status: int | None,
+              start_date: str | None, end_date: str | None, q: str | None):
+    start_ms = _date_to_ms(start_date) if start_date else None
+    end_ms = _date_to_ms(end_date, end_of_day=True) if end_date else None
+    accounts_list = visible_accounts(request)
+    rows, missing_accounts, fetch_warnings = _build_records(
+        accounts_list, account, status, start_ms, end_ms, q
+    )
+    return accounts_list, rows, missing_accounts, fetch_warnings
+
+
 def _ctx(
     request: Request,
     account: str | None,
@@ -141,15 +165,42 @@ def _ctx(
     start_date: str | None,
     end_date: str | None,
     q: str | None = None,
+    page: str | None = None,
 ) -> dict:
-    start_ms = _date_to_ms(start_date) if start_date else None
-    end_ms = _date_to_ms(end_date, end_of_day=True) if end_date else None
-    accounts_list = visible_accounts(request)
-    rows, missing_accounts, fetch_warnings = _build_records(
-        accounts_list, account, status, start_ms, end_ms, q
+    accounts_list, rows, missing_accounts, fetch_warnings = _all_rows(
+        request, account, status, start_date, end_date, q
     )
+    total = len(rows)
+    pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+    current = min(_page_number(page), pages)
+    filters = {
+        "account": account or "",
+        "status": "" if status is None else status,
+        "q": (q or "").strip(),
+        "start_date": start_date or "",
+        "end_date": end_date or "",
+    }
+
+    def records_url(partial: bool = False, csv: bool = False, **overrides) -> str:
+        """This view's URL with some filters changed — every chip, the pager
+        and the export link keep the OTHER filters, so clicking a status
+        never drops the dates or the keyword."""
+        params = {**filters, "page": current, **overrides}
+        if csv:
+            params.pop("page", None)
+        query = urlencode({
+            k: v for k, v in params.items()
+            if v not in (None, "") and not (k == "page" and v == 1)
+        })
+        base = "/partials/records-table" if partial else ("/records.csv" if csv else "/records")
+        return base + (f"?{query}" if query else "")
+
     return {
-        "rows": rows,
+        "rows": rows[(current - 1) * PAGE_SIZE: current * PAGE_SIZE],
+        "total": total,
+        "page": current,
+        "pages": pages,
+        "records_url": records_url,
         "accounts_list": accounts_list,
         "missing_accounts": missing_accounts,
         "fetch_warnings": fetch_warnings,
@@ -160,7 +211,6 @@ def _ctx(
         "q": (q or "").strip(),
         "STATUS_COLORS": STATUS_COLORS,
         "AUDIT_STATUS": AUDIT_STATUS,
-        "total": len(rows),
     }
 
 
@@ -172,10 +222,11 @@ def records_page(
     start_date: str | None = Query(None),
     end_date: str | None = Query(None),
     q: str | None = Query(None),
+    page: str | None = Query(None),
 ) -> HTMLResponse:
     return templates.TemplateResponse(
         request, "records.html",
-        _ctx(request, account or None, int_or_none(status), start_date, end_date, q),
+        _ctx(request, account or None, int_or_none(status), start_date, end_date, q, page),
     )
 
 
@@ -187,6 +238,41 @@ def records_table_partial(
     start_date: str | None = Query(None),
     end_date: str | None = Query(None),
     q: str | None = Query(None),
+    page: str | None = Query(None),
 ) -> HTMLResponse:
-    ctx = _ctx(request, account or None, int_or_none(status), start_date, end_date, q)
+    ctx = _ctx(request, account or None, int_or_none(status), start_date, end_date, q, page)
     return templates.TemplateResponse(request, "_partials/records_box.html", ctx)
+
+
+_CSV_HEADER = ["公司", "账号", "登记编号", "数据名称", "行业", "申请时间", "状态", "补正截止", "证书到期", "附件数"]
+
+
+@router.get("/records.csv")
+def records_csv(
+    request: Request,
+    account: str | None = None,
+    status: str | None = None,
+    start_date: str | None = Query(None),
+    end_date: str | None = Query(None),
+    q: str | None = Query(None),
+) -> Response:
+    """The current filter's rows, all pages, as UTF-8 CSV with a BOM so Excel
+    opens the Chinese text correctly. Same visibility rules as the page."""
+    _, rows, _, _ = _all_rows(request, account or None, int_or_none(status), start_date, end_date, q)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(_CSV_HEADER)
+    for r in rows:
+        writer.writerow([
+            r["company"], r["username"], r["reg_no"], r["name"], r["industry"], r["apply_date"],
+            r["status_label"],
+            (r["due"].deadline or "") if r["due"] else "",
+            r["renewal"].valid_to if r["renewal"] else "",
+            len(r["attachments"]) + len(r["archived"]),
+        ])
+    filename = f"records-{datetime.now(_SHANGHAI_TZ):%Y%m%d}.csv"
+    return Response(
+        "﻿" + buf.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"},
+    )

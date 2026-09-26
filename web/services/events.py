@@ -81,23 +81,35 @@ def _load_parsed(path: Path) -> list[tuple[datetime | None, dict]]:
     return parsed
 
 
+def has_changes(event: dict) -> bool:
+    return bool(event.get("changed") or event.get("added") or event.get("removed"))
+
+
 def read_events(
     account: str | None = None,
     hours: int = 24,
-    limit: int = 200,
+    limit: int | None = 200,
     accounts: set[str] | None = None,
+    *,
+    with_changes: bool = False,
+    since: datetime | None = None,
+    until: datetime | None = None,
 ) -> list[dict]:
     """Read events newest-first, across the live and rotated logs.
 
     Args:
         account:  Keep only this account's events (None = all).
-        hours:    Only events from the last N hours.
-        limit:    Max number of events to return.
+        hours:    Only events from the last N hours (ignored when `since` is given).
+        limit:    Max number of events to return (None = no cap).
         accounts: Visibility allow-list (None = unrestricted). Applied BEFORE
                   `limit`, so a group user's own events cannot be crowded out
                   of the window by busier accounts they are not allowed to see.
+        with_changes: Skip events that record no change — every successful
+                  scan writes one, and only about one in ten carries a change,
+                  so a cap counted in raw events covered days, not weeks.
+        since/until: An explicit window instead of `hours`.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    cutoff = since or (datetime.now(timezone.utc) - timedelta(hours=hours))
     events: list[dict] = []
     for path in _event_files():
         for ts, event in reversed(_load_parsed(path)):
@@ -107,13 +119,17 @@ def read_events(
                 # Entries are appended in order and files are walked newest
                 # first, so everything from here on is older than the window.
                 return events
+            if until is not None and ts > until:
+                continue
             who = event.get("account")
             if account and who != account:
                 continue
             if accounts is not None and who not in accounts:
                 continue
+            if with_changes and not has_changes(event):
+                continue
             events.append(event)
-            if len(events) >= limit:
+            if limit is not None and len(events) >= limit:
                 return events
     return events
 
@@ -121,13 +137,22 @@ def read_events(
 def read_change_rows(
     account: str | None = None,
     hours: int = 24 * 30,
-    limit: int = 300,
+    limit: int | None = None,
     accounts: set[str] | None = None,
+    *,
+    since: datetime | None = None,
+    until: datetime | None = None,
 ) -> list[dict]:
-    """Flatten events into individual change rows for the changes page."""
+    """Flatten events into individual change rows, newest first.
+
+    `limit` caps ROWS (None = every row in the window); events without
+    changes never count, so the window really is the window."""
     from src.scraper import decode_status
 
-    events = read_events(account=account, hours=hours, limit=limit, accounts=accounts)
+    events = read_events(
+        account=account, hours=hours, limit=None, accounts=accounts,
+        with_changes=True, since=since, until=until,
+    )
     rows: list[dict] = []
     for event in events:
         base = {
@@ -169,4 +194,6 @@ def read_change_rows(
                 "old_status": decode_status(r.get("dataRegAuditStatus")),
                 "new_status": "",
             })
+        if limit is not None and len(rows) >= limit:
+            return rows[:limit]
     return rows

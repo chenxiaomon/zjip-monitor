@@ -34,12 +34,10 @@ def _is_stale(snapshot_time: str | None, stale_hours: float) -> bool:
     return datetime.now(timezone.utc) - dt > timedelta(hours=stale_hours)
 
 
-def _filtered_events(request: Request, hours: int = 24, limit: int = 50) -> list[dict]:
-    events = read_events(hours=hours, limit=limit)
-    allowed = allowed_usernames(request)
-    if allowed is None:
-        return events
-    return [e for e in events if e.get("account") in allowed]
+def _filtered_events(request: Request, hours: int = 24, limit: int = 20) -> list[dict]:
+    """The timeline's events: only ones that carry a change, scoped to the
+    viewer's accounts before the cap so quiet scans cannot fill it."""
+    return read_events(hours=hours, limit=limit, accounts=allowed_usernames(request), with_changes=True)
 
 
 def _dashboard_ctx(request: Request, year: int | None = None) -> dict:
