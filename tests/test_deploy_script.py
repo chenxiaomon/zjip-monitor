@@ -141,6 +141,7 @@ MINI_REPO_FILES = {
     "miniprogram/config.js": "SECRET",
     "miniprogram/project.private.config.json": "{\"appid\": \"SECRET\"}",
     "deploy/deploy.env": "SERVER=secret@host\n",
+    "archive/archive.env": "SERVER=secret@host\n",
     # runtime / caches — must be excluded
     "data/control/state.json": "{}",
     "logs/app.log": "x",
@@ -442,7 +443,7 @@ def test_dry_run_lists_transfer_and_honours_excludes(harness):
 
     for never in (".env", "config/settings.yaml", "config/accounts.enc",
                   "miniprogram/config.js", "miniprogram/project.private.config.json",
-                  "deploy/deploy.env", "deploy.sh", ".git"):
+                  "deploy/deploy.env", "archive/archive.env", "deploy.sh", ".git"):
         assert never not in listed, f"{never} must not be transferred"
     for prefix in ("data/", "logs/", ".venv/", ".pytest_cache/", ".claude/", ".git/"):
         assert not any(p.startswith(prefix) for p in listed), prefix
@@ -534,8 +535,8 @@ def test_deploy_pipeline_runs_steps_in_order(harness):
                       "config/accounts.enc.bak", "data/snapshots/snap.json",
                       "logs/app.log", ".venv/lib/python3.12/site.py"):
         assert (harness.remote / untouched).read_text() == REMOTE_SEED[untouched], untouched
-    for never in ("deploy/deploy.env", "miniprogram/config.js", ".git", ".claude",
-                  ".pytest_cache", "deploy.sh"):
+    for never in ("deploy/deploy.env", "archive/archive.env", "miniprogram/config.js", ".git",
+                  ".claude", ".pytest_cache", "deploy.sh"):
         assert not (harness.remote / never).exists(), never
     rsync_line = [ln for ln in harness.scripts().splitlines() if ln.startswith("RSYNC ")][0]
     assert "--delete" not in rsync_line
