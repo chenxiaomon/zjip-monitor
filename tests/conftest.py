@@ -66,11 +66,16 @@ def _isolated_diskstat(tmp_path_factory, _own_patcher):
     out of run_all()/run_single() now prunes, which sweeps .part files under
     data/attachments and writes data/control/disk_stats.json as a side
     effect — none of that may reach the real data/."""
-    from src import diskstat
+    from src import attachments, diskstat, todo
     from src import main as src_main
 
     root = tmp_path_factory.mktemp("diskstat")
     data = root / "data"
+    # 待办 / the records page read every record's .sync.json through
+    # src.attachments — never the developer's real data/attachments.
+    _own_patcher.setattr(attachments, "_ATTACHMENTS_DIR", data / "attachments")
+    attachments._manifest_cache.clear()
+    todo._json_cache.clear()
     _own_patcher.setattr(diskstat, "_ROOT", root)
     _own_patcher.setattr(diskstat, "_DATA_DIR", data)
     _own_patcher.setattr(diskstat, "_ATTACHMENTS_DIR", data / "attachments")

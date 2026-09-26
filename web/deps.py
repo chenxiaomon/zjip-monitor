@@ -148,6 +148,37 @@ def group_label(key: str | None) -> str:
     return get_groups().get(key, key)
 
 
+# Deadline pills (src/todo.urgency_of): overdue and ≤3 days red, ≤7 amber,
+# further out green, deadline unknown grey.
+URGENCY_CLASSES: dict[str, str] = {
+    "overdue": "bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300",
+    "red": "bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400",
+    "amber": "bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400",
+    "normal": "bg-green-50 dark:bg-green-950/40 text-green-700 dark:text-green-400",
+    "unknown": "bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400",
+}
+
+
+def urgency_class(urgency: str | None) -> str:
+    return URGENCY_CLASSES.get(urgency or "unknown", URGENCY_CLASSES["unknown"])
+
+
+def due_label(days_left: int | None, deadline: str | None) -> str:
+    """'截止 10-12 · 剩 16 天' / '今天到期' / '已逾期 3 天' / '截止日期未知'."""
+    if not deadline:
+        return "截止日期未知"
+    when = deadline[5:] if len(deadline) >= 10 else deadline
+    if days_left is None:
+        return f"截止 {when}"
+    if days_left < 0:
+        return f"截止 {when} · 已逾期 {-days_left} 天"
+    if days_left == 0:
+        return f"截止 {when} · 今天到期"
+    return f"截止 {when} · 剩 {days_left} 天"
+
+
+templates.env.globals["urgency_class"] = urgency_class
+templates.env.globals["due_label"] = due_label
 templates.env.filters["fmt_time"] = _fmt_time
 templates.env.filters["fmt_time_short"] = _fmt_time_short
 templates.env.filters["tojson"] = _tojson

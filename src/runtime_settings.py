@@ -126,6 +126,9 @@ class OpsAlertSettings:
     stale_hours: float = 36
     # This many failed accounts in one round → banner.
     min_failed_accounts: int = 3
+    # A 补正 whose deadline is this many days away (or fewer) → banner;
+    # overdue or ≤ 2 days is critical either way.
+    correction_warn_days: int = 5
 
 
 @dataclass(frozen=True)
@@ -206,6 +209,8 @@ _RULES: dict[str, dict[str, _Rule]] = {
     "ops_alerts": {
         "stale_hours": (_NUM, 0, True),
         "min_failed_accounts": (_INT, 1, False),
+        # 0 is meaningful: only warn once a deadline is today or past.
+        "correction_warn_days": (_INT, 0, False),
     },
     "disk": {
         "min_free_mb": (_NUM, 0, False),

@@ -1,4 +1,4 @@
-# Pinned production dependencies: pip freeze from root@104.249.172.32:/opt/zjip-monitor/.venv (Python 3.12), taken 2026-09-13 (UTC).
+# Pinned production dependencies: pip freeze from root@104.249.172.32:/opt/zjip-monitor/.venv (Python 3.12.13), taken 2026-09-26 (UTC).
 # For the production Linux / Python 3.12 venv only -- deploy.sh runs
 #   pip install -r requirements.lock
 # on the server. Local development installs requirements-dev.txt (which pulls
@@ -27,6 +27,7 @@ pycparser==3.0
 pydantic==2.13.4
 pydantic_core==2.46.4
 pyee==13.0.1
+pypdf==6.19.0
 python-dotenv==1.2.2
 python-multipart==0.0.29
 PyYAML==6.0.3

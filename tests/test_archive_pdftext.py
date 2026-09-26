@@ -1,10 +1,10 @@
-"""archive/pdftext.py: facts from the platform's notices and certificates.
+"""src/pdftext.py: facts from the platform's notices and certificates.
 
 The fixtures reproduce what pypdf returns for the real documents — sentences
 broken across lines, digits and CJK padded with spaces — with made-up names.
 """
 
-from archive import pdftext
+from src import pdftext
 
 CORRECTION = (
     "浙江省数据知识产权登记\n形式审查补正通知书\n \n  甲科技有限公司  ：\n"

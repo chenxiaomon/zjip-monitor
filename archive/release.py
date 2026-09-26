@@ -119,6 +119,51 @@ def run_release(cfg: ArchiveConfig, *, yes: bool = False, days: int = DEFAULT_DA
     return 0
 
 
+def facts_payload(db_path: Path) -> dict[str, dict[str, dict]]:
+    """Facts of the notices this laptop holds but the server released:
+    {"企业目录/登记号": {"文件名": {kind, deadline, ...}}}."""
+    db = sqlite3.connect(db_path)
+    try:
+        rows = db.execute(
+            "SELECT company_dir, reg_no, filename, doc_kind, submitted_on, issued_on, deadline, "
+            "valid_from, valid_to, reasons FROM documents WHERE released_at IS NOT NULL "
+            "AND path LIKE 'attachments/%' AND doc_kind IN ('补正', '公示', '公告', '不予登记', '异议') "
+            "ORDER BY company_dir, reg_no, filename"
+        ).fetchall()
+    finally:
+        db.close()
+    payload: dict[str, dict[str, dict]] = {}
+    for company_dir, reg_no, filename, kind, submitted, issued, deadline, vfrom, vto, reasons in rows:
+        payload.setdefault(f"{company_dir}/{reg_no}", {})[filename] = {
+            "kind": kind, "submitted_on": submitted, "issued_on": issued, "deadline": deadline,
+            "valid_from": vfrom, "valid_to": vto, "reasons": (reasons or "")[:400] or None,
+        }
+    return payload
+
+
+def run_push_facts(cfg: ArchiveConfig) -> int:
+    """Send the released notices' facts to the server so its console can show
+    certificate expiry for records whose 公告 lives only here."""
+    if not cfg.db_path.exists():
+        print("✗ 还没有 archive.sqlite，先运行 python -m archive pull 和 index")
+        return 1
+    payload = facts_payload(cfg.db_path)
+    n = sum(len(v) for v in payload.values())
+    result = _server_json(_ssh(
+        cfg, ".venv/bin/python scripts/backfill_notice_facts.py --from-stdin",
+        json.dumps(payload, ensure_ascii=False),
+    ))
+    if "error" in result:
+        print(f"✗ {result['error']}")
+        return 1
+    print(
+        f"✓ 送出 {n} 份已释放通知书的解析结果；服务器新解析 {result.get('parsed', 0)} 份、"
+        f"合并 {result.get('merged', 0)} 份、更新 {result.get('records', 0)} 条记录"
+        + (f"、{result['unreadable']} 份无法解析" if result.get("unreadable") else "")
+    )
+    return 0
+
+
 def run_restore(cfg: ArchiveConfig, company_dir: str, reg_no: str) -> int:
     rec = cfg.archive_dir / "attachments" / company_dir / reg_no
     if not cfg.db_path.exists() or not rec.is_dir():

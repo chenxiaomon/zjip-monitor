@@ -11,3 +11,5 @@ uvicorn[standard]>=0.29.0
 sse-starlette>=1.8.2
 python-multipart>=0.0.9
 filelock>=3.13.0
+# 通知书 PDF 文字层解析（补正截止日期、证书有效期）；纯 Python
+pypdf>=4.0

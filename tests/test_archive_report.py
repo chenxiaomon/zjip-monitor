@@ -6,7 +6,8 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from archive import index, pdftext, report
+from archive import index, report
+from src import pdftext
 from tests.test_archive_pdftext import ANNOUNCEMENT, CORRECTION
 
 BJ = timezone(timedelta(hours=8))

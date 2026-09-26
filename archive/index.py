@@ -34,7 +34,7 @@ from pathlib import Path
 from src.attachments import _safe_name
 from src.scraper import AUDIT_STATUS, int_or_none
 
-from . import pdftext
+from src import pdftext
 from .config import ArchiveConfig
 
 SCHEMA_VERSION = "2"

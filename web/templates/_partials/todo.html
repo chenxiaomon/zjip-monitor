@@ -1,0 +1,69 @@
+{#
+  待办：补正截止日期与证书续展。截止日期来自补正通知书本身（平台记录里没有），
+  由 src/todo 读取巡检写进 .sync.json 的 facts；分组用户只看自己的企业。
+#}
+<div id="todo-section"
+     class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6"
+     hx-get="/partials/todo"
+     hx-trigger="sse:update"
+     hx-swap="outerHTML">
+  <!-- 待补正 -->
+  <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+    <div class="px-4 py-2.5 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
+      <span class="text-sm font-medium text-gray-800 dark:text-gray-100">
+        <i class="ti ti-alarm text-amber-500"></i> 待补正 {{ todo.corrections|length }}
+      </span>
+      <span class="text-xs text-gray-400 dark:text-gray-500">按截止日期 · 逾期视为撤回登记申请</span>
+    </div>
+    {% for c in todo.corrections %}
+    <div class="px-4 py-2.5 border-b last:border-0 border-gray-100 dark:border-gray-700/50 flex gap-3 items-start text-xs">
+      <span class="shrink-0 px-2 py-0.5 rounded-full whitespace-nowrap {{ urgency_class(c.urgency) }}"
+            {% if c.issued_on %}title="通知书落款 {{ c.issued_on }}"{% endif %}>
+        {{ due_label(c.days_left, c.deadline) }}
+      </span>
+      <div class="min-w-0 flex-1">
+        <div class="text-gray-800 dark:text-gray-100 truncate" title="{{ c.name }}">
+          {{ c.company }} · {{ c.name }}
+        </div>
+        <div class="font-mono text-gray-400 dark:text-gray-500">
+          <a href="{{ detail_url(c.reg_no) }}" target="_blank" rel="noopener"
+             title="在官网打开详情页（需登录平台）" class="hover:underline">{{ c.reg_no }}</a>
+          · <a href="/records?q={{ c.reg_no | urlencode }}" class="hover:underline">记录</a>
+        </div>
+        {% if c.summary %}
+        <div class="text-gray-500 dark:text-gray-400 truncate" title="{{ c.reasons }}">{{ c.summary }}</div>
+        {% endif %}
+      </div>
+    </div>
+    {% else %}
+    <div class="px-4 py-6 text-center text-xs text-gray-400 dark:text-gray-500">没有待补正的申请</div>
+    {% endfor %}
+  </div>
+  <!-- 可续展 -->
+  <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+    <div class="px-4 py-2.5 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
+      <span class="text-sm font-medium text-gray-800 dark:text-gray-100">
+        <i class="ti ti-certificate text-green-600"></i> 可续展 {{ todo.renewals|length }}
+      </span>
+      <span class="text-xs text-gray-400 dark:text-gray-500">证书期满前 6 个月内可办理续展</span>
+    </div>
+    {% for r in todo.renewals %}
+    <div class="px-4 py-2.5 border-b last:border-0 border-gray-100 dark:border-gray-700/50 flex gap-3 items-start text-xs">
+      <span class="shrink-0 px-2 py-0.5 rounded-full whitespace-nowrap {{ urgency_class('overdue' if r.expired else ('amber' if r.days_left <= 30 else 'normal')) }}">
+        {% if r.expired %}已过期 {{ -r.days_left }} 天，未续展{% else %}{{ r.valid_to }} 到期 · 剩 {{ r.days_left }} 天{% endif %}
+      </span>
+      <div class="min-w-0 flex-1">
+        <div class="text-gray-800 dark:text-gray-100 truncate" title="{{ r.name }}">{{ r.company }} · {{ r.name }}</div>
+        <div class="font-mono text-gray-400 dark:text-gray-500">
+          <a href="{{ detail_url(r.reg_no) }}" target="_blank" rel="noopener" class="hover:underline">{{ r.reg_no }}</a>
+        </div>
+      </div>
+    </div>
+    {% else %}
+    <div class="px-4 py-6 text-center text-xs text-gray-400 dark:text-gray-500">
+      180 天内没有到期的证书
+      {% if todo.next_renewal %}<div class="mt-1">最近一张：{{ todo.next_renewal.valid_to }} {{ todo.next_renewal.company }} · {{ todo.next_renewal.name }}</div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
