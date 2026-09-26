@@ -170,6 +170,12 @@ def parse(text: str, doc_type: str) -> Facts:
             facts.reasons = f"收到{m.group(1)}的异议"
     elif facts.kind == "公告":
         if m := re.search(rf"自{_DATE}至{_DATE}", flat):
-            facts.valid_from = _iso(m, 1)
-            facts.valid_to = _iso(m, 4)
+            start, end = _iso(m, 1), _iso(m, 4)
+            if end > start:
+                facts.valid_from, facts.valid_to = start, end
+            else:
+                # Seen on nine 2024 notices: "自2024年09月07日至2024年08月26日" —
+                # the platform's own document is wrong. Keep the text, not
+                # dates that would list the certificate as long expired.
+                facts.fields["有效期原文"] = m.group(0)
     return facts

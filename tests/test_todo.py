@@ -70,6 +70,13 @@ def test_renewal_inside_the_window(valid_to, expect_days, expired):
     assert (r.valid_to, r.days_left, r.expired) == (valid_to, expect_days, expired)
 
 
+def test_renewal_ignores_facts_whose_validity_is_impossible():
+    """Facts written before the parser refused inverted spans stay on the
+    server; the reader must not turn them into '已过期 762 天'."""
+    _manifest("R2", {ANNOUNCEMENT: {"kind": "公告", "valid_from": "2024-09-07", "valid_to": "2024-08-26"}})
+    assert todo.renewal_for(ACC, _record("R2", 7), TODAY) is None
+
+
 def test_renewal_outside_the_window_or_already_renewed_is_none():
     _manifest("R2", {ANNOUNCEMENT: {"kind": "公告", "valid_to": "2027-03-27"}})  # 181 days
     assert todo.renewal_for(ACC, _record("R2", 7), TODAY) is None
