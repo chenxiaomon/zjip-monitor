@@ -1,7 +1,22 @@
 <!-- Count header + table: one HTMX swap unit so the 共N条 count never goes stale -->
 <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden" id="records-table-box">
   <div class="px-4 py-2.5 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
-    <span class="text-xs text-gray-500 dark:text-gray-400">共 {{ total }} 条记录（点击行展开原始数据）</span>
+    <span class="text-xs text-gray-500 dark:text-gray-400">共 {{ total }} 条记录{% if pages > 1 %} · 第 {{ page }}/{{ pages }} 页{% endif %}（点击行展开原始数据）</span>
+    <span class="flex items-center gap-2 text-xs">
+      {% if page > 1 %}
+      <a href="{{ records_url(page=page-1) }}" hx-get="{{ records_url(partial=True, page=page-1) }}" hx-target="#records-table-box" hx-swap="outerHTML"
+         class="px-2 py-0.5 rounded border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700">上一页</a>
+      {% endif %}
+      {% if page < pages %}
+      <a href="{{ records_url(page=page+1) }}" hx-get="{{ records_url(partial=True, page=page+1) }}" hx-target="#records-table-box" hx-swap="outerHTML"
+         class="px-2 py-0.5 rounded border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700">下一页</a>
+      {% endif %}
+      {# Rendered with the table, so the link always carries the filters in effect #}
+      <a href="{{ records_url(csv=True) }}" title="导出当前筛选的全部记录（Excel 可直接打开）"
+         class="flex items-center gap-1 px-2 py-0.5 rounded border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700">
+        <i class="ti ti-download text-sm"></i>导出 CSV
+      </a>
+    </span>
   </div>
   <table class="w-full">
     <thead>

@@ -58,11 +58,7 @@ def _notify_ctx(errors: dict[str, str] | None = None) -> dict:
     # These are CHANGE events, not push receipts. The page used to badge every
     # one of them 「已发送」 purely because some channel was enabled — so a
     # rate-limited webhook or a dead SMTP host still read as "通知正常".
-    all_events = read_events(hours=24 * 30, limit=100)
-    change_log = [
-        e for e in all_events
-        if e.get("changed") or e.get("added") or e.get("removed")
-    ][:30]
+    change_log = read_events(hours=24 * 30, limit=30, with_changes=True)
     enabled = [_CHANNEL_LABELS[ch] for ch in _CHANNELS if cfg.get(ch, {}).get("enabled")]
     return {
         "cfg": {ch: _display_cfg(ch, cfg.get(ch, {})) for ch in _CHANNELS},

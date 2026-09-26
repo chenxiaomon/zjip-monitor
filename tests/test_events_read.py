@@ -122,6 +122,45 @@ def test_change_rows_flatten_across_files(events_dir):
     assert rows[2]["new_status"] == "待审核"  # decoded from the rotated file
 
 
+def _change(reg_no="R1"):
+    return [{"reg_no": reg_no, "name": "n", "old_status_code": 1, "new_status_code": 2,
+             "old_status": "待审核", "new_status": "待补正"}]
+
+
+def test_with_changes_skips_quiet_scans_before_the_cap(events_dir):
+    """Every successful scan writes an event; only about one in ten carries a
+    change. A cap counted in raw events made 'the last 30 days' about 5 days."""
+    busy = [_event("a", hours_ago=3, changed=_change())]
+    quiet = [_event("a", hours_ago=1) for _ in range(20)]
+    _write(events_dir / "events.jsonl", busy + quiet)
+
+    assert all(not e["changed"] for e in ev.read_events(hours=24, limit=5))
+    got = ev.read_events(hours=24, limit=5, with_changes=True)
+    assert len(got) == 1 and got[0]["changed"]
+
+
+def test_explicit_window_since_until(events_dir):
+    _write(events_dir / "events.jsonl", [
+        _event("old", hours_ago=60), _event("mid", hours_ago=30), _event("new", hours_ago=1),
+    ])
+    now = datetime.now(timezone.utc)
+    assert [e["account"] for e in ev.read_events(since=now - timedelta(hours=48))] == ["new", "mid"]
+    assert [e["account"] for e in ev.read_events(since=now - timedelta(hours=48), until=now - timedelta(hours=10))] == ["mid"]
+    assert [e["account"] for e in ev.read_events(hours=1000, limit=None)] == ["new", "mid", "old"]
+
+
+def test_change_rows_cover_the_whole_window_and_cap_rows_not_events(events_dir):
+    quiet = [_event("a", hours_ago=1) for _ in range(400)]
+    changes = [_event("a", hours_ago=5, changed=_change("R1") + _change("R2")),
+               _event("a", hours_ago=200, changed=_change("R3"))]
+    _write(events_dir / "events.jsonl", changes[::-1] + quiet)
+
+    rows = ev.read_change_rows(hours=24 * 30)
+    assert [r["reg_no"] for r in rows] == ["R1", "R2", "R3"]
+    assert [r["reg_no"] for r in ev.read_change_rows(hours=24 * 30, limit=1)] == ["R1"]
+    assert [r["reg_no"] for r in ev.read_change_rows(hours=24 * 30, limit=2)] == ["R1", "R2"]
+
+
 def test_cache_is_invalidated_by_appends(events_dir):
     path = events_dir / "events.jsonl"
     _write(path, [_event("a")])
