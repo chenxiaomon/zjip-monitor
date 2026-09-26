@@ -113,7 +113,7 @@ def test_restore_sends_files_back_and_clears_the_marks(cfg, monkeypatch):
     assert release.run_restore(cfg, "甲公司", "DONE") == 0
 
     rsync, ssh = calls
-    assert rsync["argv"][:3] == ["rsync", "-a", "--ignore-existing"]
+    assert rsync["argv"][:3] == ["rsync", "-rt", "--ignore-existing"]  # no -a: the server owns the files
     assert rsync["argv"][-2].endswith("attachments/甲公司/DONE/国家局登记证书.pdf")
     assert rsync["argv"][-1] == "root@h:/opt/z/data/attachments/甲公司/DONE/"
     assert ssh["argv"][2].endswith("scripts/archive_release.py --unarchive '甲公司/DONE'")

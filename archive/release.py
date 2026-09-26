@@ -139,7 +139,9 @@ def run_restore(cfg: ArchiveConfig, company_dir: str, reg_no: str) -> int:
         return 0
 
     target = f"{cfg.server}:{cfg.remote}/data/attachments/{company_dir}/{reg_no}/"
-    proc = subprocess.run(["rsync", "-a", "--ignore-existing", "-e", cfg.ssh_cmd, *files, target],
+    # -rt, not -a: keep the times, but let the server own the files (root),
+    # not the laptop user's uid
+    proc = subprocess.run(["rsync", "-rt", "--ignore-existing", "-e", cfg.ssh_cmd, *files, target],
                           capture_output=True, text=True)
     if proc.returncode != 0:
         print(f"✗ 送回服务器失败（rsync 退出码 {proc.returncode}）：{proc.stderr.strip()}")
