@@ -365,7 +365,7 @@ async def add_account(
             request,
             "_partials/account_form.html",
             {"error": error, "mode": "add",
-             "form": {"company": company, "username": username, "contact": contact}},
+             "form": {"company": company, "username": username, "contact": contact, "group": group}},
             headers={"HX-Retarget": "#modal-container", "HX-Reswap": "innerHTML"},
         )
 

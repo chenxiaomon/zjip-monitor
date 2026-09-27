@@ -66,3 +66,33 @@ def test_group_user_gets_no_admin_navigation(fake_accounts, web_client, login_as
     html = login_as(web_client, *GROUP_A_USER).get("/").text
     assert 'href="/settings"' not in html and 'href="/notify"' not in html and 'href="/reports"' not in html
     assert 'href="/records"' in html and "退出登录" in html
+
+
+def test_home_screen_manifest_and_icons(web_client):
+    import json
+    import struct
+
+    resp = web_client.get("/static/manifest.webmanifest")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/manifest+json")
+    manifest = json.loads(resp.text)
+    assert manifest["start_url"] == "/" and manifest["display"] == "standalone"
+    for icon in manifest["icons"]:
+        data = web_client.get(icon["src"]).content
+        assert data[:8] == b"\x89PNG\r\n\x1a\n"
+        w, h = struct.unpack(">II", data[16:24])
+        assert f"{w}x{h}" == icon["sizes"]
+    touch = web_client.get("/static/apple-touch-icon.png").content
+    assert struct.unpack(">II", touch[16:24]) == (180, 180)
+
+    for page in (web_client.get("/login").text,):
+        assert 'rel="manifest" href="/static/manifest.webmanifest"' in page
+        assert 'rel="apple-touch-icon"' in page and 'name="theme-color"' in page
+
+
+def test_add_account_error_keeps_the_chosen_group(fake_accounts, isolated_settings, web_client, login_as):
+    client = login_as(web_client, *ADMIN)
+    html = client.post("/accounts", data={"company": "新公司", "username": "ua1", "password": "x", "group": "group_b"}).text
+    assert "账号 ua1 已存在" in html
+    assert '<option value="group_b" selected>' in html
+    assert '<option value="group_a" >' in html or '<option value="group_a">' in html

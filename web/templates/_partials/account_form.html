@@ -75,7 +75,8 @@
           <select id="acc-group" name="group" class="select">
             <option value="">未分组</option>
             {% for gkey, gname in get_groups().items() %}
-            <option value="{{ gkey }}" {% if is_edit and account.group == gkey %}selected{% endif %}>{{ gname }}</option>
+            {% set chosen = account.group if is_edit else (form.group if form else '') %}
+            <option value="{{ gkey }}" {% if chosen == gkey %}selected{% endif %}>{{ gname }}</option>
             {% endfor %}
           </select>
         </div>
