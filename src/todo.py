@@ -250,3 +250,51 @@ def build(accounts: list[Account], today: date | None = None) -> dict[str, Any]:
         "next_renewal": min(upcoming, key=lambda t: t[0])[1] if (upcoming and not renewals) else None,
         "today": today.isoformat(),
     }
+
+
+def certificate_urgency(days_left: int) -> str:
+    """Colour of a certificate expiry: expired, due within 30 days, inside the
+    6-month renewal window, or not yet renewable (grey)."""
+    if days_left < 0:
+        return "overdue"
+    if days_left <= 30:
+        return "amber"
+    if days_left <= RENEWAL_WINDOW_DAYS:
+        return "normal"
+    return "unknown"
+
+
+def deadline_items(accounts: list[Account], today: date | None = None) -> dict[str, Any]:
+    """Every dated deadline of the given (visibility-filtered) accounts, for
+    the calendar: {"items": [...], "undated": [...]}.
+
+    items: {date, kind ("correction" | "certificate"), company, username,
+    reg_no, name, days_left, urgency}, sorted by date. Corrections whose
+    notice gave no deadline go to "undated" so they are never silently missed.
+    Unlike build(), certificates are not limited to the renewal window.
+    """
+    today = today or today_local()
+    items: list[dict[str, Any]] = []
+    undated: list[dict[str, Any]] = []
+    for acc in accounts:
+        snap = _latest_snapshot(acc.company)
+        for r in (snap or {}).get("records") or []:
+            if not isinstance(r, dict) or not r.get("dataRegNo"):
+                continue
+            c = correction_for(acc, r, today)
+            if c is not None:
+                row = {"kind": "correction", "company": c.company, "username": c.username,
+                       "reg_no": c.reg_no, "name": c.name, "days_left": c.days_left, "urgency": c.urgency}
+                if c.deadline:
+                    items.append({**row, "date": c.deadline})
+                else:
+                    undated.append(row)
+                continue
+            rn = renewal_for(acc, r, today, window=None)
+            if rn is not None:
+                items.append({"kind": "certificate", "company": rn.company, "username": rn.username,
+                              "reg_no": rn.reg_no, "name": rn.name, "days_left": rn.days_left,
+                              "urgency": certificate_urgency(rn.days_left), "date": rn.valid_to})
+    items.sort(key=lambda i: (i["date"], i["kind"], i["company"], i["reg_no"]))
+    undated.sort(key=lambda i: (i["company"], i["reg_no"]))
+    return {"items": items, "undated": undated, "today": today.isoformat()}

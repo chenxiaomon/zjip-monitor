@@ -32,7 +32,7 @@
   </a>
   <nav class="nav">
     <div class="nav-label">监控</div>
-    {% for href, name, label in [('/', 'layout-dashboard', '仪表盘'), ('/accounts', 'users', '账号'), ('/records', 'file-text', '登记记录'), ('/changes', 'history', '变更历史')] %}
+    {% for href, name, label in [('/', 'layout-dashboard', '仪表盘'), ('/accounts', 'users', '账号'), ('/records', 'file-text', '登记记录'), ('/calendar', 'calendar-event', '期限日历'), ('/changes', 'history', '变更历史')] %}
     <a href="{{ href }}" class="nav-item{% if request.url.path == href %} active{% endif %}">{{ icon(name) }}{{ label }}</a>
     {% endfor %}
     {% if not limited %}

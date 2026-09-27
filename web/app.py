@@ -54,6 +54,7 @@ from web.routes import (  # noqa: E402 — same reason
     attachments,
     changes,
     dashboard,
+    deadlines,
     health,
     login,
     notify,
@@ -257,6 +258,7 @@ app.include_router(login.router)
 app.include_router(sse_router)
 app.include_router(dashboard.router)
 app.include_router(changes.router)
+app.include_router(deadlines.router)
 app.include_router(accounts.router)
 app.include_router(records.router)
 app.include_router(notify.router)

@@ -27,7 +27,10 @@ def test_every_icon_a_template_uses_exists_in_the_sprite():
     ids = set(re.findall(r'id="i-([a-z0-9-]+)"', sprite))
     used: set[str] = set()
     for path in _templates():
-        used.update(re.findall(r"icon\(\s*'([a-z0-9-]+)'", path.read_text(encoding="utf-8")))
+        text = path.read_text(encoding="utf-8")
+        used.update(re.findall(r"icon\(\s*'([a-z0-9-]+)'", text))
+        # the nav lists pass icon names inside (href, icon, label) tuples
+        used.update(re.findall(r"\('/[a-z]*',\s*'([a-z0-9-]+)',", text))
     assert used, "no icon() calls found in the templates"
     missing = used - ids
     assert not missing, f"web/static/icons.svg 缺少图标: {sorted(missing)}"

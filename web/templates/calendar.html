@@ -1,0 +1,109 @@
+{% extends "_base.html" %}
+
+{% block title %}期限日历 — 数智通监控{% endblock %}
+{% block page_title %}期限日历{% endblock %}
+
+{% macro item_link(it, cls) -%}
+<a class="{{ cls }}" href="/records?q={{ it.reg_no | urlencode }}"
+   hx-get="{{ record_url(it.username, it.reg_no) }}" hx-target="#drawer" hx-swap="innerHTML"
+   title="{{ '补正截止' if it.kind == 'correction' else '证书到期' }} · {{ it.company }} · {{ it.name }}">{{ caller() }}</a>
+{%- endmacro %}
+
+{% block content %}
+<div class="toolbar">
+  <div class="row gap-2">
+    <a class="btn btn-sm" href="/calendar?month={{ prev_month }}" aria-label="上个月">{{ icon('chevron-left') }}</a>
+    <h2 class="cal-title">{{ first.year }} 年 {{ first.month }} 月</h2>
+    <a class="btn btn-sm" href="/calendar?month={{ next_month }}" aria-label="下个月">{{ icon('chevron-right') }}</a>
+    {% if not is_current %}<a class="btn btn-sm btn-link" href="/calendar">回到本月</a>{% endif %}
+  </div>
+  <div class="row gap-3 xs muted">
+    <span class="row gap-1"><i class="cal-key correction"></i>补正截止 {{ n_corrections }}</span>
+    <span class="row gap-1"><i class="cal-key certificate"></i>证书到期 {{ n_certificates }}</span>
+  </div>
+</div>
+
+<div class="cal-layout">
+  <div class="stack">
+    <div class="card cal" role="grid" aria-label="{{ first.year }} 年 {{ first.month }} 月">
+      <div class="cal-row cal-head" role="row">
+        {% for w in weekdays %}<div role="columnheader">{{ w }}</div>{% endfor %}
+      </div>
+      {% for week in grid %}
+      <div class="cal-row" role="row">
+        {% for d in week %}
+        <div class="cal-day{% if not d.in_month %} out{% endif %}{% if d.today %} today{% endif %}{% if d.past %} past{% endif %}" role="gridcell"
+             {% if d.entries %}aria-label="{{ d.iso }}：{{ d.entries|length }} 项"{% endif %}>
+          <div class="cal-num">{{ d.date.day }}</div>
+          {% for it in d.entries[:cell_items] %}
+          {% call item_link(it, 'cal-chip ' ~ it.kind ~ ' u-' ~ it.urgency) %}{{ '补正' if it.kind == 'correction' else '证书' }} {{ it.company[:4] }}{% endcall %}
+          {% endfor %}
+          {% if d.entries|length > cell_items %}<div class="cal-more">+{{ d.entries|length - cell_items }} 项</div>{% endif %}
+          {% if d.entries %}<div class="cal-dots" aria-hidden="true">{% for it in d.entries[:4] %}<i class="{{ it.kind }} u-{{ it.urgency }}"></i>{% endfor %}</div>{% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">{{ icon('calendar-event') }}{{ first.month }} 月的期限</span>
+        <span class="card-sub">点条目查看详情</span>
+      </div>
+      {% if agenda %}
+      <ul class="agenda">
+        {% for day in agenda %}
+        <li>
+          <div class="agenda-date">
+            <b>{{ day.date.month }} 月 {{ day.date.day }} 日</b> 周{{ day.weekday }}
+            <span class="faint">· {% if day.days == 0 %}今天{% elif day.days > 0 %}还有 {{ day.days }} 天{% else %}{{ -day.days }} 天前{% endif %}</span>
+          </div>
+          {% for it in day.entries %}
+          {% call item_link(it, 'agenda-item') %}
+            <span class="pill pill-xs {{ urgency_class(it.urgency) }}">{{ '补正截止' if it.kind == 'correction' else '证书到期' }}</span>
+            <span class="grow truncate">{{ it.company }} · {{ it.name }}</span>
+            <span class="mono xs faint hide-sm">{{ it.reg_no }}</span>
+          {% endcall %}
+          {% endfor %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <div class="empty">{{ icon('circle-check') }}这个月没有补正截止或证书到期</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="stack">
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">{{ icon('alert-triangle', 'danger') }}已逾期 {{ overdue|length }}</span>
+        <span class="card-sub">补正逾期视为撤回</span>
+      </div>
+      {% for it in overdue %}
+      {% call item_link(it, 'agenda-item') %}
+        <span class="pill pill-xs pill-danger-strong">{{ '补正' if it.kind == 'correction' else '证书' }} {{ it.date[5:] }}</span>
+        <span class="grow truncate">{{ it.company }} · {{ it.name }}</span>
+      {% endcall %}
+      {% else %}
+      <div class="empty">{{ icon('shield-check') }}没有逾期的期限</div>
+      {% endfor %}
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">{{ icon('info-circle') }}截止日期未知 {{ undated|length }}</span>
+        <span class="card-sub">通知书里没读出日期</span>
+      </div>
+      {% for it in undated %}
+      {% call item_link(it, 'agenda-item') %}
+        <span class="pill pill-xs pill-neutral">待补正</span>
+        <span class="grow truncate">{{ it.company }} · {{ it.name }}</span>
+      {% endcall %}
+      {% else %}
+      <div class="empty">{{ icon('circle-check') }}所有补正都有截止日期</div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}
