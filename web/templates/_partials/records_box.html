@@ -1,7 +1,7 @@
 <!-- Count header + table: one HTMX swap unit so the 共N条 count never goes stale -->
 <div class="card" id="records-table-box">
   <div class="card-head">
-    <span class="card-sub">共 {{ total }} 条记录{% if pages > 1 %} · 第 {{ page }}/{{ pages }} 页{% endif %}（点击行展开原始数据）</span>
+    <span class="card-sub">共 {{ total }} 条记录{% if pages > 1 %} · 第 {{ page }}/{{ pages }} 页{% endif %}（点击行查看详情）</span>
     <span class="pager">
       {% if page > 1 %}
       <a href="{{ records_url(page=page-1) }}" hx-get="{{ records_url(partial=True, page=page-1) }}" hx-target="#records-table-box" hx-swap="outerHTML" class="btn btn-xs">{{ icon('chevron-left') }}上一页</a>

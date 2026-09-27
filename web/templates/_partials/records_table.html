@@ -1,7 +1,8 @@
 <tbody id="records-tbody">
   {% for r in rows %}
-  <tr class="row-click"
-      onclick="var j=document.getElementById('json-{{ loop.index }}');j.classList.toggle('hidden')">
+  {# id by row position: an empty or duplicated 登记号 must not make two rows share one #}
+  <tr class="row-click" id="rec-{{ loop.index }}"
+      {% if r.reg_no %}hx-get="{{ record_url(r.username, r.reg_no) }}" hx-target="#drawer" hx-swap="innerHTML"{% endif %}>
     <td class="nowrap">
       <span class="sm text-2">{{ r.company[:8] }}{% if r.company|length > 8 %}…{% endif %}</span>
       <div class="sub">{{ r.username }}</div>
@@ -47,13 +48,6 @@
       {% if not r.attachments and not r.archived %}
       <span class="faint">—</span>
       {% endif %}
-    </td>
-  </tr>
-  <!-- JSON expand row -->
-  {# id by row position: an empty or duplicated 登记号 must not make two rows share one #}
-  <tr id="json-{{ loop.index }}" class="hidden expand">
-    <td colspan="7">
-      <pre class="raw">{{ r._raw | tojson }}</pre>
     </td>
   </tr>
   {% else %}

@@ -22,7 +22,9 @@
         <!-- Status changes -->
         {% for c in event.changed[:3] %}
         <div class="tl-line">
-          <span class="mono faint truncate max-w-56">{{ c.reg_no }}</span>
+          {% if c.reg_no and not c.reg_no.startswith('id:') %}
+          <a class="mono faint truncate max-w-56 link-quiet" hx-get="{{ record_url(event.account, c.reg_no) }}" hx-target="#drawer" hx-swap="innerHTML" href="/records?q={{ c.reg_no | urlencode }}">{{ c.reg_no }}</a>
+          {% else %}<span class="mono faint truncate max-w-56">{{ c.reg_no }}</span>{% endif %}
           <span class="pill s-pill-{{ c.old_status_code if c.old_status_code in AUDIT_STATUS else 'x' }}">{{ c.old_status }}</span>
           <span class="arrow">→</span>
           <span class="pill s-pill-{{ c.new_status_code if c.new_status_code in AUDIT_STATUS else 'x' }}">{{ c.new_status }}</span>

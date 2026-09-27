@@ -124,6 +124,23 @@ def record_facts(company: str, reg_no: str) -> dict[str, dict]:
     return {k: v for k, v in (facts or {}).items() if isinstance(v, dict)} if isinstance(facts, dict) else {}
 
 
+def notices_of(company: str, reg_no: str) -> list[dict]:
+    """Every notice parsed for one record, newest first, older rounds included
+    (dated file names): [{file, kind, issued_on, deadline, valid_from,
+    valid_to, reasons, current}] — current marks the live one of its kind."""
+    facts = record_facts(company, reg_no)
+    live = {kind: _current_notice(facts, kind) for kind in {v.get("kind") for v in facts.values()}}
+    out = [
+        {"file": name, "kind": v.get("kind"), "issued_on": v.get("issued_on"),
+         "deadline": v.get("deadline"), "valid_from": v.get("valid_from"),
+         "valid_to": v.get("valid_to"), "reasons": v.get("reasons"),
+         "current": live.get(v.get("kind")) is v}
+        for name, v in facts.items()
+    ]
+    out.sort(key=lambda n: (n["issued_on"] or "", n["file"]), reverse=True)
+    return out
+
+
 def _current_notice(facts: dict[str, dict], kind: str) -> dict | None:
     """The live notice of a kind: the undated file name; if several, the
     latest issued."""
@@ -173,9 +190,11 @@ def correction_for(acc: Account, record: dict, today: date | None = None) -> Cor
     )
 
 
-def renewal_for(acc: Account, record: dict, today: date | None = None) -> Renewal | None:
-    """A Renewal when the certificate expires within the window (or already
-    has, the record still sitting at 登记成功); None otherwise."""
+def renewal_for(acc: Account, record: dict, today: date | None = None,
+                window: int | None = RENEWAL_WINDOW_DAYS) -> Renewal | None:
+    """A Renewal when the certificate expires within `window` days (or already
+    has, the record still sitting at 登记成功); None otherwise. window=None
+    drops the limit — the detail drawer and the calendar want every expiry."""
     if int_or_none(record.get("dataRegAuditStatus")) != REGISTERED_STATUS:
         return None
     today = today or today_local()
@@ -185,7 +204,7 @@ def renewal_for(acc: Account, record: dict, today: date | None = None) -> Renewa
     if valid_from and valid_to and valid_to <= valid_from:
         return None  # the notice itself is wrong (facts stored before the parser refused these)
     days_left = _days(valid_to, today)
-    if days_left is None or days_left > RENEWAL_WINDOW_DAYS:
+    if days_left is None or (window is not None and days_left > window):
         return None
     return Renewal(
         company=acc.company, username=acc.username, reg_no=reg_no,

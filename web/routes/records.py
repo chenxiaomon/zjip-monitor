@@ -12,9 +12,10 @@ from fastapi.responses import HTMLResponse, Response
 
 from src import todo
 from src.scraper import AUDIT_STATUS, decode_status
-from web.auth import visible_accounts
+from web.auth import allowed_usernames, visible_accounts
 from web.deps import STATUS_COLORS, int_or_none, templates
 from web.services.attachments_svc import archived_attachments, list_attachments
+from web.services.events import read_change_rows
 from web.services.snapshot import get_latest_snapshot
 
 router = APIRouter()
@@ -242,6 +243,57 @@ def records_table_partial(
 ) -> HTMLResponse:
     ctx = _ctx(request, account or None, int_or_none(status), start_date, end_date, q, page)
     return templates.TemplateResponse(request, "_partials/records_box.html", ctx)
+
+
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _ms_to_datetime(ms) -> str:
+    ms = int_or_none(ms)
+    if not ms:
+        return "—"
+    try:
+        return datetime.fromtimestamp(ms / 1000, tz=_SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M")
+    except (ValueError, OverflowError, OSError):
+        return "—"
+
+
+@router.get("/partials/record", response_class=HTMLResponse)
+def record_detail(request: Request, account: str | None = None, reg_no: str | None = None) -> Response:
+    """The detail drawer: one record of one visible account. Anything the
+    viewer may not see, or that no longer exists, is the same plain 404 —
+    the response never echoes the parameters back."""
+    reg_no = (reg_no or "").strip()
+    acc = next((a for a in visible_accounts(request) if a.username == (account or "")), None)
+    snap = get_latest_snapshot(acc.company) if acc and reg_no else None
+    record = next(
+        (r for r in (snap or {}).get("records", []) if str(r.get("dataRegNo") or "") == reg_no),
+        None,
+    )
+    if record is None:
+        return Response("记录不存在或无权查看", status_code=404, media_type="text/plain; charset=utf-8")
+    code = int_or_none(record.get("dataRegAuditStatus"))
+    ctx = {
+        "acc": acc,
+        "r": record,
+        "reg_no": reg_no,
+        "name": str(record.get("dataRegName") or ""),
+        "status_code": code,
+        "status_label": decode_status(record.get("dataRegAuditStatus")),
+        "apply_date": _ms_to_date(int_or_none(record.get("dataRegApplyTime"))),
+        "update_time": _ms_to_datetime(record.get("updateTime")),
+        "due": todo.correction_for(acc, record),
+        "cert": todo.renewal_for(acc, record, window=None),
+        "notices": todo.notices_of(acc.company, reg_no),
+        "attachments": list_attachments(acc.company, reg_no),
+        "archived": archived_attachments(acc.company, reg_no),
+        "history": read_change_rows(
+            account=acc.username, accounts=allowed_usernames(request), since=_EPOCH, reg_no=reg_no,
+        ),
+        "snapshot_time": snap.get("snapshot_time"),
+        "AUDIT_STATUS": AUDIT_STATUS,
+    }
+    return templates.TemplateResponse(request, "_partials/record_drawer.html", ctx)
 
 
 _CSV_HEADER = ["公司", "账号", "登记编号", "数据名称", "行业", "申请时间", "状态", "补正截止", "证书到期", "附件数"]

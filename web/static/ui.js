@@ -4,6 +4,11 @@ function toggleDark() {
   try { localStorage.setItem('dark', dark ? '1' : '0'); } catch (e) { /* 隐私模式下忽略 */ }
 }
 
+function closeDrawer() {
+  var d = document.getElementById('drawer');
+  if (d) d.innerHTML = '';
+}
+
 function showToast(msg, kind) {
   var box = document.getElementById('toasts');
   if (!box) return;
@@ -44,9 +49,19 @@ function showToast(msg, kind) {
   });
 
   document.addEventListener('htmx:responseError', function (e) {
-    var s = e.detail.xhr ? e.detail.xhr.status : 0;
+    var xhr = e.detail.xhr, s = xhr ? xhr.status : 0;
     if (s === 401) return; // 会话过期：服务端已通过 HX-Redirect 跳转登录页
-    showToast('请求失败（HTTP ' + s + '）', 'danger');
+    // Short plain-text refusals (记录不存在或无权查看 / 无权限) are shown as they are.
+    var type = (xhr && xhr.getResponseHeader('content-type')) || '';
+    var text = xhr && type.indexOf('text/plain') === 0 ? (xhr.responseText || '').trim() : '';
+    showToast(text && text.length <= 60 ? text : '请求失败（HTTP ' + s + '）', 'danger');
+  });
+  document.addEventListener('htmx:afterSwap', function (e) {
+    var t = e.detail.target;
+    if (t && t.id === 'drawer') {
+      var f = t.querySelector('[data-autofocus]');
+      if (f) f.focus();
+    }
   });
   document.addEventListener('htmx:sendError', function () { showToast('网络错误，请稍后重试', 'danger'); });
   document.addEventListener('accountSaved', function () { showToast('账号已保存', 'success'); });
@@ -54,7 +69,8 @@ function showToast(msg, kind) {
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Escape') return;
     var m = document.getElementById('modal-container');
-    if (m && m.innerHTML) m.innerHTML = '';
+    if (m && m.innerHTML) { m.innerHTML = ''; return; }  // the modal first, the drawer on the next Esc
+    closeDrawer();
     document.body.classList.remove('nav-open');
   });
 })();

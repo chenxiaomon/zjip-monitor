@@ -31,12 +31,12 @@
       </thead>
       <tbody>
         {% for row in rows %}
-        <tr>
+        <tr{% if row.reg_no and not row.reg_no.startswith('id:') %} class="row-click" hx-get="{{ record_url(row.account, row.reg_no) }}" hx-target="#drawer" hx-swap="innerHTML"{% endif %}>
           <td class="mono xs faint nowrap">{{ row.timestamp | fmt_time }}</td>
           <td class="sm text-2 nowrap" title="{{ row.company }}">{{ row.company[:8] }}{% if row.company|length > 8 %}…{% endif %}</td>
           <td class="mono xs nowrap">
             {% if row.reg_no %}
-            <a href="{{ detail_url(row.reg_no) }}" target="_blank" rel="noopener"
+            <a href="{{ detail_url(row.reg_no) }}" target="_blank" rel="noopener" onclick="event.stopPropagation()"
                title="在官网打开详情页（需登录平台）" class="link">{{ row.reg_no[:14] }}</a>
             {% else %}<span class="faint">—</span>{% endif %}
           </td>

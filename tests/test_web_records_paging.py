@@ -21,7 +21,7 @@ def many_records(fake_accounts, isolated_snapshots):
 
 
 def _ids(html):
-    return re.findall(r'id="json-(\d+)"', html)
+    return re.findall(r'id="rec-(\d+)"', html)
 
 
 def test_pages_of_fifty_with_position_ids(many_records, web_client, login_as):

@@ -177,6 +177,33 @@ def _fmt_time_short(ts_str: str | None) -> str:
         return ts_str[11:16] if len(ts_str) >= 16 else "—"
 
 
+def _fmt_datetime(ts_str: str | None) -> str:
+    """Format an ISO timestamp as 'YYYY-MM-DD HH:MM' in Asia/Shanghai — for
+    histories that span years, where 'MM-DD HH:MM' would be ambiguous."""
+    if not ts_str:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(ts_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(_SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return ts_str[:16]
+
+
+def status_class(code) -> str:
+    """The .s-pill-<N> suffix for a raw status code ("7" and 7 alike); x = unknown."""
+    c = int_or_none(code)
+    return str(c) if c in AUDIT_STATUS else "x"
+
+
+def record_url(username: str, reg_no: str) -> str:
+    """The detail drawer for one record (web/routes/records.py)."""
+    from urllib.parse import urlencode
+
+    return "/partials/record?" + urlencode({"account": username or "", "reg_no": reg_no or ""})
+
+
 def _tojson(v: object, indent: int = 2) -> str:
     return _json.dumps(v, ensure_ascii=False, indent=indent)
 
@@ -236,6 +263,9 @@ templates.env.globals["urgency_class"] = urgency_class
 templates.env.globals["due_label"] = due_label
 templates.env.filters["fmt_time"] = _fmt_time
 templates.env.filters["fmt_time_short"] = _fmt_time_short
+templates.env.filters["fmt_datetime"] = _fmt_datetime
+templates.env.globals["record_url"] = record_url
+templates.env.globals["status_class"] = status_class
 templates.env.filters["tojson"] = _tojson
 templates.env.filters["group_label"] = group_label
 templates.env.globals["detail_url"] = detail_url
