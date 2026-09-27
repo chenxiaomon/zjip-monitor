@@ -1,0 +1,129 @@
+{#
+  记录详情抽屉：/partials/record?account=&reg_no= 返回，换进 _base.html 的 #drawer。
+  × / 点遮罩 / Esc 关闭（web/static/ui.js closeDrawer）。
+#}
+{% set kind_label = {'补正': '补正通知书', '公示': '公示通知书', '公告': '登记公告', '不予登记': '不予登记通知书', '异议': '异议通知书'} %}
+<div class="drawer-backdrop" onclick="closeDrawer()"></div>
+<aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" tabindex="-1" data-autofocus>
+  <header class="drawer-head">
+    <div class="grow">
+      <div class="xs muted truncate">{{ acc.company }} · <span class="mono">{{ acc.username }}</span></div>
+      <h2 id="drawer-title" class="drawer-title">{{ name or '（未命名数据）' }}</h2>
+      <div class="row row-wrap gap-2 mt-2">
+        <span class="pill s-pill-{{ status_class(status_code) }}">{{ status_label }}</span>
+        {% if due %}<span class="pill {{ urgency_class(due.urgency) }}">{{ due_label(due.days_left, due.deadline) }}</span>{% endif %}
+        <a href="{{ detail_url(reg_no) }}" target="_blank" rel="noopener" class="mono xs link row gap-1" style="display:inline-flex"
+           title="在官网打开详情页（需登录平台）">{{ reg_no }}{{ icon('external-link') }}</a>
+      </div>
+    </div>
+    <button type="button" class="icon-btn" onclick="closeDrawer()" title="关闭（Esc）">{{ icon('x') }}</button>
+  </header>
+
+  <div class="drawer-body">
+    <section class="drawer-section">
+      <h3>概要</h3>
+      <dl class="kv-list">
+        <div class="kv"><dt>申请时间</dt><dd>{{ apply_date }}</dd></div>
+        <div class="kv"><dt>行业</dt><dd class="text">{{ r.get('dataRegIndustry') or '—' }}</dd></div>
+        <div class="kv"><dt>数据类型</dt><dd class="text">{{ r.get('dataRegDataType') or '—' }}</dd></div>
+        {% if r.get('dataRegApplyName') %}<div class="kv"><dt>申请人</dt><dd class="text">{{ r.get('dataRegApplyName') }}</dd></div>{% endif %}
+        <div class="kv"><dt>平台更新</dt><dd>{{ update_time }}</dd></div>
+        <div class="kv"><dt>快照时间</dt><dd>{{ snapshot_time | fmt_datetime }}</dd></div>
+      </dl>
+    </section>
+
+    {% if due %}
+    <section class="drawer-section">
+      <h3>{{ icon('alarm') }}补正</h3>
+      {% if due.deadline %}
+      <p class="sm">截止 <b>{{ due.deadline }}</b>{% if due.issued_on %}，通知书落款 {{ due.issued_on }}{% endif %}。逾期未补正视为撤回登记申请。</p>
+      {% else %}
+      <p class="sm muted">没能从补正通知书里读出截止日期，请打开通知书核对。</p>
+      {% endif %}
+      {% if due.reasons %}<div class="reasons mt-2">{{ due.reasons }}</div>{% endif %}
+    </section>
+    {% endif %}
+
+    {% if cert %}
+    <section class="drawer-section">
+      <h3>{{ icon('certificate') }}登记证书</h3>
+      {% set gazette = notices | selectattr('kind', 'equalto', '公告') | selectattr('current') | first %}
+      <p class="sm">
+        有效期{% if gazette and gazette.valid_from %} {{ gazette.valid_from }} 至{% else %}至{% endif %} <b>{{ cert.valid_to }}</b>，
+        {% if cert.expired %}<span class="danger">已过期 {{ -cert.days_left }} 天</span>{% else %}还剩 {{ cert.days_left }} 天{% endif %}。
+        期满前 6 个月内可办理续展。
+      </p>
+    </section>
+    {% endif %}
+
+    <section class="drawer-section">
+      <h3>{{ icon('file-download') }}附件</h3>
+      {% if attachments or archived %}
+      <ul class="file-list">
+        {% for f in attachments %}
+        <li><a class="link row gap-1" style="display:inline-flex"
+               href="/attachments/{{ acc.company | urlencode }}/{{ reg_no | urlencode }}/{{ f | urlencode }}?v=2">{{ icon('file-download') }}{{ f }}</a></li>
+        {% endfor %}
+        {% for a in archived %}
+        <li class="faint" title="已归档到本机，需要时请找管理员恢复">{{ icon('archive') }}{{ a.name }}<span class="xs">（已归档{{ ' · ' ~ a.archived_on if a.archived_on }}）</span></li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="sm faint">还没有下载到通知书或证书</p>
+      {% endif %}
+    </section>
+
+    {% if notices %}
+    <section class="drawer-section">
+      <h3>{{ icon('file-text') }}通知书要点</h3>
+      <ul class="notice-list">
+        {% for n in notices %}
+        <li>
+          <div class="row row-wrap gap-2">
+            <span class="pill pill-xs {% if n.current %}pill-accent{% else %}pill-neutral{% endif %}">{{ kind_label.get(n.kind, n.kind) }}{% if not n.current %} · 历史{% endif %}</span>
+            {% if n.issued_on %}<span class="xs muted">落款 {{ n.issued_on }}</span>{% endif %}
+            {% if n.deadline %}<span class="xs muted">截止 {{ n.deadline }}</span>{% endif %}
+            {% if n.valid_to %}<span class="xs muted">有效期至 {{ n.valid_to }}</span>{% endif %}
+          </div>
+          {% if n.reasons and not (due and n.current and n.kind == '补正') %}
+          <details class="mt-1"><summary class="xs link">查看要点</summary><div class="reasons mt-1">{{ n.reasons }}</div></details>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+
+    <section class="drawer-section">
+      <h3>{{ icon('history') }}状态历史</h3>
+      {% if history %}
+      <ul class="hist">
+        {% for h in history %}
+        <li>
+          <span class="hist-time">{{ h.timestamp | fmt_datetime }}</span>
+          <span class="row row-wrap gap-1">
+            {% if h.type == 'changed' %}
+            <span class="pill s-pill-{{ status_class(h.old_status_code) }}">{{ h.old_status }}</span>
+            <span class="arrow">→</span>
+            <span class="pill s-pill-{{ status_class(h.new_status_code) }}">{{ h.new_status }}</span>
+            {% elif h.type == 'added' %}
+            <span class="pill pill-good">首次出现</span>
+            {% if h.new_status %}<span class="pill s-pill-{{ status_class(h.new_status_code) }}">{{ h.new_status }}</span>{% endif %}
+            {% else %}
+            <span class="pill pill-danger">从平台列表消失</span>
+            {% endif %}
+          </span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="sm faint">开始监控以来没有状态变化（首轮巡检不记变化，记录从第一次变化开始）</p>
+      {% endif %}
+    </section>
+
+    <details class="drawer-section">
+      <summary class="xs muted" style="cursor:pointer">平台原始数据</summary>
+      <pre class="raw mt-2">{{ r | tojson }}</pre>
+    </details>
+  </div>
+</aside>

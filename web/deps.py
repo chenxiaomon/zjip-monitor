@@ -7,13 +7,16 @@ import json as _json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Coroutine
+from typing import Any, Coroutine, Iterable
+import zlib
+
+from markupsafe import Markup
 
 from fastapi.templating import Jinja2Templates
 
 # Single definition lives next to AUDIT_STATUS/decode_status so page
 # rendering and snapshot diffing can never disagree about a status code.
-from src.scraper import int_or_none  # noqa: F401  (re-exported for routes/templates)
+from src.scraper import AUDIT_STATUS, int_or_none  # noqa: F401  (re-exported for routes/templates)
 from src.settings_cache import get_settings
 
 _HERE = Path(__file__).parent
@@ -35,15 +38,25 @@ def spawn(coro: Coroutine) -> asyncio.Task:
     task.add_done_callback(_bg_tasks.discard)
     return task
 
-# Status pill colors per dataRegAuditStatus code (all 17 statuses).
-# Palette groups: blue=审核中, orange=需处理, purple=公示/发证, green=成功,
-# red=驳回/失败, gray=撤回/终止/失效.
-_C_BLUE = {"bg": "#E6F1FB", "text": "#0C447C"}
-_C_ORANGE = {"bg": "#FAEEDA", "text": "#854F0B"}
-_C_PURPLE = {"bg": "#EEEDFE", "text": "#3C3489"}
-_C_GREEN = {"bg": "#EAF3DE", "text": "#27500A"}
-_C_RED = {"bg": "#FCEBEB", "text": "#791F1F"}
-_C_GRAY = {"bg": "#F1EFE8", "text": "#444441"}
+# Status colours per dataRegAuditStatus code (all 17 statuses) — the ONE
+# source for the page pills, the dashboard distribution bar and the settings
+# legend: status_css() below renders them into <head>, so no stylesheet carries
+# a hand-copied table any more. Six families: blue=审核中, orange=需处理,
+# violet=公示/发证, green=成功, red=驳回/失败, gray=撤回/终止/失效. Each family
+# gives the pastel pill (light + dark) and the family name the distribution
+# bar colours by; the bar's solid swatches live in ui.css as --sf-<family>,
+# validated for colour-vision deficiency in the order green, blue, orange,
+# violet, red (gray is the de-emphasis bucket and sits last).
+def _family(name: str, bg: str, text: str, dark_bg: str, dark_text: str) -> dict[str, str]:
+    return {"family": name, "bg": bg, "text": text, "dark_bg": dark_bg, "dark_text": dark_text}
+
+
+_C_BLUE = _family("blue", "#E6F1FB", "#0C447C", "#1e3a5c", "#93c5fd")
+_C_ORANGE = _family("orange", "#FAEEDA", "#854F0B", "#452d10", "#fbbf24")
+_C_PURPLE = _family("violet", "#EEEDFE", "#3C3489", "#2e2760", "#c4b5fd")
+_C_GREEN = _family("green", "#EAF3DE", "#27500A", "#1a3810", "#86efac")
+_C_RED = _family("red", "#FCEBEB", "#791F1F", "#3f1010", "#f87171")
+_C_GRAY = _family("gray", "#F1EFE8", "#444441", "#2a2f36", "#9ca3af")
 STATUS_COLORS: dict[int, dict[str, str]] = {
     1:  _C_BLUE,    # 待审核
     2:  _C_ORANGE,  # 待补正
@@ -63,8 +76,50 @@ STATUS_COLORS: dict[int, dict[str, str]] = {
     16: _C_GRAY,    # 撤回补正
     17: _C_PURPLE,  # 待发证
 }
+FAMILY_ORDER = ("green", "blue", "orange", "violet", "red", "gray")
 
 
+def _build_status_css() -> str:
+    light, dark = [], []
+    for code, c in list(STATUS_COLORS.items()) + [("x", _C_GRAY)]:  # x = unknown code fallback
+        light.append(f".s-pill-{code}{{background:{c['bg']};color:{c['text']}}}")
+        dark.append(f"html.dark .s-pill-{code}{{background:{c['dark_bg']};color:{c['dark_text']}}}")
+    return "".join(light) + "".join(dark)
+
+
+_STATUS_CSS = Markup(_build_status_css())
+
+
+def status_css() -> Markup:
+    """The .s-pill-N rules for every page's <head> (light, then html.dark)."""
+    return _STATUS_CSS
+
+
+def status_distribution(snapshots: Iterable[dict]) -> dict[str, Any]:
+    """Part-to-whole of the visible records by status, for the dashboard bar.
+
+    Segments are ordered by colour family (FAMILY_ORDER) and then by code, so
+    same-family statuses sit together and the adjacent-pair colour checks hold.
+    """
+    counts: dict[int, int] = {}
+    for snap in snapshots:
+        for code, n in (snap.get("status_counts") or {}).items():
+            counts[code] = counts.get(code, 0) + int(n or 0)
+    total = sum(counts.values())
+    items = []
+    for code, n in counts.items():
+        if n <= 0:
+            continue
+        family = STATUS_COLORS.get(code, _C_GRAY)["family"]
+        items.append({
+            "code": code,
+            "label": AUDIT_STATUS.get(code, f"状态{code}"),
+            "count": n,
+            "family": family,
+            "pct": round(n * 100 / total) if total else 0,
+        })
+    items.sort(key=lambda it: (FAMILY_ORDER.index(it["family"]), str(it["code"]).zfill(3)))
+    return {"total": total, "segments": items}
 
 
 # Account-dot severity, shared by dashboard / api / view (was three copies).
@@ -122,6 +177,33 @@ def _fmt_time_short(ts_str: str | None) -> str:
         return ts_str[11:16] if len(ts_str) >= 16 else "—"
 
 
+def _fmt_datetime(ts_str: str | None) -> str:
+    """Format an ISO timestamp as 'YYYY-MM-DD HH:MM' in Asia/Shanghai — for
+    histories that span years, where 'MM-DD HH:MM' would be ambiguous."""
+    if not ts_str:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(ts_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(_SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return ts_str[:16]
+
+
+def status_class(code) -> str:
+    """The .s-pill-<N> suffix for a raw status code ("7" and 7 alike); x = unknown."""
+    c = int_or_none(code)
+    return str(c) if c in AUDIT_STATUS else "x"
+
+
+def record_url(username: str, reg_no: str) -> str:
+    """The detail drawer for one record (web/routes/records.py)."""
+    from urllib.parse import urlencode
+
+    return "/partials/record?" + urlencode({"account": username or "", "reg_no": reg_no or ""})
+
+
 def _tojson(v: object, indent: int = 2) -> str:
     return _json.dumps(v, ensure_ascii=False, indent=indent)
 
@@ -148,14 +230,14 @@ def group_label(key: str | None) -> str:
     return get_groups().get(key, key)
 
 
-# Deadline pills (src/todo.urgency_of): overdue and ≤3 days red, ≤7 amber,
-# further out green, deadline unknown grey.
+# Deadline pill modifiers (ui.css .pill-*; src/todo.urgency_of): overdue solid red,
+# ≤3 days red, ≤7 amber, further out green, deadline unknown grey.
 URGENCY_CLASSES: dict[str, str] = {
-    "overdue": "bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300",
-    "red": "bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400",
-    "amber": "bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400",
-    "normal": "bg-green-50 dark:bg-green-950/40 text-green-700 dark:text-green-400",
-    "unknown": "bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400",
+    "overdue": "pill-danger-strong",
+    "red": "pill-danger",
+    "amber": "pill-warn",
+    "normal": "pill-good",
+    "unknown": "pill-neutral",
 }
 
 
@@ -181,7 +263,50 @@ templates.env.globals["urgency_class"] = urgency_class
 templates.env.globals["due_label"] = due_label
 templates.env.filters["fmt_time"] = _fmt_time
 templates.env.filters["fmt_time_short"] = _fmt_time_short
+templates.env.filters["fmt_datetime"] = _fmt_datetime
+templates.env.globals["record_url"] = record_url
+templates.env.globals["status_class"] = status_class
 templates.env.filters["tojson"] = _tojson
 templates.env.filters["group_label"] = group_label
 templates.env.globals["detail_url"] = detail_url
 templates.env.globals["get_groups"] = get_groups
+
+
+# ---------------------------------------------------------------------------
+# Static assets are local (no CDN) and versioned by content: the ?v= hash
+# changes whenever a file changes, so browsers may cache them for a year and a
+# deploy still shows up at once (web.app sets the Cache-Control headers).
+_STATIC_DIR = _HERE / "static"
+_ASSET_FILES = ("ui.css", "ui.js", "icons.svg", "htmx.min.js", "htmx-sse.js")
+
+
+def _asset_version() -> str:
+    crc = 0
+    for name in _ASSET_FILES:
+        path = _STATIC_DIR / name
+        if path.exists():
+            crc = zlib.crc32(path.read_bytes(), crc)
+    return f"{crc & 0xFFFFFFFF:08x}"
+
+
+ASSET_VERSION = _asset_version()
+
+
+def static_url(name: str) -> str:
+    return f"/static/{name}?v={ASSET_VERSION}"
+
+
+def icon(name: str, cls: str = "") -> Markup:
+    """An inline <svg> showing symbol i-<name> of web/static/icons.svg (Tabler outline set).
+
+    Stroke colour follows the surrounding text (currentColor); size via .ic-* or
+    the parent's font-size. Names are template literals, never user input.
+    """
+    classes = f"ic {cls}" if cls else "ic"
+    href = f"/static/icons.svg?v={ASSET_VERSION}#i-{name}"
+    return Markup(f'<svg class="{classes}" aria-hidden="true"><use href="{href}" xlink:href="{href}"/></svg>')
+
+
+templates.env.globals["icon"] = icon
+templates.env.globals["static_url"] = static_url
+templates.env.globals["status_css"] = status_css

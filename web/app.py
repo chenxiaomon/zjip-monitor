@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import mimetypes
 import os
 import secrets
 from contextlib import asynccontextmanager
@@ -54,6 +55,7 @@ from web.routes import (  # noqa: E402 — same reason
     attachments,
     changes,
     dashboard,
+    deadlines,
     health,
     login,
     notify,
@@ -203,7 +205,15 @@ async def _auth_middleware(request: Request, call_next) -> Response:  # type: ig
     if (path == "/view" or path.startswith("/view/")
             or path.startswith("/static/")
             or path in ("/favicon.ico", "/health", "/login", "/logout", "/robots.txt")):
-        return await call_next(request)
+        response = await call_next(request)
+        if path.startswith("/static/") and response.status_code == 200:
+            # Versioned URLs (?v=<content hash>, web.deps.static_url) may be cached
+            # for good; bare ones an hour, so a deploy needs no hard refresh.
+            response.headers["Cache-Control"] = (
+                "public, max-age=31536000, immutable" if "v" in request.query_params
+                else "public, max-age=3600"
+            )
+        return response
     # 小程序 API：X-API-Key 或 Basic 管理员
     if path.startswith("/api/"):
         api_key = request.headers.get("X-API-Key", "")
@@ -231,6 +241,8 @@ async def _auth_middleware(request: Request, call_next) -> Response:  # type: ig
     return await call_next(request)
 
 
+# Python's table does not know the web-app manifest type on every platform.
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 app.mount("/static", StaticFiles(directory=_HERE / "static"), name="static")
 
 
@@ -249,6 +261,7 @@ app.include_router(login.router)
 app.include_router(sse_router)
 app.include_router(dashboard.router)
 app.include_router(changes.router)
+app.include_router(deadlines.router)
 app.include_router(accounts.router)
 app.include_router(records.router)
 app.include_router(notify.router)

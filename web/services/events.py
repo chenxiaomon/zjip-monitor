@@ -142,11 +142,13 @@ def read_change_rows(
     *,
     since: datetime | None = None,
     until: datetime | None = None,
+    reg_no: str | None = None,
 ) -> list[dict]:
     """Flatten events into individual change rows, newest first.
 
     `limit` caps ROWS (None = every row in the window); events without
-    changes never count, so the window really is the window."""
+    changes never count, so the window really is the window. `reg_no`
+    keeps only that record's rows (the detail drawer's history)."""
     from src.scraper import decode_status
 
     events = read_events(
@@ -155,6 +157,7 @@ def read_change_rows(
     )
     rows: list[dict] = []
     for event in events:
+        first_row = len(rows)
         base = {
             "account": event.get("account", ""),
             "company": event.get("company", ""),
@@ -194,6 +197,8 @@ def read_change_rows(
                 "old_status": decode_status(r.get("dataRegAuditStatus")),
                 "new_status": "",
             })
+        if reg_no is not None:
+            rows[first_row:] = [r for r in rows[first_row:] if r["reg_no"] == reg_no]
         if limit is not None and len(rows) >= limit:
             return rows[:limit]
     return rows

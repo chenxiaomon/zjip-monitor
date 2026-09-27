@@ -1,0 +1,68 @@
+{#
+  登记趋势：每轮巡检结束时记下的每日计数（data/control/daily_stats.json），
+  登记总数与登记成功画在同一纵轴上（同一单位：条）。线条是拉伸到绘图区的 SVG，
+  刻度、线尾数值与圆点是按百分比定位的普通文字，手机上字号不缩小。
+  悬停读数由 web/static/ui.js 按 data-chart 里的数据生成。
+#}
+<div class="card" id="trend-card">
+  <div class="card-head">
+    <span class="card-title">{{ icon('activity') }}登记趋势</span>
+    <span class="chips">
+      {% for r in trend.ranges %}
+      <a href="{{ dash_url(range=r) }}" class="chip chip-sm{% if trend.range == r %} active{% endif %}">近 {{ r }} 天</a>
+      {% endfor %}
+    </span>
+  </div>
+  <div class="card-body">
+    {% set c = trend.chart %}
+    {% if c %}
+    {% set first = trend.points[0] %}{% set last = trend.points[-1] %}
+    <div class="chart-legend">
+      {% for s in c.series %}
+      <span><i class="key key-{{ s.color }}"></i>{{ s.label }}<b>{{ s.last }}</b></span>
+      {% endfor %}
+      <span class="faint">{% if filter_year %}{{ filter_year }} 年申请{% else %}全部年份{% endif %} · {{ first.date[5:] }} 至 {{ last.date[5:] }}</span>
+    </div>
+    <div class="chart" data-chart="{{ c.hover_json }}" role="img"
+         aria-label="登记趋势：{{ first.date }} 至 {{ last.date }}，登记总数 {{ first.total }} 到 {{ last.total }}，登记成功 {{ first.success }} 到 {{ last.success }}">
+      <div class="chart-y" aria-hidden="true">
+        {% for t in c.y_ticks %}<span style="top:{{ t.pct }}%">{{ t.v }}</span>{% endfor %}
+      </div>
+      <div class="chart-plot">
+        <svg viewBox="0 0 {{ c.plot }} {{ c.plot }}" preserveAspectRatio="none" aria-hidden="true">
+          {% for t in c.y_ticks %}<line class="grid" x1="0" x2="{{ c.plot }}" y1="{{ t.y }}" y2="{{ t.y }}"/>{% endfor %}
+          {% for s in c.series %}<path class="ln ln-{{ s.color }}" d="{{ s.path }}"/>{% endfor %}
+        </svg>
+        {% for s in c.series %}<span class="chart-dot key-{{ s.color }}" style="left:{{ s.end_left }}%;top:{{ s.end_top }}%"></span>{% endfor %}
+        <div class="chart-cursor" hidden></div>
+        <div class="chart-tip" hidden></div>
+      </div>
+      <div class="chart-end" aria-hidden="true">
+        {% if c.end_labels %}{% for s in c.series %}<span style="top:{{ s.end_top }}%">{{ s.last }}</span>{% endfor %}{% endif %}
+      </div>
+      <div class="chart-x" aria-hidden="true">
+        {% for t in c.x_ticks %}<span class="a-{{ t.anchor }}" style="left:{{ t.pct }}%">{{ t.label }}</span>{% endfor %}
+      </div>
+    </div>
+    <details class="chart-table">
+      <summary>查看每日数据</summary>
+      <div class="table-wrap">
+        <table class="tbl tbl-compact">
+          <thead><tr><th>日期</th><th class="num">登记总数</th><th class="num">登记成功</th><th class="num">待补正</th></tr></thead>
+          <tbody>
+            {% for p in trend.points | reverse %}
+            <tr><td class="mono xs">{{ p.date }}</td><td class="num">{{ p.total }}</td><td class="num">{{ p.success }}</td><td class="num">{{ p.pending }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </details>
+    {% else %}
+    <div class="empty">
+      {{ icon('chart-bar') }}
+      {% if trend.since %}趋势从 {{ trend.since }} 开始记录{% else %}还没有趋势数据{% endif %}
+      <div class="sub">每轮巡检结束时记一次当天的数字，有两天的记录后出现折线</div>
+    </div>
+    {% endif %}
+  </div>
+</div>

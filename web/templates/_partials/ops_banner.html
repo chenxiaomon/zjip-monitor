@@ -3,16 +3,8 @@
   外层容器始终渲染（无告警时是个空 div）。单独渲染时它带着自己的 hx-get，被 swap 掉
   就再也收不到下一次 sse:update；在仪表盘 body 里则由 body 统一刷新（standalone=false）。
 #}
-{% set ops_level_style = {
-  'critical': 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-800 text-red-700 dark:text-red-400',
-  'warning':  'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-400',
-  'info':     'bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300'
-} %}
-{% set ops_level_icon = {
-  'critical': 'ti-alert-circle',
-  'warning':  'ti-alert-triangle',
-  'info':     'ti-info-circle'
-} %}
+{% set ops_level_style = {'critical': 'alert-danger', 'warning': 'alert-warn', 'info': 'alert-neutral'} %}
+{% set ops_level_icon = {'critical': 'alert-circle', 'warning': 'alert-triangle', 'info': 'info-circle'} %}
 <div id="ops-banner"
      {% if standalone is not defined or standalone %}
      hx-get="/partials/ops-banner"
@@ -20,12 +12,13 @@
      hx-swap="outerHTML"
      {% endif %}>
   {% for a in ops_alerts or [] %}
-  <div class="mb-4 px-4 py-3 rounded-lg border text-sm {{ ops_level_style.get(a.level, ops_level_style['info']) }}">
-    <div class="font-medium mb-1">
-      <i class="ti {{ ops_level_icon.get(a.level, 'ti-info-circle') }}"></i> {{ a.title }}
+  <div class="alert {{ ops_level_style.get(a.level, 'alert-neutral') }}">
+    {{ icon(ops_level_icon.get(a.level, 'info-circle')) }}
+    <div>
+      <div class="alert-title">{{ a.title }}</div>
+      <div class="alert-body">{{ a.detail }}</div>
+      <div class="alert-hint">处理建议：{{ a.hint }}</div>
     </div>
-    <div class="text-xs">{{ a.detail }}</div>
-    <div class="text-xs mt-1 opacity-80">处理建议：{{ a.hint }}</div>
   </div>
   {% endfor %}
 </div>

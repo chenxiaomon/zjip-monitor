@@ -1,0 +1,27 @@
+{# 告警与磁盘阈值：只开放这 6 项；保留期限、并发数等会删文件或影响负载的不在页面上改。 #}
+{% set t = thresholds %}
+<div id="thresholds-section" class="card">
+  <div class="card-head">
+    <span class="card-title">{{ icon('alert-triangle') }}告警与磁盘阈值</span>
+    {% if t.saved %}<span class="pill pill-good">{{ icon('check') }}已保存，立即生效</span>{% else %}<span class="card-sub">保存后立即生效</span>{% endif %}
+  </div>
+  <form hx-post="/settings/thresholds" hx-target="#thresholds-section" hx-swap="outerHTML" class="card-body stack" style="gap:12px">
+    {% if t.error %}<div class="alert alert-danger alert-inline">{{ icon('alert-circle') }}<div>{{ t.error }}</div></div>{% endif %}
+    {% for f in t.fields %}
+    <div class="field">
+      <div class="field-row">
+        <label class="label" for="th-{{ f.name }}">{{ f.label }}</label>
+        <div class="row gap-2">
+          <input id="th-{{ f.name }}" name="{{ f.name }}" value="{{ f.value }}" inputmode="decimal" step="{{ f.step }}"
+                 class="input input-sm num{% if f.error %} invalid{% endif %}" style="width:7rem"
+                 {% if f.error %}aria-invalid="true" aria-describedby="th-{{ f.name }}-err"{% endif %}>
+          <span class="xs muted">{{ f.unit }}</span>
+        </div>
+      </div>
+      {% if f.error %}<p class="help danger" id="th-{{ f.name }}-err">{{ f.error }}</p>{% endif %}
+      <p class="help">{{ f.help }}</p>
+    </div>
+    {% endfor %}
+    <div><button type="submit" class="btn btn-sm btn-primary">保存阈值</button></div>
+  </form>
+</div>

@@ -1,0 +1,25 @@
+{#
+  状态分布：可见账号的全部记录按状态汇总成一条横向堆叠条（部分-整体）。
+  段按色族排序（成功→审核中→需处理→公示/发证→失败→撤回/终止），段之间留 2px 底色。
+  下方每个状态一行：数量、占比和按最大一项缩放的小条，整行可点进筛选；
+  颜色与状态徽章同源（web/deps.py）。
+#}
+{% if status_dist.total %}
+<div class="card" id="status-dist">
+  <div class="card-head">
+    <span class="card-title">{{ icon('chart-bar') }}状态分布</span>
+    <span class="card-sub">共 {{ status_dist.total }} 条 · 点任一行筛选记录</span>
+  </div>
+  <div class="card-body">
+    <div class="dist" role="img" aria-label="登记记录按状态分布">
+      {% for s in status_dist.segments %}<span class="dist-seg sf-{{ s.family }}" style="flex-grow:{{ s.count }}" title="{{ s.label }} {{ s.count }} 条 · {{ s.pct }}%"></span>{% endfor %}
+    </div>
+    {% set peak = status_dist.segments | map(attribute='count') | max %}
+    <div class="dist-list">
+      {% for s in status_dist.segments %}
+      <a class="dist-row" href="/records?status={{ s.code }}" title="查看{{ s.label }}的记录"><span class="sw sf-{{ s.family }}"></span>{{ s.label }}<b>{{ s.count }}</b><span class="pct">{{ s.pct }}%</span><span class="dist-meter" aria-hidden="true"><i class="sf-{{ s.family }}" style="width:{{ (s.count * 100 / peak) | round(1) }}%"></i></span></a>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endif %}

@@ -4,10 +4,10 @@
      hx-trigger="every 3s"
      hx-swap="outerHTML"
      {% endif %}
-     class="flex items-center gap-2 text-sm">
+     class="row gap-2 sm">
   {% if run_once.status == 'running' %}
-  <span class="inline-block w-3 h-3 rounded-full bg-blue-500 animate-pulse"></span>
-  <span class="text-blue-600 dark:text-blue-400">
+  <span class="live-dot"></span>
+  <span class="info">
     巡检中{% if run_once.trigger == 'daemon' %}（定时任务）{% elif run_once.trigger == 'cli' %}（命令行）{% endif %}
     {%- if run_once.progress.account %}：{{ run_once.progress.account }}
       {%- if run_once.progress.total %}（{{ run_once.progress.index }}/{{ run_once.progress.total }}）{% endif %}
@@ -16,37 +16,26 @@
   <button hx-post="/run-once/stop"
           hx-target="#run-once-status"
           hx-swap="outerHTML"
-          class="flex items-center gap-1 px-2 py-0.5 text-xs rounded
-                 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400
-                 border border-red-200 dark:border-red-800
-                 hover:bg-red-100 dark:hover:bg-red-900/50 transition-colors cursor-pointer">
-    <i class="ti ti-player-stop text-sm"></i>停止
+          class="btn btn-xs btn-danger">
+    {{ icon('player-stop') }}停止
   </button>
   {% elif run_once.status == 'stopping' %}
-  <span class="inline-block w-3 h-3 rounded-full bg-orange-400 animate-pulse"></span>
-  <span class="text-orange-500 dark:text-orange-400">正在停止，等待当前账号结束（最长约 1 分钟）…</span>
+  <span class="live-dot warn"></span>
+  <span class="warn">正在停止，等待当前账号结束（最长约 1 分钟）…</span>
   {% elif run_once.status == 'done' %}
-  <span class="text-green-600 dark:text-green-400 flex items-center gap-1">
-    <i class="ti ti-circle-check text-base"></i>巡检完成
-  </span>
+  <span class="good row gap-1">{{ icon('circle-check') }}巡检完成</span>
   {% elif run_once.status == 'cancelled' %}
-  <span class="text-gray-500 dark:text-gray-400 flex items-center gap-1">
-    <i class="ti ti-player-stop text-base"></i>巡检已停止
-  </span>
+  <span class="muted row gap-1">{{ icon('player-stop') }}巡检已停止</span>
   {% elif run_once.status == 'stale' and run_once.holder_alive %}
-  <span class="text-red-500 flex items-center gap-1"
+  <span class="danger row gap-1"
         title="巡检进程 pid {{ run_once.pid }} 仍在运行但已无心跳，它持有全局锁，新巡检无法启动。定时任务会自动检测并重启；也可手动 systemctl restart zjip-daemon">
-    <i class="ti ti-alert-octagon text-base"></i>巡检进程卡死（{% if run_once.trigger == 'daemon' %}定时任务{% elif run_once.trigger == 'cli' %}命令行{% else %}Web{% endif %}），需重启后才能重新发起
+    {{ icon('alert-octagon') }}巡检进程卡死（{% if run_once.trigger == 'daemon' %}定时任务{% elif run_once.trigger == 'cli' %}命令行{% else %}Web{% endif %}），需重启后才能重新发起
   </span>
   {% elif run_once.status == 'stale' %}
-  <span class="text-orange-500 flex items-center gap-1">
-    <i class="ti ti-alert-triangle text-base"></i>上次巡检异常中断，可重新发起
-  </span>
+  <span class="warn row gap-1">{{ icon('alert-triangle') }}上次巡检异常中断，可重新发起</span>
   {% elif run_once.status == 'error' %}
-  <span class="text-red-500 flex items-center gap-1">
-    <i class="ti ti-circle-x text-base"></i>巡检失败：{{ run_once.msg }}
-  </span>
+  <span class="danger row gap-1">{{ icon('circle-x') }}巡检失败：{{ run_once.msg }}</span>
   {% else %}
-  <span class="text-gray-400 text-xs">上次巡检：手动触发</span>
+  <span class="xs faint">上次巡检：手动触发</span>
   {% endif %}
 </div>

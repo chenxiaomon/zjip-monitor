@@ -1,0 +1,16 @@
+{# Small pieces the KPI tiles share: the 30-day sparkline and the 7-day change. #}
+{% macro spark(s) -%}
+{%- if s -%}
+<svg class="spark" viewBox="0 0 {{ s.w }} {{ s.h }}" width="{{ s.w }}" height="{{ s.h }}" aria-hidden="true"><polyline points="{{ s.points }}"/><circle cx="{{ s.end_x }}" cy="{{ s.end_y }}" r="2.5"/></svg>
+{%- endif -%}
+{%- endmacro %}
+
+{# good_when: 'up' (more is better), 'down' (less is better) or none (neutral) #}
+{% macro delta_note(d, good_when=none) -%}
+{%- if d is not none -%}
+{%- if d == 0 or good_when is none %}{% set cls = 'muted' %}
+{%- elif (d > 0) == (good_when == 'up') %}{% set cls = 'good' %}
+{%- else %}{% set cls = 'danger' %}{% endif -%}
+<div class="stat-delta {{ cls }}" title="与 7 天前的记录相比">较 7 天前 {% if d > 0 %}+{{ d }}{% elif d < 0 %}−{{ -d }}{% else %}持平{% endif %}</div>
+{%- endif -%}
+{%- endmacro %}

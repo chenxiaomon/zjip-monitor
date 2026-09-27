@@ -3,95 +3,84 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex,nofollow">
   <title>{% block title %}数智通监控{% endblock %}</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#171d25" media="(prefers-color-scheme: dark)">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="数智通">
   <script>
-    (function(){var s=localStorage.getItem('dark'),m=window.matchMedia('(prefers-color-scheme:dark)').matches;if(s==='1'||(s===null&&m))document.documentElement.classList.add('dark');})();
+    (function(){var s=null;try{s=localStorage.getItem('dark');}catch(e){}var m=window.matchMedia('(prefers-color-scheme:dark)').matches;if(s==='1'||(s===null&&m))document.documentElement.classList.add('dark');})();
   </script>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>tailwind.config={darkMode:'class'}</script>
-  <link rel="stylesheet" href="/static/tabler-icons.min.css">
-  <link rel="stylesheet" href="/static/app.css">
-  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
-  <script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js"></script>
+  {# 所有静态资源都在本机（web/static），没有公网 CDN：外网不通时控制台照常可用 #}
+  <link rel="stylesheet" href="{{ static_url('ui.css') }}">
+  <style>{{ status_css() }}</style>
+  <script src="{{ static_url('htmx.min.js') }}" defer></script>
+  <script src="{{ static_url('htmx-sse.js') }}" defer></script>
+  <script src="{{ static_url('ui.js') }}" defer></script>
 </head>
-<body class="bg-gray-50 dark:bg-gray-900 flex h-screen overflow-hidden font-sans">
+<body>
+<div class="progress" id="progress"></div>
+<div class="backdrop" onclick="document.body.classList.remove('nav-open')"></div>
 
-  <!-- Sidebar -->
-  <nav class="w-44 flex-shrink-0 bg-gray-100 dark:bg-gray-800 flex flex-col border-r border-gray-200 dark:border-gray-700">
-    <div class="px-4 py-5">
-      <span class="text-sm font-medium text-gray-700 dark:text-gray-200 flex items-center gap-2">
-        <i class="ti ti-database text-blue-500"></i>数智通监控
-      </span>
-    </div>
-    <ul class="flex-1 px-2 space-y-0.5">
-      {% set current_user = request.state.user %}
-      {% if current_user and current_user.role != 'admin' %}
-      {% set nav = [
-        ('/', 'ti-layout-dashboard', '仪表盘'),
-        ('/accounts', 'ti-users', '账号'),
-        ('/records', 'ti-file-text', '登记记录'),
-        ('/changes', 'ti-history', '变更历史'),
-      ] %}
-      {% else %}
-      {% set nav = [
-        ('/', 'ti-layout-dashboard', '仪表盘'),
-        ('/accounts', 'ti-users', '账号'),
-        ('/records', 'ti-file-text', '登记记录'),
-        ('/changes', 'ti-history', '变更历史'),
-        ('/notify', 'ti-bell', '通知'),
-        ('/reports', 'ti-report-analytics', '报表'),
-        ('/settings', 'ti-settings', '设置'),
-      ] %}
-      {% endif %}
-      {% for href, icon, label in nav %}
-      {% set active = request.url.path == href %}
-      <li>
-        <a href="{{ href }}"
-           class="flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors
-                  {% if active %}bg-blue-600 text-white{% else %}text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700{% endif %}">
-          <i class="ti {{ icon }} text-base"></i>{{ label }}
-        </a>
-      </li>
-      {% endfor %}
-    </ul>
+{% set current_user = request.state.user %}
+{% set limited = current_user and current_user.role != 'admin' %}
+<aside class="sidebar" id="sidebar">
+  <a class="brand" href="/">
+    <span class="brand-mark">{{ icon('database') }}</span>
+    <span>
+      <div class="brand-name">数智通监控</div>
+      <div class="brand-sub">数据知识产权登记进度</div>
+    </span>
+  </a>
+  <nav class="nav">
+    <div class="nav-label">监控</div>
+    {% for href, name, label in [('/', 'layout-dashboard', '仪表盘'), ('/accounts', 'users', '账号'), ('/records', 'file-text', '登记记录'), ('/calendar', 'calendar-event', '期限日历'), ('/changes', 'history', '变更历史')] %}
+    <a href="{{ href }}" class="nav-item{% if request.url.path == href %} active{% endif %}">{{ icon(name) }}{{ label }}</a>
+    {% endfor %}
+    {% if not limited %}
+    <div class="nav-label">管理</div>
+    {% for href, name, label in [('/notify', 'bell', '通知'), ('/reports', 'report-analytics', '报表'), ('/settings', 'settings', '设置')] %}
+    <a href="{{ href }}" class="nav-item{% if request.url.path == href %} active{% endif %}">{{ icon(name) }}{{ label }}</a>
+    {% endfor %}
+    {% endif %}
   </nav>
-
-  <!-- Main -->
-  <div class="flex-1 flex flex-col overflow-hidden min-w-0">
-    <!-- Top bar -->
-    <header class="h-12 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-5 flex-shrink-0">
-      <h1 class="text-sm font-medium text-gray-700 dark:text-gray-200">{% block page_title %}{% endblock %}</h1>
-      <div class="flex items-center gap-3">
-        {% if current_user %}
-        <span class="flex items-center gap-1.5 text-xs text-gray-400 dark:text-gray-500">
-          <i class="ti ti-user text-sm"></i>{{ current_user.username }}
-          {% if current_user.role != 'admin' %}
-          <span class="px-1.5 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400">{{ current_user.group | group_label }}</span>
-          {% endif %}
-        </span>
-        {% endif %}
-        <button onclick="toggleDark()" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" title="切换暗色模式">
-          <i class="ti ti-sun-moon text-lg"></i>
-        </button>
-        <form method="post" action="/logout" class="inline flex">
-          <button type="submit" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors cursor-pointer" title="退出登录">
-            <i class="ti ti-logout text-lg"></i>
-          </button>
-        </form>
-      </div>
-    </header>
-    <!-- Content -->
-    <main class="flex-1 overflow-auto p-6">
-      {% block content %}{% endblock %}
-    </main>
+  {% if current_user %}
+  <div class="sidebar-foot">
+    <span class="avatar">{{ current_user.username[:1] }}</span>
+    <div class="grow">
+      <div class="user-name truncate">{{ current_user.username }}</div>
+      <div class="user-role truncate">{% if limited %}{{ current_user.group | group_label }}{% else %}管理员{% endif %}</div>
+    </div>
+    <form method="post" action="/logout">
+      <button type="submit" class="icon-btn" title="退出登录">{{ icon('logout') }}</button>
+    </form>
   </div>
+  {% endif %}
+</aside>
 
-  <script>
-    function toggleDark(){
-      document.documentElement.classList.toggle('dark');
-      localStorage.setItem('dark',document.documentElement.classList.contains('dark')?'1':'0');
-    }
-  </script>
+<div class="main">
+  <header class="topbar">
+    <button type="button" class="icon-btn nav-toggle" onclick="document.body.classList.toggle('nav-open')" aria-label="打开菜单">{{ icon('menu-2') }}</button>
+    <h1 class="topbar-title">{% block page_title %}{% endblock %}</h1>
+    <div class="topbar-right">
+      <form class="topbar-search" action="/records" method="get" role="search">
+        {{ icon('search') }}
+        <input type="search" name="q" placeholder="搜索登记号 / 数据名称 / 公司" aria-label="搜索登记记录">
+      </form>
+      <button type="button" class="icon-btn" onclick="toggleDark()" title="切换明暗模式">{{ icon('sun-moon') }}</button>
+    </div>
+  </header>
+  <main class="content">
+    {% block content %}{% endblock %}
+  </main>
+</div>
+
+<div id="drawer"></div>
+<div class="toasts" id="toasts"></div>
 </body>
 </html>

@@ -137,3 +137,10 @@ def test_concurrent_writers_lose_nothing(tmp_path):
 
     data = json.loads((tmp_path / "accounts_status.json").read_text(encoding="utf-8"))
     assert set(data["accounts"]) == {"a", "b"}
+
+
+def test_an_empty_login_section_falls_back_to_the_default_limit(isolated_settings):
+    from src import status_store as ss
+
+    isolated_settings.write({"login": None})
+    assert ss._max_failures() == 3

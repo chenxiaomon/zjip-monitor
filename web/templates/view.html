@@ -6,33 +6,32 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>登记状态 — 数智通监控</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#171d25" media="(prefers-color-scheme: dark)">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="数智通">
   <script>
-    (function(){var s=localStorage.getItem('dark'),m=window.matchMedia('(prefers-color-scheme:dark)').matches;if(s==='1'||(s===null&&m))document.documentElement.classList.add('dark');})();
+    (function(){var s=null;try{s=localStorage.getItem('dark');}catch(e){}var m=window.matchMedia('(prefers-color-scheme:dark)').matches;if(s==='1'||(s===null&&m))document.documentElement.classList.add('dark');})();
   </script>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>tailwind.config={darkMode:'class'}</script>
-  <link rel="stylesheet" href="/static/tabler-icons.min.css">
-  <link rel="stylesheet" href="/static/app.css">
-  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <link rel="stylesheet" href="{{ static_url('ui.css') }}">
+  <style>{{ status_css() }}</style>
+  <script src="{{ static_url('htmx.min.js') }}" defer></script>
+  <script src="{{ static_url('ui.js') }}" defer></script>
 </head>
-<body class="bg-gray-50 dark:bg-gray-900 min-h-screen font-sans">
-
-  <!-- Top bar -->
-  <header class="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-3 flex items-center justify-between">
-    <div class="flex items-center gap-2">
-      <i class="ti ti-database text-blue-500 text-lg"></i>
-      <span class="text-sm font-medium text-gray-700 dark:text-gray-200">数智通监控</span>
-      <span class="ml-2 px-2 py-0.5 rounded text-xs bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">只读</span>
+<body>
+  <header class="topbar">
+    <span class="brand-mark" style="width:30px;height:30px;border-radius:8px">{{ icon('database') }}</span>
+    <span class="topbar-title">数智通监控</span>
+    <span class="pill pill-neutral">只读</span>
+    <div class="topbar-right">
+      <button type="button" class="icon-btn" onclick="toggleDark()" title="切换明暗模式">{{ icon('sun-moon') }}</button>
     </div>
-    <button onclick="document.documentElement.classList.toggle('dark');localStorage.setItem('dark',document.documentElement.classList.contains('dark')?'1':'0')"
-            class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
-      <i class="ti ti-sun-moon text-lg"></i>
-    </button>
   </header>
-
-  <main class="max-w-4xl mx-auto p-6">
+  <main class="pub-main">
     {% include "_partials/view_content.html" %}
   </main>
-
 </body>
 </html>

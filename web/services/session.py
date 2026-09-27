@@ -34,10 +34,10 @@ def token_status(session: dict | None) -> dict:
     Returns dict with keys:
         state:     "valid" | "expiring" | "expired" | "none"
         label:     human-readable Chinese string
-        css:       Tailwind CSS classes for the badge
+        css:       .pill-* modifier class for the badge (web/static/ui.css)
     """
     if session is None:
-        return {"state": "none", "label": "未缓存", "css": "text-gray-400 bg-gray-100 dark:bg-gray-700 dark:text-gray-400"}
+        return {"state": "none", "label": "未缓存", "css": "pill-neutral"}
 
     expires_str = session.get("expires_at", "")
     try:
@@ -45,7 +45,7 @@ def token_status(session: dict | None) -> dict:
         if expires.tzinfo is None:
             expires = expires.replace(tzinfo=timezone.utc)
     except (ValueError, TypeError):
-        return {"state": "none", "label": "格式错误", "css": "text-gray-400 bg-gray-100 dark:bg-gray-700"}
+        return {"state": "none", "label": "格式错误", "css": "pill-neutral"}
 
     now = datetime.now(timezone.utc)
     delta = expires - now
@@ -56,19 +56,19 @@ def token_status(session: dict | None) -> dict:
         return {
             "state": "valid",
             "label": f"有效 · {h}h 后到期",
-            "css": "text-green-700 bg-green-50 dark:bg-green-950/50 dark:text-green-400",
+            "css": "pill-good",
         }
     if hours_left > 0:
         m = int(delta.total_seconds() / 60)
         return {
             "state": "expiring",
             "label": f"即将到期 · {m}min",
-            "css": "text-amber-700 bg-amber-50 dark:bg-amber-950/50 dark:text-amber-400",
+            "css": "pill-warn",
         }
     ago_h = int(-hours_left)
     ago_label = f"{ago_h}h 前" if ago_h > 0 else "刚刚"
     return {
         "state": "expired",
         "label": f"已过期 · {ago_label}",
-        "css": "text-red-600 bg-red-50 dark:bg-red-950/50 dark:text-red-400",
+        "css": "pill-danger",
     }

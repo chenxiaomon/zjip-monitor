@@ -6,8 +6,9 @@
 # 提示一次；带引号的数字（"30"）也算填错——YAML 里数字不要加引号。
 #
 # 生效时机：文件按修改时间缓存，保存后下一次巡检 / 下一次刷新页面即生效，不用重启。
-# 两个例外需要重启对应进程：
-#   - schedule.crons          调度表只在 zjip-daemon 启动时读一次
+#   - schedule.crons 由 zjip-daemon 每分钟检查一次，计划真正变了才重排任务
+#     （控制台「设置」页会显示 daemon 是否已采用、接下来几次的运行时间）
+# 唯一需要重启对应进程的例外：
 #   - retention.logs_keep_days / web_logs_keep_days   日志 sink 在进程启动时装好
 #
 # 注意：在控制台「设置」页保存任何一项，都会用程序重写 config/settings.yaml，
@@ -128,7 +129,9 @@ archive:
 # cron 表达式按**北京时间 Asia/Shanghai**解释，与服务器系统时区无关
 # （run_daemon.py 固定用这个时区建调度器）。下面两条就是每天 09:00 和 18:00。
 # 服务器系统时区是 UTC，所以日志时间戳比这里早 8 小时：09:00 那一轮在
-# logs/run_*.log 里显示为 01:00。改完要 systemctl restart zjip-daemon 才生效。
+# logs/run_*.log 里显示为 01:00。改完约 1 分钟内生效，不用重启 daemon。
+# 注意第 5 位「星期」按 APScheduler 的规则 0 = 周一（常见 cron 是 0 = 周日），
+# 所以 "0 9 * * 1-5" 实际是周二到周六；以设置页列出的运行时间为准。
 schedule:
   crons:
     - "0 9 * * *"

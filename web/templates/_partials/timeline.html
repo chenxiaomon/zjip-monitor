@@ -1,51 +1,51 @@
 <div id="timeline-section"
-     class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg"
+     class="card"
      {% if standalone is not defined or standalone %}
      hx-get="/partials/timeline"
      hx-trigger="sse:update"
      hx-swap="outerHTML"
      {% endif %}>
-  <div class="px-5 py-3 border-b border-gray-100 dark:border-gray-700">
-    <span class="text-sm font-medium text-gray-700 dark:text-gray-200">近 24 小时变更</span>
+  <div class="card-head">
+    <span class="card-title">{{ icon('activity') }}近 24 小时变更</span>
+    <a href="/changes" class="xs link">查看全部变更</a>
   </div>
   {% if events %}
-  <ul class="divide-y divide-gray-50 dark:divide-gray-700/50">
+  <ul class="tl">
     {% for event in events %}
     {% set has_changes = event.changed|length + event.added|length + event.removed|length %}
     {% if has_changes %}
-    <li class="flex gap-4 px-5 py-3">
-      <div class="w-14 flex-shrink-0 font-mono text-xs text-gray-400 dark:text-gray-500 pt-0.5">
-        {{ event.timestamp | fmt_time_short }}
-      </div>
-      <div class="flex-1 min-w-0">
-        <div class="text-sm text-gray-700 dark:text-gray-200 truncate mb-1.5">
-          {{ event.company }}
-        </div>
+    <li>
+      <div class="tl-time">{{ event.timestamp | fmt_time_short }}</div>
+      <span class="tl-dot"></span>
+      <div class="tl-body">
+        <div class="tl-company truncate">{{ event.company }}</div>
         <!-- Status changes -->
         {% for c in event.changed[:3] %}
-        <div class="flex items-center gap-1 flex-wrap mb-1">
-          <span class="font-mono text-xs text-gray-400 truncate max-w-32">{{ c.reg_no }}</span>
-          <span class="px-1.5 py-0.5 rounded-full text-xs s-pill-{{ c.old_status_code }}">{{ c.old_status }}</span>
-          <span class="text-gray-300 dark:text-gray-600 text-xs">→</span>
-          <span class="px-1.5 py-0.5 rounded-full text-xs s-pill-{{ c.new_status_code }}">{{ c.new_status }}</span>
+        <div class="tl-line">
+          {% if c.reg_no and not c.reg_no.startswith('id:') %}
+          <a class="mono faint truncate max-w-56 link-quiet" hx-get="{{ record_url(event.account, c.reg_no) }}" hx-target="#drawer" hx-swap="innerHTML" href="/records?q={{ c.reg_no | urlencode }}">{{ c.reg_no }}</a>
+          {% else %}<span class="mono faint truncate max-w-56">{{ c.reg_no }}</span>{% endif %}
+          <span class="pill s-pill-{{ c.old_status_code if c.old_status_code in AUDIT_STATUS else 'x' }}">{{ c.old_status }}</span>
+          <span class="arrow">→</span>
+          <span class="pill s-pill-{{ c.new_status_code if c.new_status_code in AUDIT_STATUS else 'x' }}">{{ c.new_status }}</span>
         </div>
         {% endfor %}
         {% if event.changed|length > 3 %}
-        <div class="text-xs text-gray-400">… 共 {{ event.changed|length }} 条变更</div>
+        <div class="xs faint">… 共 {{ event.changed|length }} 条变更</div>
         {% endif %}
         <!-- Added -->
         {% for a in event.added[:2] %}
-        <div class="flex items-center gap-1 flex-wrap mb-1">
-          <span class="text-xs text-green-600 dark:text-green-400">新增</span>
-          <span class="text-xs text-gray-600 dark:text-gray-300 truncate max-w-40">{{ a.dataRegName[:20] }}</span>
+        <div class="tl-line">
+          <span class="pill pill-good">新增</span>
+          <span class="text-2 truncate max-w-64">{{ a.dataRegName[:20] }}</span>
         </div>
         {% endfor %}
         {% if event.added|length > 2 %}
-        <div class="text-xs text-gray-400">… 共新增 {{ event.added|length }} 条</div>
+        <div class="xs faint">… 共新增 {{ event.added|length }} 条</div>
         {% endif %}
         <!-- Removed -->
         {% for r in event.removed[:1] %}
-        <div class="text-xs text-red-500">消失：{{ r.get('dataRegName','')[:20] }}</div>
+        <div class="tl-line"><span class="pill pill-danger">消失</span><span class="text-2 truncate max-w-64">{{ r.get('dataRegName','')[:20] }}</span></div>
         {% endfor %}
       </div>
     </li>
@@ -53,8 +53,6 @@
     {% endfor %}
   </ul>
   {% else %}
-  <div class="px-5 py-8 text-center text-sm text-gray-400 dark:text-gray-500">
-    暂无变更记录
-  </div>
+  <div class="empty">{{ icon('inbox') }}暂无变更记录</div>
   {% endif %}
 </div>

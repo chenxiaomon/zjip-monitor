@@ -2,7 +2,7 @@
 
 浙江省数据知识产权登记平台监控工具。项目可以用多个企业账号登录 `zjip.org.cn`，定时拉取登记申请状态，生成快照、变更事件和 HTML 报表，并通过钉钉、企业微信或邮件推送通知。
 
-当前还包含一个轻量 Web 控制台，使用 FastAPI、Jinja2、HTMX 和 SSE 展示仪表盘、账号、记录、变更、通知、报表与设置页面。
+当前还包含一个轻量 Web 控制台，使用 FastAPI、Jinja2、HTMX 和 SSE 展示仪表盘、账号、记录、变更、通知、报表与设置页面；前端资源全部本地提供，支持暗色模式和手机端。
 
 ## 功能
 
@@ -57,7 +57,16 @@ python scripts/decrypt_accounts.py --out config/accounts.yaml   # 导出明文�
 （每个键都有中文注释）。不写的键一律用默认值，默认值就是改成可配置之前代码里的字面量。
 
 - 大部分键保存后**下一次巡检 / 下一次刷新页面即生效**，不用重启服务。
-  两个例外：`schedule.crons`（调度表只在 daemon 启动时读一次）和日志保留天数。
+  `schedule.crons` 由 daemon 每分钟检查一次、计划真正变了才重排，约 1 分钟内生效；
+  daemon 把正在执行的计划写进 `data/control/schedule.json`，设置页据此显示是否已采用。
+  唯一需要重启进程的是日志保留天数。
+- cron 第 5 位「星期」按 APScheduler 的规则 **0 = 周一**（常见 cron 是 0 = 周日），
+  `0 9 * * 1-5` 实际是周二到周六。设置页列出接下来 5 次运行时间，以它为准。
+- 设置页可直接改 6 项告警与磁盘阈值：失败账号告警数、无成功巡检小时数、补正到期提醒天数、
+  连续登录失败暂停次数（0 = 从不暂停）、磁盘剩余下限、附件目录上限，带上下限校验。
+  保留期限、并发数、爬虫参数只能改文件。
+- 控制台每次保存都先**严格读取整个文件**：文件有格式错误时拒绝保存并提示，不会用单独一栏
+  覆盖掉通知密钥、分组和计划；同一时间只有一个保存在写，文件原有权限（如 `chmod 600`）保留。
 - 数值键填错（字符串、带引号的数字、负数、`true`）会回退到默认值并在日志里提示一次，
   不会让服务起不来。
 - **cron 表达式按北京时间解释**，与服务器系统时区无关；服务器系统时区是 UTC，
@@ -121,10 +130,75 @@ python scripts/decrypt_accounts.py --out config/accounts.yaml   # 导出明文�
   登记证书期满前 180 天起列入「可续展」（续展登记后不再列出）。分组账号只看自己的企业。
 - 登记记录页：待补正的行带「截止 MM-DD · 剩 N 天」标签，快到期的登记成功记录带「MM-DD 到期」标签。
 - 运维横幅：补正不足 `ops_alerts.correction_warn_days` 天到期时提醒。
+- 「期限日历」页（`/calendar?month=YYYY-MM`）：补正截止与证书到期排在月历上，下方是本月议程，侧栏列出
+  所有已逾期的期限和「截止日期未知」的补正。证书到期在这里不受 180 天窗口限制，远期的也能看到。
+- 记录详情抽屉：在登记记录、待办、变更历史、日历里点一条记录，右侧滑出它的补正要点（含历次补正通知）、
+  证书有效期、附件、按登记号过滤的完整状态历史和平台原始数据。
 
 历史文件的 `facts` 由 `python scripts/backfill_notice_facts.py` 一次性补齐；已经释放到本机归档、服务器上没有文件的公告，
 用本机的 `python -m archive push-facts` 把解析结果送到服务器。通知书没有文字层或解析失败时，待办里显示「截止日期未知」，
 不会漏掉这条申请。
+
+## 登记趋势（每日统计）
+
+仪表盘「登记趋势」和指标卡上的迷你折线，读的是 `data/control/daily_stats.json`：每轮巡检收尾时
+（所有出口，持全局巡检锁）按北京日期记下各公司「申请年份 × 状态码」的记录数，同一天后一轮覆盖前一轮，
+保留 400 天，全年约 1.3MB。口径与仪表盘卡片完全一致，web 请求只读这个小文件（按 mtime 缓存）。
+
+- 文件按公司名记录，分组账号只汇总自己能看到的企业；已删除账号的历史自然不再显示。
+- 新部署后先回填一次，用服务器上现存的快照补出之前约两周：
+
+  ```bash
+  .venv/bin/python scripts/backfill_daily_stats.py --dry-run   # 看能补多少天
+  .venv/bin/python scripts/backfill_daily_stats.py
+  ```
+
+  回填持巡检锁（有巡检在跑会退出码 2，稍后再试），已有的日期不覆盖；某家公司某天巡检失败时沿用
+  它上一次的数字，不会出现假的下跌。
+- 文件损坏时会被改名为 `daily_stats.json.bad-<时间>` 留存，然后从空白重新记录。
+
+## 控制台界面
+
+控制台的样式、脚本和图标全部在 `web/static/` 本地提供，**不再依赖任何公网 CDN**（旧版从
+cdn.tailwindcss.com 和 unpkg 现场拉 Tailwind 与 htmx，外网一抖整站就没样式、按钮全失效）。
+整页首次加载约 100KB，之后全部走浏览器缓存，服务器端只多了几个静态文件，不增加 CPU 与内存开销。
+
+| 文件 | 作用 |
+|---|---|
+| `ui.css` | 手写的设计系统：颜色变量（明/暗两套）、卡片、按钮、表单、徽章、表格、侧边栏、弹窗、轻提示 |
+| `ui.js` | 明暗切换、手机端抽屉菜单、HTMX 请求进度条、错误 / 保存成功的轻提示（约 60 行，无依赖） |
+| `icons.svg` | Tabler Icons（MIT）裁剪出的 SVG sprite，模板里用 `{{ icon('bell') }}` 引用 |
+| `htmx.min.js` / `htmx-sse.js` | htmx 1.9.12 及其 SSE 扩展的本地副本 |
+
+- **状态徽章颜色只有一份定义**：`web/deps.py → STATUS_COLORS`（17 个状态码 → 六个色族，含暗色值），
+  由 `status_css()` 内联进每页 `<head>`；仪表盘的「状态分布」条也按同一色族着色，
+  色序（绿 → 蓝 → 橙 → 紫 → 红，灰为撤回/终止类弱化色）经过色盲区分度校验。
+- **加图标**：到 https://tabler.io/icons 找 outline 版 SVG，把其中的 `<path>` 放进 `icons.svg`
+  的一个 `<symbol id="i-名称" viewBox="0 0 24 24">` 里即可；测试会检查模板用到的每个图标都在 sprite 里。
+- **缓存**：静态资源 URL 带内容哈希 `?v=`（`web/deps.py → static_url()`），带版本号的响应
+  `Cache-Control: immutable` 一年，不带的一小时；部署新版本后浏览器自动拿到新文件，不需要强刷。
+- **手机端**：900px 以下侧边栏折叠成抽屉，表格在卡片内横向滚动，次要列（行业、申请时间）在
+  640px 以下隐藏；顶栏的全局搜索框直接跳到「登记记录」页按关键字过滤。
+- **手机桌面图标**：`manifest.webmanifest` 加三枚 PNG 图标，手机浏览器「添加到主屏幕」后有正式
+  图标和名称。服务器只有 IP、走明文 HTTP，所以没有 Service Worker、Android 也不弹安装提示。
+  图标从 `web/static/app-icon.svg` 渲染，改了图形后用本机 Playwright 重新生成：
+
+  ```bash
+  .venv/bin/python - <<'PY'
+  from pathlib import Path
+  from playwright.sync_api import sync_playwright
+  svg = Path("web/static/app-icon.svg").read_text(encoding="utf-8")
+  with sync_playwright() as p:
+      b = p.chromium.launch()
+      for name, n in (("icon-512.png", 512), ("icon-192.png", 192), ("apple-touch-icon.png", 180)):
+          page = b.new_page(viewport={"width": n, "height": n})
+          page.set_content('<body style="margin:0">' + svg.replace("<svg ", '<svg width="%d" height="%d" ' % (n, n), 1))
+          page.locator("svg").screenshot(path="web/static/" + name)
+      b.close()
+  PY
+  ```
+- 想再省一点带宽，可以在 nginx 里对 `text/css application/javascript image/svg+xml` 开 `gzip on`
+  （压缩后总量约 30KB）；应用层没有开 gzip，是为了不影响 SSE 长连接。
 
 ## 日志
 
