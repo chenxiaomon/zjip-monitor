@@ -1,70 +1,62 @@
 {# Standalone (its own route) it refreshes itself; inside dashboard_body.html the body does. #}
+{% set is_admin = request.state.user and request.state.user.role == 'admin' %}
 <div id="account-grid-section"
-     class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6"
+     class="acc-grid"
      {% if standalone is not defined or standalone %}
      hx-get="/partials/account-grid{% if filter_year %}?year={{ filter_year }}{% endif %}"
      hx-trigger="sse:update"
      hx-swap="outerHTML"
      {% endif %}>
   {% for snap in account_snapshots %}
-  <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 relative">
-    <!-- Status dot (gray ring = last scan failed or data stale) -->
-    {% set ring = ' ring-2 ring-gray-300 dark:ring-gray-600' if (snap.scan_failed or snap.stale) else '' %}
-    {% if snap.dot == 'red' %}
-    <span class="absolute top-3 right-3 w-2.5 h-2.5 rounded-full bg-red-500{{ ring }}"></span>
-    {% elif snap.dot == 'amber' %}
-    <span class="absolute top-3 right-3 w-2.5 h-2.5 rounded-full bg-amber-400{{ ring }}"></span>
-    {% else %}
-    <span class="absolute top-3 right-3 w-2.5 h-2.5 rounded-full bg-green-500{{ ring }}"></span>
-    {% endif %}
-    <!-- Company & account: the name opens this company's records -->
-    <div class="pr-6">
-      <a href="/records?account={{ snap.account.username | urlencode }}"
-         class="block text-sm font-medium text-gray-800 dark:text-gray-100 mb-0.5 hover:text-blue-600 dark:hover:text-blue-400">{{ snap.account.company }}</a>
-      <div class="flex items-center gap-2 mb-3">
-        <span class="font-mono text-xs text-gray-400 dark:text-gray-500">{{ snap.account.username }}</span>
-        {% if request.state.user and request.state.user.role == 'admin' %}
-        <span class="px-1.5 py-0.5 rounded-full text-xs {% if snap.account.group %}bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400{% else %}bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500{% endif %}">
-          {{ snap.account.group | group_label }}
-        </span>
-        {% endif %}
+  <div class="card acc">
+    <div class="acc-head">
+      <div class="grow">
+        <!-- Company & account: the name opens this company's records -->
+        <a href="/records?account={{ snap.account.username | urlencode }}" class="acc-name truncate">{{ snap.account.company }}</a>
+        <div class="acc-user">
+          {{ snap.account.username }}
+          {% if is_admin %}
+          <span class="pill pill-xs {% if snap.account.group %}pill-accent{% else %}pill-neutral{% endif %}">{{ snap.account.group | group_label }}</span>
+          {% endif %}
+        </div>
       </div>
+      {# Status dot: red = needs urgent action, amber = has corrections, green = fine; grey ring = last scan failed or data stale #}
+      <span class="dot dot-{{ snap.dot }}{% if snap.scan_failed or snap.stale %} ring{% endif %}"
+            title="{% if snap.dot == 'red' %}有需紧急处理的记录{% elif snap.dot == 'amber' %}有待补正的记录{% else %}无需处理{% endif %}{% if snap.scan_failed or snap.stale %} · 数据可能过期{% endif %}"></span>
     </div>
     <!-- Status pills: every status actually present; each opens the filtered records -->
     {% if snap.status_counts %}
-    <div class="flex flex-wrap gap-1.5 mb-3">
+    <div class="acc-pills">
       {% for code in snap.status_counts.keys()|sort %}
       <a href="/records?account={{ snap.account.username | urlencode }}&status={{ code }}"
-         class="px-2 py-0.5 rounded-full text-xs s-pill-{{ code if code in AUDIT_STATUS else 'x' }} hover:ring-1 hover:ring-blue-300">
+         class="pill s-pill-{{ code if code in AUDIT_STATUS else 'x' }}">
         {{ AUDIT_STATUS.get(code, '状态' ~ code) }}×{{ snap.status_counts[code] }}
       </a>
       {% endfor %}
     </div>
     {% else %}
-    <div class="text-xs text-gray-400 dark:text-gray-500 mb-3">暂无数据</div>
+    <div class="xs faint">暂无数据</div>
     {% endif %}
     <!-- Scan health: the reason is visible, not hidden in a tooltip -->
     {% if snap.scan_failed %}
-    <div class="text-xs text-red-500 dark:text-red-400 mb-1" {% if snap.scan_status and snap.scan_status.error %}title="{{ snap.scan_status.error }}"{% endif %}>
-      <i class="ti ti-alert-circle"></i> 上次巡检失败，数据为旧快照
-      {%- if snap.scan_status and snap.scan_status.error %}：{{ snap.scan_status.error[:100] }}{% if snap.scan_status.error|length > 100 %}…{% endif %}{% endif %}
+    <div class="acc-health danger" {% if snap.scan_status and snap.scan_status.error %}title="{{ snap.scan_status.error }}"{% endif %}>
+      {{ icon('alert-circle') }}<span>上次巡检失败，数据为旧快照
+      {%- if snap.scan_status and snap.scan_status.error %}：{{ snap.scan_status.error[:100] }}{% if snap.scan_status.error|length > 100 %}…{% endif %}{% endif %}</span>
     </div>
     {% elif snap.scan_partial %}
-    <div class="text-xs text-amber-600 dark:text-amber-400 mb-1">
-      <i class="ti ti-alert-triangle"></i> 部分抓取
-      {%- if snap.scan_status %} {{ snap.scan_status.fetched }}{% if snap.scan_status.reported_total %}/{{ snap.scan_status.reported_total }}{% endif %}{% endif %}
+    <div class="acc-health warn">
+      {{ icon('alert-triangle') }}<span>部分抓取
+      {%- if snap.scan_status %} {{ snap.scan_status.fetched }}{% if snap.scan_status.reported_total %}/{{ snap.scan_status.reported_total }}{% endif %}{% endif %}</span>
     </div>
     {% elif snap.stale %}
-    <div class="text-xs text-gray-400 dark:text-gray-500 mb-1">
-      <i class="ti ti-clock-exclamation"></i> 超过 {{ "%g"|format(stale_hours) }} 小时未巡检成功，数据可能过期
+    <div class="acc-health faint">
+      {{ icon('clock-exclamation') }}<span>超过 {{ "%g"|format(stale_hours) }} 小时未巡检成功，数据可能过期</span>
     </div>
     {% endif %}
     <!-- Last successful scan of this account (falls back to the snapshot time) -->
-    <div class="text-xs text-gray-400 dark:text-gray-500">
-      最后巡检：{{ snap.last_success | fmt_time }}
-    </div>
+    <div class="acc-foot">最后巡检：{{ snap.last_success | fmt_time }}</div>
   </div>
   {% else %}
-  <div class="col-span-2 text-center text-sm text-gray-400 py-8">暂无账号数据</div>
+  <div class="card empty" style="grid-column:1/-1">{{ icon('inbox') }}暂无账号数据</div>
   {% endfor %}
 </div>

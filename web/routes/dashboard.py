@@ -18,6 +18,7 @@ from src.runtime_settings import ops_alert_settings
 from src.scraper import AUDIT_STATUS
 from web.auth import allowed_usernames, is_admin, visible_accounts
 from web.deps import STATUS_COLORS, account_dot, in_year, int_or_none, templates
+from web.deps import status_distribution
 from web.services.events import read_events
 from web.services.run_state import run_state_ctx
 from web.services.snapshot import get_latest_snapshot
@@ -134,6 +135,7 @@ def _dashboard_ctx(request: Request, year: int | None = None) -> dict:
         "total_records": total_records,
         "success_count": success_count,
         "pending_correction": pending_correction,
+        "status_dist": status_distribution(account_snapshots),
         "account_snapshots": account_snapshots,
         "login_alerts": login_alerts,
         # Scoped to what this user may see: a group user must never learn from

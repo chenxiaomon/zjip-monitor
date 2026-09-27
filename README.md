@@ -2,7 +2,7 @@
 
 浙江省数据知识产权登记平台监控工具。项目可以用多个企业账号登录 `zjip.org.cn`，定时拉取登记申请状态，生成快照、变更事件和 HTML 报表，并通过钉钉、企业微信或邮件推送通知。
 
-当前还包含一个轻量 Web 控制台，使用 FastAPI、Jinja2、HTMX 和 SSE 展示仪表盘、账号、记录、变更、通知、报表与设置页面。
+当前还包含一个轻量 Web 控制台，使用 FastAPI、Jinja2、HTMX 和 SSE 展示仪表盘、账号、记录、变更、通知、报表与设置页面；前端资源全部本地提供，支持暗色模式和手机端。
 
 ## 功能
 
@@ -125,6 +125,31 @@ python scripts/decrypt_accounts.py --out config/accounts.yaml   # 导出明文�
 历史文件的 `facts` 由 `python scripts/backfill_notice_facts.py` 一次性补齐；已经释放到本机归档、服务器上没有文件的公告，
 用本机的 `python -m archive push-facts` 把解析结果送到服务器。通知书没有文字层或解析失败时，待办里显示「截止日期未知」，
 不会漏掉这条申请。
+
+## 控制台界面
+
+控制台的样式、脚本和图标全部在 `web/static/` 本地提供，**不再依赖任何公网 CDN**（旧版从
+cdn.tailwindcss.com 和 unpkg 现场拉 Tailwind 与 htmx，外网一抖整站就没样式、按钮全失效）。
+整页首次加载约 100KB，之后全部走浏览器缓存，服务器端只多了几个静态文件，不增加 CPU 与内存开销。
+
+| 文件 | 作用 |
+|---|---|
+| `ui.css` | 手写的设计系统：颜色变量（明/暗两套）、卡片、按钮、表单、徽章、表格、侧边栏、弹窗、轻提示 |
+| `ui.js` | 明暗切换、手机端抽屉菜单、HTMX 请求进度条、错误 / 保存成功的轻提示（约 60 行，无依赖） |
+| `icons.svg` | Tabler Icons（MIT）裁剪出的 SVG sprite，模板里用 `{{ icon('bell') }}` 引用 |
+| `htmx.min.js` / `htmx-sse.js` | htmx 1.9.12 及其 SSE 扩展的本地副本 |
+
+- **状态徽章颜色只有一份定义**：`web/deps.py → STATUS_COLORS`（17 个状态码 → 六个色族，含暗色值），
+  由 `status_css()` 内联进每页 `<head>`；仪表盘的「状态分布」条也按同一色族着色，
+  色序（绿 → 蓝 → 橙 → 紫 → 红，灰为撤回/终止类弱化色）经过色盲区分度校验。
+- **加图标**：到 https://tabler.io/icons 找 outline 版 SVG，把其中的 `<path>` 放进 `icons.svg`
+  的一个 `<symbol id="i-名称" viewBox="0 0 24 24">` 里即可；测试会检查模板用到的每个图标都在 sprite 里。
+- **缓存**：静态资源 URL 带内容哈希 `?v=`（`web/deps.py → static_url()`），带版本号的响应
+  `Cache-Control: immutable` 一年，不带的一小时；部署新版本后浏览器自动拿到新文件，不需要强刷。
+- **手机端**：900px 以下侧边栏折叠成抽屉，表格在卡片内横向滚动，次要列（行业、申请时间）在
+  640px 以下隐藏；顶栏的全局搜索框直接跳到「登记记录」页按关键字过滤。
+- 想再省一点带宽，可以在 nginx 里对 `text/css application/javascript image/svg+xml` 开 `gzip on`
+  （压缩后总量约 30KB）；应用层没有开 gzip，是为了不影响 SSE 长连接。
 
 ## 日志
 

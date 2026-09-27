@@ -10,7 +10,7 @@ from tests.conftest import ADMIN, API_KEY, GROUP_A_USER
 
 def test_public_paths_need_no_auth(web_client):
     assert web_client.get("/login").status_code == 200
-    assert web_client.get("/static/app.css").status_code == 200
+    assert web_client.get("/static/ui.css").status_code == 200
 
     resp = web_client.get("/favicon.ico", follow_redirects=False)
     assert resp.status_code in (302, 307)

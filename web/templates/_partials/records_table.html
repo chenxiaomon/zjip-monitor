@@ -1,64 +1,64 @@
 <tbody id="records-tbody">
   {% for r in rows %}
-  <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors border-b border-gray-100 dark:border-gray-700/50 cursor-pointer"
+  <tr class="row-click"
       onclick="var j=document.getElementById('json-{{ loop.index }}');j.classList.toggle('hidden')">
-    <td class="px-4 py-2.5 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap">
-      {{ r.company[:8] }}{% if r.company|length > 8 %}…{% endif %}
-      <div class="font-mono text-gray-400 dark:text-gray-500">{{ r.username }}</div>
+    <td class="nowrap">
+      <span class="sm text-2">{{ r.company[:8] }}{% if r.company|length > 8 %}…{% endif %}</span>
+      <div class="sub">{{ r.username }}</div>
     </td>
-    <td class="px-4 py-2.5 font-mono text-xs whitespace-nowrap">
+    <td class="mono xs nowrap">
       {% if r.reg_no %}
       <a href="{{ detail_url(r.reg_no) }}" target="_blank" rel="noopener"
          onclick="event.stopPropagation()"
          title="在官网打开详情页（需登录平台）"
-         class="text-blue-600 dark:text-blue-400 hover:underline">{{ r.reg_no }}</a>
+         class="link">{{ r.reg_no }}</a>
       {% else %}—{% endif %}
     </td>
-    <td class="px-4 py-2.5 text-xs text-gray-700 dark:text-gray-200 max-w-56 truncate" title="{{ r.name }}">{{ r.name }}</td>
-    <td class="px-4 py-2.5 text-xs text-gray-400 dark:text-gray-500 whitespace-nowrap">{{ r.industry or '—' }}</td>
-    <td class="px-4 py-2.5 font-mono text-xs text-gray-400 dark:text-gray-500 whitespace-nowrap">{{ r.apply_date }}</td>
-    <td class="px-4 py-2.5">
-      <span class="px-2 py-0.5 rounded-full text-xs s-pill-{{ r.status_code if r.status_code in AUDIT_STATUS else 'x' }}">{{ r.status_label }}</span>
+    <td class="sm"><div class="truncate max-w-56" title="{{ r.name }}">{{ r.name }}</div></td>
+    <td class="xs faint nowrap hide-sm">{{ r.industry or '—' }}</td>
+    <td class="mono xs faint nowrap hide-sm">{{ r.apply_date }}</td>
+    <td>
+      <span class="pill s-pill-{{ r.status_code if r.status_code in AUDIT_STATUS else 'x' }}">{{ r.status_label }}</span>
       {% if r.due %}
-      <span class="ml-1 px-1.5 py-0.5 rounded-full text-[10px] whitespace-nowrap {{ urgency_class(r.due.urgency) }}"
+      <span class="pill pill-xs {{ urgency_class(r.due.urgency) }}"
             title="{{ r.due.reasons or '截止日期来自补正通知书' }}">{{ due_label(r.due.days_left, r.due.deadline) }}</span>
       {% elif r.renewal %}
-      <span class="ml-1 px-1.5 py-0.5 rounded-full text-[10px] whitespace-nowrap {{ urgency_class('overdue' if r.renewal.expired else 'unknown') }}"
+      <span class="pill pill-xs {{ urgency_class('overdue' if r.renewal.expired else 'unknown') }}"
             title="登记证书有效期至 {{ r.renewal.valid_to }}，期满前六个月内可续展">{% if r.renewal.expired %}证书已过期{% else %}{{ r.renewal.valid_to[5:] }} 到期{% endif %}</span>
       {% endif %}
     </td>
-    <td class="px-4 py-2.5 text-xs whitespace-nowrap">
+    <td class="xs nowrap">
       {% for f in r.attachments %}
       {# ?v=2 缓存破除:老响应无 Cache-Control 被浏览器长期缓存,换 URL 强制重取 #}
       <a href="/attachments/{{ r.company | urlencode }}/{{ r.reg_no | urlencode }}/{{ f | urlencode }}?v=2"
          onclick="event.stopPropagation()"
          title="{{ f }}"
-         class="inline-flex items-center gap-0.5 mr-1.5 text-blue-600 dark:text-blue-400 hover:underline">
-        <i class="ti ti-file-download text-sm"></i>{{ f.rsplit('.', 1)[0] }}
+         class="link row gap-1" style="display:inline-flex;margin-right:8px">
+        {{ icon('file-download') }}{{ f.rsplit('.', 1)[0] }}
       </a>
       {% endfor %}
       {# 已释放到本机归档的文件：服务器上没有了，只留一个不可点的灰色标记 #}
       {% for a in r.archived %}
       <span title="已归档到本机{{ ' · ' ~ a.archived_on if a.archived_on }}，需要时请找管理员恢复"
-            class="inline-flex items-center gap-0.5 mr-1.5 text-gray-400 dark:text-gray-500 cursor-default">
-        <i class="ti ti-archive text-sm"></i>{{ a.name.rsplit('.', 1)[0] }}<span class="text-[10px]">（已归档）</span>
+            class="faint row gap-1" style="display:inline-flex;margin-right:8px;cursor:default">
+        {{ icon('archive') }}{{ a.name.rsplit('.', 1)[0] }}<span class="pill-xs">（已归档）</span>
       </span>
       {% endfor %}
       {% if not r.attachments and not r.archived %}
-      <span class="text-gray-300 dark:text-gray-600">—</span>
+      <span class="faint">—</span>
       {% endif %}
     </td>
   </tr>
   <!-- JSON expand row -->
   {# id by row position: an empty or duplicated 登记号 must not make two rows share one #}
-  <tr id="json-{{ loop.index }}" class="hidden">
-    <td colspan="7" class="px-4 py-3 bg-gray-50 dark:bg-gray-900/50 border-b border-gray-100 dark:border-gray-700/50">
-      <pre class="text-xs text-gray-600 dark:text-gray-300 overflow-auto max-h-56 whitespace-pre-wrap">{{ r._raw | tojson }}</pre>
+  <tr id="json-{{ loop.index }}" class="hidden expand">
+    <td colspan="7">
+      <pre class="raw">{{ r._raw | tojson }}</pre>
     </td>
   </tr>
   {% else %}
   <tr>
-    <td colspan="7" class="px-4 py-10 text-center text-sm text-gray-400 dark:text-gray-500">暂无记录数据</td>
+    <td colspan="7" class="empty">{{ icon('inbox') }}暂无记录数据</td>
   </tr>
   {% endfor %}
 </tbody>

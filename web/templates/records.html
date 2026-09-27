@@ -6,97 +6,74 @@
 {% block content %}
 <!-- 数据健康提示 -->
 {% if missing_accounts %}
-<div class="mb-4 px-4 py-2.5 rounded-lg bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400">
-  <i class="ti ti-info-circle"></i>
-  以下账号尚未有巡检数据（不代表 0 条记录）：
-  {% for acc in missing_accounts %}<span class="font-medium text-gray-600 dark:text-gray-300">{{ acc.company }}</span>{% if not loop.last %}、{% endif %}{% endfor %}
+<div class="alert alert-neutral">
+  {{ icon('info-circle') }}
+  <div>以下账号尚未有巡检数据（不代表 0 条记录）：
+    {% for acc in missing_accounts %}<span class="strong">{{ acc.company }}</span>{% if not loop.last %}、{% endif %}{% endfor %}
+  </div>
 </div>
 {% endif %}
 {% if fetch_warnings %}
-<div class="mb-4 px-4 py-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-xs text-amber-700 dark:text-amber-400 space-y-0.5">
-  {% for w in fetch_warnings %}
+<div class="alert alert-warn">
+  {{ icon('alert-triangle') }}
   <div>
-    <i class="ti ti-alert-triangle"></i>
-    <span class="font-medium">{{ w.company }}</span>：
-    {% if w.kind == 'partial' %}
-    上次抓取未完整（已与上份快照合并，未丢数据）{% if w.error %} — {{ w.error }}{% endif %}
-    {% else %}
-    平台报告 {{ w.reported }} 条，本地 {{ w.fetched }} 条，存在差异，请手动巡检核对
-    {% endif %}
+    {% for w in fetch_warnings %}
+    <div>
+      <span class="strong">{{ w.company }}</span>：
+      {% if w.kind == 'partial' %}
+      上次抓取未完整（已与上份快照合并，未丢数据）{% if w.error %} — {{ w.error }}{% endif %}
+      {% else %}
+      平台报告 {{ w.reported }} 条，本地 {{ w.fetched }} 条，存在差异，请手动巡检核对
+      {% endif %}
+    </div>
+    {% endfor %}
   </div>
-  {% endfor %}
 </div>
 {% endif %}
 
-<!-- Filters -->
-<div class="flex flex-wrap gap-2 mb-4" id="filter-bar">
-  <!-- Account filter -->
-  <a href="{{ records_url(account='', page=1) }}"
-     class="px-3 py-1 rounded-full text-xs transition-colors
-            {% if not filter_account %}bg-blue-600 text-white{% else %}bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200{% endif %}">
-    全部账号
-  </a>
-  {% for acc in accounts_list %}
-  <a href="{{ records_url(account=acc.username, page=1) }}"
-     class="px-3 py-1 rounded-full text-xs transition-colors
-            {% if filter_account == acc.username %}bg-blue-600 text-white{% else %}bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200{% endif %}">
-    {{ acc.company }}
-  </a>
-  {% endfor %}
-</div>
-
-<!-- Status filter -->
-<div class="flex flex-wrap gap-1.5 mb-4">
-  <a href="{{ records_url(status='', page=1) }}"
-     class="px-2.5 py-0.5 rounded-full text-xs transition-colors
-            {% if filter_status is none %}bg-gray-800 dark:bg-gray-200 text-white dark:text-gray-900{% else %}bg-gray-100 dark:bg-gray-700 text-gray-500{% endif %}">
-    全部状态
-  </a>
-  {% for code, label in AUDIT_STATUS.items() %}
-  <a href="{{ records_url(status=code, page=1) }}"
-     class="px-2.5 py-0.5 rounded-full text-xs transition-colors s-pill-{{ code }}
-            {% if filter_status == code %}ring-2 ring-offset-1 ring-blue-400{% endif %}">
-    {{ label }}
-  </a>
-  {% endfor %}
-</div>
-
-<!-- Keyword search + date range filter -->
-<form class="flex flex-wrap items-center gap-2 mb-4" id="records-filter-form"
-      hx-get="/partials/records-table"
-      hx-target="#records-table-box"
-      hx-swap="outerHTML"
-      hx-trigger="change">
-  <input type="hidden" name="account" value="{{ filter_account or '' }}">
-  <input type="hidden" name="status" value="{{ filter_status if filter_status is not none else '' }}">
-  <div class="relative">
-    <i class="ti ti-search absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-sm"></i>
-    <input type="search" name="q" value="{{ q }}"
-           placeholder="搜索 数据名称 / 登记号 / 公司…"
-           hx-get="/partials/records-table"
-           hx-include="#records-filter-form"
-           hx-target="#records-table-box"
-           hx-swap="outerHTML"
-           hx-trigger="input changed delay:300ms, search"
-           class="w-64 pl-8 pr-2 py-1 text-xs rounded border border-gray-200 dark:border-gray-600
-                  bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300
-                  focus:outline-none focus:ring-1 focus:ring-blue-400">
+<!-- Filters: account chips, status chips, keyword + date range -->
+<div class="card mb-4">
+  <div class="card-body filters" style="margin-bottom:0">
+    <div class="chips" id="filter-bar">
+      <a href="{{ records_url(account='', page=1) }}" class="chip{% if not filter_account %} active{% endif %}">全部账号</a>
+      {% for acc in accounts_list %}
+      <a href="{{ records_url(account=acc.username, page=1) }}" class="chip{% if filter_account == acc.username %} active{% endif %}">{{ acc.company }}</a>
+      {% endfor %}
+    </div>
+    <div class="chips">
+      <a href="{{ records_url(status='', page=1) }}" class="chip{% if filter_status is none %} active{% endif %}">全部状态</a>
+      {% for code, label in AUDIT_STATUS.items() %}
+      <a href="{{ records_url(status=code, page=1) }}" class="chip s-chip s-pill-{{ code }}{% if filter_status == code %} active{% endif %}">{{ label }}</a>
+      {% endfor %}
+    </div>
+    <form class="row row-wrap gap-2" id="records-filter-form"
+          hx-get="/partials/records-table"
+          hx-target="#records-table-box"
+          hx-swap="outerHTML"
+          hx-trigger="change">
+      <input type="hidden" name="account" value="{{ filter_account or '' }}">
+      <input type="hidden" name="status" value="{{ filter_status if filter_status is not none else '' }}">
+      <div class="search-field">
+        {{ icon('search') }}
+        <input type="search" name="q" value="{{ q }}"
+               placeholder="搜索 数据名称 / 登记号 / 公司…"
+               hx-get="/partials/records-table"
+               hx-include="#records-filter-form"
+               hx-target="#records-table-box"
+               hx-swap="outerHTML"
+               hx-trigger="input changed delay:300ms, search"
+               class="input input-sm" style="width:16rem">
+      </div>
+      <label class="xs muted">申请时间</label>
+      <input type="date" name="start_date" value="{{ start_date }}" class="input input-sm">
+      <span class="xs faint">至</span>
+      <input type="date" name="end_date" value="{{ end_date }}" class="input input-sm">
+      {% if start_date or end_date or q %}
+      <a href="{{ records_url(q='', start_date='', end_date='', page=1) }}" class="btn btn-sm btn-link">清除</a>
+      {% endif %}
+    </form>
   </div>
-  <label class="text-xs text-gray-500 dark:text-gray-400">申请时间</label>
-  <input type="date" name="start_date" value="{{ start_date }}"
-         class="px-2 py-1 text-xs rounded border border-gray-200 dark:border-gray-600
-                bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300
-                focus:outline-none focus:ring-1 focus:ring-blue-400">
-  <span class="text-xs text-gray-400">至</span>
-  <input type="date" name="end_date" value="{{ end_date }}"
-         class="px-2 py-1 text-xs rounded border border-gray-200 dark:border-gray-600
-                bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300
-                focus:outline-none focus:ring-1 focus:ring-blue-400">
-  {% if start_date or end_date or q %}
-  <a href="{{ records_url(q='', start_date='', end_date='', page=1) }}"
-     class="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors">清除</a>
-  {% endif %}
-</form>
+</div>
 
 <!-- Table (count + table swap together, see _partials/records_box.html) -->
 {% include "_partials/records_box.html" %}

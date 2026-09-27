@@ -4,23 +4,15 @@
 {% block page_title %}仪表盘{% endblock %}
 
 {% block content %}
-<div class="flex flex-wrap items-center gap-2 mb-4">
-  <a href="/"
-     class="px-3 py-1 rounded-full text-xs transition-colors
-            {% if not filter_year %}bg-blue-600 text-white{% else %}bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600{% endif %}">
-    全部年份
-  </a>
-  {# The years actually present in the visible snapshots' application dates #}
-  {% for y in years %}
-  <a href="/?year={{ y }}"
-     class="px-3 py-1 rounded-full text-xs transition-colors
-            {% if filter_year == y %}bg-blue-600 text-white{% else %}bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600{% endif %}">
-    {{ y }}
-  </a>
-  {% endfor %}
-  <span class="ml-auto text-xs text-gray-400 dark:text-gray-500" title="可见账号中最近一次巡检成功的时间">
-    上次成功巡检：{{ last_success_at | fmt_time if last_success_at else '尚无' }}
-  </span>
+<div class="toolbar">
+  <div class="chips">
+    <a href="/" class="chip{% if not filter_year %} active{% endif %}">全部年份</a>
+    {# The years actually present in the visible snapshots' application dates #}
+    {% for y in years %}
+    <a href="/?year={{ y }}" class="chip{% if filter_year == y %} active{% endif %}">{{ y }}</a>
+    {% endfor %}
+  </div>
+  <span class="row gap-1 xs muted" title="可见账号中最近一次巡检成功的时间">{{ icon('clock') }}上次成功巡检：{{ last_success_at | fmt_time if last_success_at else '尚无' }}</span>
 </div>
 
 {# One SSE connection, one refresh target: every event re-renders the body below in a single request. #}

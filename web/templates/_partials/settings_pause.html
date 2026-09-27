@@ -1,8 +1,10 @@
-<div id="pause-section" class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-5">
-  <div class="flex items-center justify-between">
+<div id="pause-section" class="card">
+  <div class="card-body row between gap-3 row-wrap">
     <div>
-      <h3 class="text-sm font-medium text-gray-700 dark:text-gray-200">定时巡检</h3>
-      <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">
+      <div class="card-title">{{ icon('clock') }}定时巡检
+        {% if paused %}<span class="pill pill-warn">已暂停</span>{% else %}<span class="pill pill-good">运行中</span>{% endif %}
+      </div>
+      <p class="xs muted mt-1">
         {% if paused %}
         已暂停 — daemon 到点将跳过巡检，正在运行的一轮不受影响
         {% else %}
@@ -13,13 +15,11 @@
     <button hx-post="/settings/pause"
             hx-target="#pause-section"
             hx-swap="outerHTML"
-            class="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md transition-colors cursor-pointer
-                   {% if paused %}bg-green-600 hover:bg-green-700 text-white
-                   {% else %}bg-orange-500 hover:bg-orange-600 text-white{% endif %}">
+            class="btn {% if paused %}btn-success{% else %}btn-warn{% endif %}">
       {% if paused %}
-      <i class="ti ti-player-play text-base"></i>恢复定时巡检
+      {{ icon('player-play') }}恢复定时巡检
       {% else %}
-      <i class="ti ti-player-pause text-base"></i>暂停定时巡检
+      {{ icon('player-pause') }}暂停定时巡检
       {% endif %}
     </button>
   </div>

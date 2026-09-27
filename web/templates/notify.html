@@ -4,11 +4,11 @@
 {% block page_title %}通知{% endblock %}
 
 {% block content %}
-<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+<div class="grid-2">
 
   <!-- Left: Channel config -->
-  <div class="space-y-4">
-    <h2 class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">渠道配置</h2>
+  <div class="stack">
+    <div class="section-title" style="margin-bottom:0">渠道配置</div>
     {% for channel in ['dingtalk', 'wechat', 'email'] %}
     {% set ch_cfg = cfg.get(channel, {}) %}
     {% set error = errors.get(channel, '') %}
@@ -18,25 +18,26 @@
 
   <!-- Right: Push log -->
   <div>
-    <h2 class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">近 30 天变更事件</h2>
-    <div class="mb-2 text-xs text-gray-500 dark:text-gray-400">
-      {% if enabled_labels %}
-      当前已启用：{{ enabled_labels | join("、") }}。下方是检测到的变更；每条右侧标注该条变更当时的推送结果。
-      {% else %}
-      当前<span class="font-medium">没有启用任何通知渠道</span>，下方变更只在控制台可见。
-      {% endif %}
+    <div class="section-title">近 30 天变更事件</div>
+    <div class="alert {% if enabled_labels %}alert-info{% else %}alert-neutral{% endif %}">
+      {{ icon('bell') }}
+      <div>
+        {% if enabled_labels %}
+        当前已启用：{{ enabled_labels | join("、") }}。下方是检测到的变更；每条右侧标注该条变更当时的推送结果。
+        {% else %}
+        当前<span class="strong">没有启用任何通知渠道</span>，下方变更只在控制台可见。
+        {% endif %}
+      </div>
     </div>
-    <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+    <div class="card">
       {% if change_log %}
-      <ul class="divide-y divide-gray-50 dark:divide-gray-700/50">
+      <ul class="tl">
         {% for event in change_log %}
-        <li class="px-4 py-3 flex items-start gap-3">
-          <div class="flex-shrink-0 w-28 font-mono text-xs text-gray-400 dark:text-gray-500 pt-0.5">
-            {{ event.timestamp | fmt_time }}
-          </div>
-          <div class="flex-1 min-w-0">
-            <div class="text-sm text-gray-700 dark:text-gray-200 truncate">{{ event.company }}</div>
-            <div class="text-xs text-gray-400 mt-0.5">
+        <li>
+          <div class="tl-time" style="width:80px">{{ event.timestamp | fmt_time }}</div>
+          <div class="tl-body">
+            <div class="tl-company truncate">{{ event.company }}</div>
+            <div class="xs muted">
               {% set parts = [] %}
               {% if event.changed %}{% set _ = parts.append("状态变更 " ~ event.changed|length ~ " 条") %}{% endif %}
               {% if event.added %}{% set _ = parts.append("新增 " ~ event.added|length ~ " 条") %}{% endif %}
@@ -46,22 +47,19 @@
           </div>
           {% set sent = event.get('notified') %}
           {% if sent is none %}
-          <span class="flex-shrink-0 px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-400"
-                title="该条变更由整轮巡检结束后的汇总推送处理，未单独记录结果">—</span>
+          <span class="pill pill-neutral" title="该条变更由整轮巡检结束后的汇总推送处理，未单独记录结果">—</span>
           {% elif not sent %}
-          <span class="flex-shrink-0 px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-400"
-                title="检测到变更时没有启用任何通知渠道">未推送</span>
+          <span class="pill pill-neutral" title="检测到变更时没有启用任何通知渠道">未推送</span>
           {% elif sent.values() | select | list | length == sent | length %}
-          <span class="flex-shrink-0 px-2 py-0.5 text-xs rounded-full bg-green-50 dark:bg-green-950/40 text-green-600 dark:text-green-400">已发送</span>
+          <span class="pill pill-good">已发送</span>
           {% else %}
-          <span class="flex-shrink-0 px-2 py-0.5 text-xs rounded-full bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400"
-                title="{{ sent }}">推送失败</span>
+          <span class="pill pill-danger" title="{{ sent }}">推送失败</span>
           {% endif %}
         </li>
         {% endfor %}
       </ul>
       {% else %}
-      <div class="py-10 text-center text-sm text-gray-400 dark:text-gray-500">暂无推送记录</div>
+      <div class="empty">{{ icon('inbox') }}暂无推送记录</div>
       {% endif %}
     </div>
   </div>

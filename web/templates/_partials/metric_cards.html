@@ -1,29 +1,57 @@
 {# Standalone (its own route) it refreshes itself; inside dashboard_body.html the body does. #}
+{% set failed = account_snapshots | selectattr('scan_failed') | list | length %}
+{% set urgent = todo.corrections | selectattr('urgency', 'in', ['overdue', 'red']) | list | length %}
 <div id="metrics-section"
-     class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6"
+     class="stats"
      {% if standalone is not defined or standalone %}
      hx-get="/partials/metrics{% if filter_year %}?year={{ filter_year }}{% endif %}"
      hx-trigger="sse:update"
      hx-swap="outerHTML"
      {% endif %}>
   <!-- 监控账号数 -->
-  <a href="/accounts" class="bg-gray-100 dark:bg-gray-800 rounded-xl p-5 hover:ring-2 hover:ring-blue-300 transition">
-    <div class="text-xs text-gray-500 dark:text-gray-400 mb-2">监控账号数</div>
-    <div class="text-2xl font-medium text-gray-800 dark:text-gray-100">{{ account_count }}</div>
+  <a href="/accounts" class="card stat">
+    <div class="grow">
+      <div class="stat-label">监控账号数</div>
+      <div class="stat-value">{{ account_count }}</div>
+      {% if failed %}
+      <div class="stat-note danger">{{ icon('alert-circle') }}{{ failed }} 家上次巡检失败</div>
+      {% else %}
+      <div class="stat-note good">{{ icon('circle-check') }}巡检全部正常</div>
+      {% endif %}
+    </div>
+    <span class="stat-icon neutral">{{ icon('users') }}</span>
   </a>
   <!-- 登记总数 -->
-  <a href="/records" class="bg-gray-100 dark:bg-gray-800 rounded-xl p-5 hover:ring-2 hover:ring-blue-300 transition">
-    <div class="text-xs text-gray-500 dark:text-gray-400 mb-2">登记总数</div>
-    <div class="text-2xl font-medium text-gray-800 dark:text-gray-100">{{ total_records }}</div>
+  <a href="/records" class="card stat">
+    <div class="grow">
+      <div class="stat-label">登记总数</div>
+      <div class="stat-value">{{ total_records }}</div>
+      <div class="stat-note">{% if filter_year %}{{ filter_year }} 年申请{% else %}全部年份{% endif %}</div>
+    </div>
+    <span class="stat-icon">{{ icon('file-text') }}</span>
   </a>
   <!-- 登记成功 -->
-  <a href="/records?status=7" class="bg-gray-100 dark:bg-gray-800 rounded-xl p-5 hover:ring-2 hover:ring-blue-300 transition">
-    <div class="text-xs text-gray-500 dark:text-gray-400 mb-2">登记成功</div>
-    <div class="text-2xl font-medium text-gray-800 dark:text-gray-100">{{ success_count }}</div>
+  <a href="/records?status=7" class="card stat">
+    <div class="grow">
+      <div class="stat-label">登记成功</div>
+      <div class="stat-value">{{ success_count }}</div>
+      <div class="stat-note">{% if total_records %}占登记总数 {{ (success_count * 100 / total_records) | round | int }}%{% else %}暂无记录{% endif %}</div>
+    </div>
+    <span class="stat-icon good">{{ icon('certificate') }}</span>
   </a>
-  <!-- 待补正（警示色） -->
-  <a href="/records?status=2" class="bg-amber-50 dark:bg-amber-950/40 rounded-xl p-5 hover:ring-2 hover:ring-amber-300 transition">
-    <div class="text-xs text-amber-700 dark:text-amber-400 mb-2">待补正</div>
-    <div class="text-2xl font-medium text-amber-800 dark:text-amber-300">{{ pending_correction }}</div>
+  <!-- 待补正（需要动作） -->
+  <a href="/records?status=2" class="card stat">
+    <div class="grow">
+      <div class="stat-label">待补正</div>
+      <div class="stat-value">{{ pending_correction }}</div>
+      {% if urgent %}
+      <div class="stat-note danger">{{ icon('alarm') }}{{ urgent }} 条已逾期或 3 天内到期</div>
+      {% elif pending_correction %}
+      <div class="stat-note warn">{{ icon('hourglass-high') }}截止日期见下方待办</div>
+      {% else %}
+      <div class="stat-note">暂无需要补正的申请</div>
+      {% endif %}
+    </div>
+    <span class="stat-icon warn">{{ icon('alarm') }}</span>
   </a>
 </div>

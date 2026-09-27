@@ -99,3 +99,32 @@ def test_run_bar_shows_a_daemon_scan_and_hides_foreign_names(board, web_client, 
                           "started_at": now, "heartbeat_at": now, "finished_at": now, "error": None})
     idle = login_as(web_client, *ADMIN).get("/partials/run-bar").text
     assert "巡检进行中" not in idle and "hx-trigger" not in idle
+
+
+def test_status_distribution_bar_sums_the_visible_records(board, web_client, login_as):
+    html = login_as(web_client, *ADMIN).get("/").text
+    assert 'id="status-dist"' in html and "共 3 条" in html
+    # green (登记成功 ×2) before orange (待补正 ×1): family order, 2px surface gaps between segments
+    green = html.index('class="dist-seg sf-green"')
+    orange = html.index('class="dist-seg sf-orange"')
+    assert green < orange
+    assert re.search(r'href="/records\?status=7"[^>]*><span class="sw sf-green"></span>登记成功<b>2</b><span class="pct">67%', html)
+    assert re.search(r'href="/records\?status=2"[^>]*><span class="sw sf-orange"></span>待补正<b>1</b><span class="pct">33%', html)
+
+    group = login_as(web_client, *GROUP_A_USER).get("/").text
+    assert "共 2 条" in group and "sf-green" in group  # 甲 公司 only: 1 成功 + 1 待补正
+
+
+def test_status_distribution_helper_orders_by_family_then_code():
+    from web.deps import status_distribution
+
+    dist = status_distribution([
+        {"status_counts": {2: 1, 7: 2, 99: 1}},
+        {"status_counts": {1: 3, 7: 1}},
+    ])
+    assert dist["total"] == 8
+    assert [(i["code"], i["count"], i["family"]) for i in dist["segments"]] == [
+        (7, 3, "green"), (1, 3, "blue"), (2, 1, "orange"), (99, 1, "gray"),
+    ]
+    assert dist["segments"][-1]["label"] == "状态99"
+    assert status_distribution([]) == {"total": 0, "segments": []}

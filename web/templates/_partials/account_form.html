@@ -1,113 +1,91 @@
 <!-- Modal overlay: add / edit account (mode = "add" | "edit") -->
 {% set is_edit = mode == 'edit' %}
-<div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+<div class="modal-backdrop"
      onclick="if(event.target===this)document.getElementById('modal-container').innerHTML=''">
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-96 p-6" onclick="event.stopPropagation()">
+  <div class="modal" role="dialog" aria-modal="true" onclick="event.stopPropagation()">
     <!-- Header -->
-    <div class="flex items-center justify-between mb-5">
-      <h2 class="text-base font-medium text-gray-800 dark:text-gray-100">
+    <div class="modal-head">
+      <h2 class="modal-title">
         {% if is_edit %}编辑账号 · {{ account.company }}{% else %}新增账号{% endif %}
       </h2>
-      <button onclick="document.getElementById('modal-container').innerHTML=''"
-              class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors">
-        <i class="ti ti-x text-lg"></i>
-      </button>
+      <button type="button" class="icon-btn" title="关闭" onclick="document.getElementById('modal-container').innerHTML=''">{{ icon('x') }}</button>
     </div>
-
-    <!-- Error -->
-    {% if error %}
-    <div class="mb-4 px-3 py-2 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-600 dark:text-red-400 break-words">
-      {{ error }}
-    </div>
-    {% endif %}
 
     <!-- Form -->
     <form hx-post="{% if is_edit %}/accounts/{{ account.username }}/edit{% else %}/accounts{% endif %}"
           hx-target="#modal-container"
           hx-swap="innerHTML">
-      <div class="space-y-4">
+      <div class="modal-body">
+        <!-- Error -->
+        {% if error %}
+        <div class="alert alert-danger alert-inline break">{{ icon('alert-circle') }}<div>{{ error }}</div></div>
+        {% endif %}
+
         {% if is_edit %}
-        <div>
-          <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">公司名称</label>
-          <div class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-gray-700/50 text-gray-500 dark:text-gray-400 border border-gray-100 dark:border-gray-700">
-            {{ account.company }}
-          </div>
-          <p class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">公司名称与历史快照/附件绑定，不可修改（删除重建会丢失历史）</p>
+        <div class="field">
+          <span class="label">公司名称</span>
+          <div class="readonly">{{ account.company }}</div>
+          <p class="help">公司名称与历史快照/附件绑定，不可修改（删除重建会丢失历史）</p>
         </div>
-        <div>
-          <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">账号</label>
-          <div class="w-full px-3 py-2 text-sm rounded-lg bg-gray-50 dark:bg-gray-700/50 text-gray-500 dark:text-gray-400 font-mono border border-gray-100 dark:border-gray-700">
-            {{ account.username }}
-          </div>
+        <div class="field">
+          <span class="label">账号</span>
+          <div class="readonly mono">{{ account.username }}</div>
           <input type="hidden" name="username" value="{{ account.username }}">
         </div>
-        <div>
-          <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">新密码</label>
-          <input type="password" name="password"
+        <div class="field">
+          <label class="label" for="acc-password">新密码</label>
+          <input id="acc-password" type="password" name="password"
                  placeholder="留空 = 不修改密码"
                  autocomplete="new-password"
-                 class="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-600
-                        bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100
-                        focus:outline-none focus:ring-2 focus:ring-blue-500">
-          <p class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">建议先点「测试登录」确认新密码有效再保存</p>
+                 class="input">
+          <p class="help">建议先点「测试登录」确认新密码有效再保存</p>
         </div>
         {% else %}
-        <div>
-          <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">公司名称 <span class="text-red-400">*</span></label>
-          <input type="text" name="company" required
+        <div class="field">
+          <label class="label" for="acc-company">公司名称 <span class="req">*</span></label>
+          <input id="acc-company" type="text" name="company" required
                  value="{{ form.company if form else '' }}"
                  placeholder="如：浙江光明塑料机械有限公司"
-                 class="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-600
-                        bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100
-                        focus:outline-none focus:ring-2 focus:ring-blue-500">
+                 class="input">
         </div>
-        <div>
-          <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">账号 <span class="text-red-400">*</span></label>
-          <input type="text" name="username" required
+        <div class="field">
+          <label class="label" for="acc-username">账号 <span class="req">*</span></label>
+          <input id="acc-username" type="text" name="username" required
                  value="{{ form.username if form else '' }}"
                  placeholder="登录账号"
-                 class="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-600
-                        bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 font-mono
-                        focus:outline-none focus:ring-2 focus:ring-blue-500">
+                 class="input mono">
         </div>
-        <div>
-          <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">密码 <span class="text-red-400">*</span></label>
-          <input type="password" name="password" required
+        <div class="field">
+          <label class="label" for="acc-password">密码 <span class="req">*</span></label>
+          <input id="acc-password" type="password" name="password" required
                  placeholder="登录密码"
                  autocomplete="new-password"
-                 class="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-600
-                        bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100
-                        focus:outline-none focus:ring-2 focus:ring-blue-500">
+                 class="input">
         </div>
         {% endif %}
-        <div>
-          <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">联系人</label>
-          <input type="text" name="contact"
+        <div class="field">
+          <label class="label" for="acc-contact">联系人</label>
+          <input id="acc-contact" type="text" name="contact"
                  value="{{ account.contact if is_edit else (form.contact if form else '') }}"
                  placeholder="可选"
-                 class="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-600
-                        bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100
-                        focus:outline-none focus:ring-2 focus:ring-blue-500">
+                 class="input">
         </div>
-        <div>
-          <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">分组</label>
-          <select name="group"
-                  class="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-600
-                         bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100
-                         focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <div class="field">
+          <label class="label" for="acc-group">分组</label>
+          <select id="acc-group" name="group" class="select">
             <option value="">未分组</option>
             {% for gkey, gname in get_groups().items() %}
             <option value="{{ gkey }}" {% if is_edit and account.group == gkey %}selected{% endif %}>{{ gname }}</option>
             {% endfor %}
           </select>
         </div>
+
+        <!-- 测试登录 result -->
+        <div id="verify-result"></div>
       </div>
 
-      <!-- 测试登录 result -->
-      <div id="verify-result" class="mt-4"></div>
-
       <!-- Buttons -->
-      <div class="flex items-center justify-between mt-6">
+      <div class="modal-foot">
         <button type="button"
                 hx-post="/accounts/verify"
                 hx-include="closest form"
@@ -115,22 +93,12 @@
                 hx-swap="innerHTML"
                 hx-disabled-elt="this"
                 title="{% if is_edit %}密码留空时测试当前已保存的密码{% else %}用上方填写的账号密码试登录一次，不保存{% endif %}"
-                class="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg border border-blue-200 dark:border-blue-800
-                       text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40
-                       transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-wait">
-          <i class="ti ti-plug-connected text-base"></i>测试登录
+                class="btn btn-accent">
+          {{ icon('plug-connected') }}测试登录
         </button>
-        <div class="flex gap-2">
-          <button type="button"
-                  onclick="document.getElementById('modal-container').innerHTML=''"
-                  class="px-4 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-600
-                         text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
-            取消
-          </button>
-          <button type="submit"
-                  class="px-4 py-2 text-sm rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors">
-            {% if is_edit %}保存修改{% else %}保存账号{% endif %}
-          </button>
+        <div class="row gap-2">
+          <button type="button" class="btn" onclick="document.getElementById('modal-container').innerHTML=''">取消</button>
+          <button type="submit" class="btn btn-primary">{% if is_edit %}保存修改{% else %}保存账号{% endif %}</button>
         </div>
       </div>
     </form>

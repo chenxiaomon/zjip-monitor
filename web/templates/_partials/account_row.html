@@ -11,75 +11,58 @@
     hx-get="/accounts/{{ u }}/scan-status"
     hx-trigger="every 3s"
     hx-swap="outerHTML"
-    {% endif %}
-    class="hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors border-b border-gray-100 dark:border-gray-700/50">
+    {% endif %}>
   <!-- 公司 -->
-  <td class="px-4 py-3 text-sm text-gray-800 dark:text-gray-100">
-    {{ row.account.company }}
+  <td>
+    <span class="medium">{{ row.account.company }}</span>
     {% if row.account.contact %}
-    <div class="text-xs text-gray-400 dark:text-gray-500">{{ row.account.contact }}</div>
+    <div class="xs faint">{{ row.account.contact }}</div>
     {% endif %}
   </td>
   <!-- 分组 -->
   {% set is_admin = request.state.user.role == 'admin' if request.state.user else false %}
-  <td class="px-4 py-3">
+  <td>
     {% if is_admin %}
     <select name="group"
             hx-post="/accounts/{{ u }}/group"
             hx-trigger="change"
             hx-target="#row-{{ u }}"
             hx-swap="outerHTML"
-            class="text-xs rounded border border-gray-200 dark:border-gray-600
-                   bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300
-                   px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer">
+            class="select select-sm">
       <option value="" {% if not row.account.group %}selected{% endif %}>未分组</option>
       {% for gkey, gname in get_groups().items() %}
       <option value="{{ gkey }}" {% if row.account.group == gkey %}selected{% endif %}>{{ gname }}</option>
       {% endfor %}
     </select>
     {% else %}
-    <span class="px-2 py-0.5 rounded-full text-xs bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400">
-      {{ row.account.group | group_label }}
-    </span>
+    <span class="pill pill-accent">{{ row.account.group | group_label }}</span>
     {% endif %}
   </td>
   <!-- 账号 -->
-  <td class="px-4 py-3 text-xs text-gray-500 dark:text-gray-400">
-    <span class="font-mono">{{ u }}</span>
-  </td>
+  <td class="mono xs muted">{{ u }}</td>
   <!-- Token / 登录状态 -->
-  <td class="px-4 py-3">
+  <td>
     {% if task.status == 'pending' %}
-    <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs bg-gray-100 dark:bg-gray-700 text-gray-500">
-      <span class="w-1.5 h-1.5 rounded-full bg-gray-400 animate-pulse"></span>登录中…
-    </span>
+    <span class="pill pill-neutral pill-live">登录中…</span>
     {% elif task.status == 'error' %}
-    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400">
-      <i class="ti ti-alert-circle text-sm"></i>登录失败
-    </span>
-    <div class="mt-1 text-[11px] leading-4 text-red-500 dark:text-red-400 max-w-[16rem] break-words">
-      {{ task.msg }}
-    </div>
+    <span class="pill pill-danger">{{ icon('circle-x') }}登录失败</span>
+    <div class="xs danger mt-1 max-w-64 break">{{ task.msg }}</div>
     {% else %}
-    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs {{ row.token_status.css }}">
-      {{ row.token_status.label }}
-    </span>
+    <span class="pill {{ row.token_status.css }}">{{ row.token_status.label }}</span>
     {% endif %}
     {% if ss and ss.login_paused and task.status != 'pending' %}
     <div class="mt-1">
-      <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400"
+      <span class="pill pill-warn"
             title="连续 {{ ss.consecutive_login_failures }} 次登录失败，定时巡检已跳过该账号。点「编辑」更新密码，或点「巡检」手动重试（成功后自动恢复）。">
-        <i class="ti ti-player-pause text-sm"></i>已暂停 · 需更新密码
+        {{ icon('player-pause') }}已暂停 · 需更新密码
       </span>
     </div>
     {% endif %}
   </td>
   <!-- 记录数 -->
-  <td class="px-4 py-3 text-sm text-gray-600 dark:text-gray-300 text-right tabular-nums">
-    {{ row.record_count }}
-  </td>
+  <td class="num">{{ row.record_count }}</td>
   <!-- 最后巡检 -->
-  <td class="px-4 py-3 text-xs text-gray-400 dark:text-gray-500 font-mono whitespace-nowrap">
+  <td class="mono xs faint nowrap">
     {{ row.last_check | fmt_time }}
     {% if ss and ss.status and ss.status != 'ok' and scan_task != 'running' %}
     {% set kind_label = {'partial': '部分抓取', 'login_failed': '登录失败', 'captcha_required': '需验证码',
@@ -87,59 +70,45 @@
                          'shrink_refused': '数量骤减·未保存',
                          'timeout': '巡检超时', 'error': '巡检异常'}.get(ss.status, '巡检失败') %}
     {% if ss.status == 'partial' %}
-    <div class="mt-0.5 font-sans whitespace-normal">
-      <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400"
+    <div class="mt-1" style="white-space:normal;font-family:var(--font)">
+      <span class="pill pill-xs pill-warn"
             title="上次抓取未完整（{{ ss.error or '' }}），已与上一份快照合并，未丢数据">
-        <i class="ti ti-alert-triangle text-xs"></i>{{ kind_label }} {{ ss.fetched }}{% if ss.reported_total %}/{{ ss.reported_total }}{% endif %}
+        {{ icon('alert-triangle') }}{{ kind_label }} {{ ss.fetched }}{% if ss.reported_total %}/{{ ss.reported_total }}{% endif %}
       </span>
     </div>
     {% else %}
-    <div class="mt-0.5 font-sans whitespace-normal">
-      <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400">
-        <i class="ti ti-alert-circle text-xs"></i>上次巡检失败 · {{ kind_label }}
-      </span>
+    <div class="mt-1" style="white-space:normal;font-family:var(--font)">
+      <span class="pill pill-xs pill-danger">{{ icon('alert-circle') }}上次巡检失败 · {{ kind_label }}</span>
       {% if ss.error %}
-      <div class="mt-0.5 text-[11px] leading-4 text-red-400 dark:text-red-500 max-w-[16rem] break-words">
-        {{ ss.error[:160] }}{% if ss.error|length > 160 %}…{% endif %}
-      </div>
+      <div class="xs danger mt-1 max-w-64 break">{{ ss.error[:160] }}{% if ss.error|length > 160 %}…{% endif %}</div>
       {% endif %}
     </div>
     {% endif %}
     {% endif %}
   </td>
   <!-- 操作 -->
-  <td class="px-4 py-3">
-    <div class="flex items-center gap-1.5">
+  <td>
+    <div class="cell-actions">
       {% if task.status == 'pending' %}
-      <button disabled
-              class="px-2.5 py-1 text-xs rounded border border-gray-200 dark:border-gray-600 text-gray-300 cursor-not-allowed">
-        重登中
-      </button>
+      <button disabled class="btn btn-xs">重登中</button>
       {% else %}
       <button hx-post="/accounts/{{ u }}/relogin"
               hx-target="#row-{{ u }}"
               hx-swap="outerHTML"
               title="用已保存的密码强制重新登录一次"
-              class="px-2.5 py-1 text-xs rounded border border-gray-200 dark:border-gray-600
-                     text-gray-600 dark:text-gray-300
-                     hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors cursor-pointer">
+              class="btn btn-xs">
         重登
       </button>
       {% endif %}
       {% if is_admin %}
       {% if scan_task == 'running' %}
-      <button disabled
-              class="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded border border-gray-200 dark:border-gray-600 text-gray-300 cursor-not-allowed">
-        <span class="w-1.5 h-1.5 rounded-full bg-gray-400 animate-pulse"></span>巡检中
-      </button>
+      <button disabled class="btn btn-xs"><span class="live-dot neutral" style="width:6px;height:6px"></span>巡检中</button>
       {% else %}
       <button hx-post="/accounts/{{ u }}/scan"
               hx-target="#row-{{ u }}"
               hx-swap="outerHTML"
               {% if task.status == 'pending' %}disabled{% endif %}
-              class="px-2.5 py-1 text-xs rounded border
-                     {% if scan_task == 'error' %}border-red-200 dark:border-red-800 text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40{% else %}border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40{% endif %}
-                     transition-colors cursor-pointer">
+              class="btn btn-xs {% if scan_task == 'error' %}btn-danger{% else %}btn-accent{% endif %}">
         {% if scan_task == 'error' %}巡检失败{% else %}巡检{% endif %}
       </button>
       {% endif %}
@@ -149,21 +118,15 @@
               hx-target="#modal-container"
               hx-swap="innerHTML"
               title="修改密码 / 联系人 / 分组"
-              class="flex items-center gap-1 px-2.5 py-1 text-xs rounded border
-                     border-gray-200 dark:border-gray-600
-                     text-gray-600 dark:text-gray-300
-                     hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors cursor-pointer">
-        <i class="ti ti-pencil text-sm"></i>编辑
+              class="btn btn-xs">
+        {{ icon('pencil') }}编辑
       </button>
       <button hx-post="/accounts/{{ u }}/delete"
               hx-target="#row-{{ u }}"
               hx-swap="delete"
               hx-confirm="确认删除账号 {{ u }}？此操作不可恢复。"
-              class="flex items-center gap-1 px-2.5 py-1 text-xs rounded border
-                     border-red-200 dark:border-red-800
-                     text-red-500 dark:text-red-400
-                     hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors cursor-pointer">
-        <i class="ti ti-trash text-sm"></i>删除
+              class="btn btn-xs btn-danger">
+        {{ icon('trash') }}删除
       </button>
       {% endif %}
     </div>

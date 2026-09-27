@@ -1,77 +1,70 @@
 {# The refresh URL carries the current account / dates / page, so an SSE update re-renders THIS view. #}
 <div id="changes-section"
-     class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden"
+     class="card"
      hx-get="{{ changes_url(partial=True) }}"
      hx-trigger="sse:update"
      hx-swap="outerHTML">
-  <div class="px-4 py-2.5 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
-    <span>共 {{ total }} 条变更{% if pages > 1 %} · 第 {{ page }}/{{ pages }} 页{% endif %}</span>
+  <div class="card-head">
+    <span class="card-sub">共 {{ total }} 条变更{% if pages > 1 %} · 第 {{ page }}/{{ pages }} 页{% endif %}</span>
     {% if pages > 1 %}
-    <span class="flex items-center gap-2">
+    <span class="pager">
       {% if page > 1 %}
-      <a href="{{ changes_url(page=page-1) }}" hx-get="{{ changes_url(partial=True, page=page-1) }}" hx-target="#changes-section" hx-swap="outerHTML"
-         class="px-2 py-0.5 rounded border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700">上一页</a>
+      <a href="{{ changes_url(page=page-1) }}" hx-get="{{ changes_url(partial=True, page=page-1) }}" hx-target="#changes-section" hx-swap="outerHTML" class="btn btn-xs">{{ icon('chevron-left') }}上一页</a>
       {% endif %}
       {% if page < pages %}
-      <a href="{{ changes_url(page=page+1) }}" hx-get="{{ changes_url(partial=True, page=page+1) }}" hx-target="#changes-section" hx-swap="outerHTML"
-         class="px-2 py-0.5 rounded border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700">下一页</a>
+      <a href="{{ changes_url(page=page+1) }}" hx-get="{{ changes_url(partial=True, page=page+1) }}" hx-target="#changes-section" hx-swap="outerHTML" class="btn btn-xs">下一页{{ icon('chevron-right') }}</a>
       {% endif %}
     </span>
     {% endif %}
   </div>
   {% if rows %}
-  <table class="w-full text-sm">
-    <thead>
-      <tr class="bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-700">
-        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 w-28">时间</th>
-        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 w-28">公司</th>
-        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">申请号</th>
-        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">名称</th>
-        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">变更</th>
-      </tr>
-    </thead>
-    <tbody class="divide-y divide-gray-100 dark:divide-gray-700/50">
-      {% for row in rows %}
-      <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors">
-        <td class="px-4 py-2.5 font-mono text-xs text-gray-400 dark:text-gray-500 whitespace-nowrap">
-          {{ row.timestamp | fmt_time }}
-        </td>
-        <td class="px-4 py-2.5 text-xs text-gray-600 dark:text-gray-300 truncate max-w-28" title="{{ row.company }}">
-          {{ row.company[:8] }}{% if row.company|length > 8 %}…{% endif %}
-        </td>
-        <td class="px-4 py-2.5 font-mono text-xs whitespace-nowrap">
-          {% if row.reg_no %}
-          <a href="{{ detail_url(row.reg_no) }}" target="_blank" rel="noopener"
-             title="在官网打开详情页（需登录平台）"
-             class="text-blue-600 dark:text-blue-400 hover:underline">{{ row.reg_no[:14] }}</a>
-          {% else %}<span class="text-gray-400 dark:text-gray-500">—</span>{% endif %}
-        </td>
-        <td class="px-4 py-2.5 text-xs text-gray-600 dark:text-gray-300 max-w-xs truncate" title="{{ row.name }}">
-          {{ row.name[:30] if row.name else '—' }}
-        </td>
-        <td class="px-4 py-2.5">
-          {% if row.type == 'changed' %}
-          <div class="flex items-center gap-1 flex-wrap">
-            <span class="px-1.5 py-0.5 rounded-full text-xs s-pill-{{ row.old_status_code }}">{{ row.old_status }}</span>
-            <span class="text-gray-300 dark:text-gray-600 text-xs">→</span>
-            <span class="px-1.5 py-0.5 rounded-full text-xs s-pill-{{ row.new_status_code }}">{{ row.new_status }}</span>
-          </div>
-          {% elif row.type == 'added' %}
-          <div class="flex items-center gap-1">
-            <span class="text-xs text-green-600 dark:text-green-400 font-medium">新增</span>
-            {% if row.new_status_code %}<span class="px-1.5 py-0.5 rounded-full text-xs s-pill-{{ row.new_status_code }}">{{ row.new_status }}</span>{% endif %}
-          </div>
-          {% else %}
-          <span class="text-xs text-red-500 font-medium">消失</span>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th>时间</th>
+          <th>公司</th>
+          <th>申请号</th>
+          <th class="hide-sm">名称</th>
+          <th>变更</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td class="mono xs faint nowrap">{{ row.timestamp | fmt_time }}</td>
+          <td class="sm text-2 nowrap" title="{{ row.company }}">{{ row.company[:8] }}{% if row.company|length > 8 %}…{% endif %}</td>
+          <td class="mono xs nowrap">
+            {% if row.reg_no %}
+            <a href="{{ detail_url(row.reg_no) }}" target="_blank" rel="noopener"
+               title="在官网打开详情页（需登录平台）" class="link">{{ row.reg_no[:14] }}</a>
+            {% else %}<span class="faint">—</span>{% endif %}
+          </td>
+          <td class="sm text-2 hide-sm"><div class="truncate max-w-xs" title="{{ row.name }}">{{ row.name[:30] if row.name else '—' }}</div></td>
+          <td>
+            {% if row.type == 'changed' %}
+            <div class="row row-wrap gap-1">
+              <span class="pill s-pill-{{ row.old_status_code if row.old_status_code in AUDIT_STATUS else 'x' }}">{{ row.old_status }}</span>
+              <span class="arrow">→</span>
+              <span class="pill s-pill-{{ row.new_status_code if row.new_status_code in AUDIT_STATUS else 'x' }}">{{ row.new_status }}</span>
+            </div>
+            {% elif row.type == 'added' %}
+            <div class="row gap-1">
+              <span class="pill pill-good">新增</span>
+              {% if row.new_status_code %}<span class="pill s-pill-{{ row.new_status_code if row.new_status_code in AUDIT_STATUS else 'x' }}">{{ row.new_status }}</span>{% endif %}
+            </div>
+            {% else %}
+            <span class="pill pill-danger">消失</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
   {% else %}
-  <div class="px-5 py-12 text-center text-sm text-gray-400 dark:text-gray-500">
-    {% if filter_account %}该账号在此时间段没有变更{% else %}此时间段没有变更记录{% endif %}
+  <div class="empty">
+    {{ icon('inbox') }}{% if filter_account %}该账号在此时间段没有变更{% else %}此时间段没有变更记录{% endif %}
   </div>
   {% endif %}
 </div>

@@ -7,48 +7,37 @@
   <title>登录 — 数智通监控</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <script>
-    (function(){var s=localStorage.getItem('dark'),m=window.matchMedia('(prefers-color-scheme:dark)').matches;if(s==='1'||(s===null&&m))document.documentElement.classList.add('dark');})();
+    (function(){var s=null;try{s=localStorage.getItem('dark');}catch(e){}var m=window.matchMedia('(prefers-color-scheme:dark)').matches;if(s==='1'||(s===null&&m))document.documentElement.classList.add('dark');})();
   </script>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>tailwind.config={darkMode:'class'}</script>
-  <link rel="stylesheet" href="/static/tabler-icons.min.css">
+  <link rel="stylesheet" href="{{ static_url('ui.css') }}">
 </head>
-<body class="bg-gray-50 dark:bg-gray-900 min-h-screen flex items-center justify-center font-sans">
-  <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-sm w-80 p-8">
-    <div class="flex items-center justify-center gap-2 mb-6">
-      <i class="ti ti-database text-blue-500 text-xl"></i>
-      <span class="text-base font-medium text-gray-800 dark:text-gray-100">数智通监控</span>
+<body class="auth">
+  <div class="card auth-card">
+    <div class="auth-brand">
+      <span class="brand-mark">{{ icon('database') }}</span>
+      <div>
+        <div class="auth-title">数智通监控</div>
+        <div class="auth-sub">数据知识产权登记进度监控台</div>
+      </div>
     </div>
 
     {% if error %}
-    <div class="mb-4 px-3 py-2 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-600 dark:text-red-400">
-      {{ error }}
-    </div>
+    <div class="alert alert-danger">{{ icon('alert-circle') }}<div>{{ error }}</div></div>
     {% endif %}
 
-    <form method="post" action="/login">
-      <div class="space-y-4">
-        <div>
-          <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">用户名</label>
-          <input type="text" name="username" required autofocus
-                 value="{{ form_username or '' }}"
-                 class="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-600
-                        bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100
-                        focus:outline-none focus:ring-2 focus:ring-blue-500">
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">密码</label>
-          <input type="password" name="password" required
-                 class="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-600
-                        bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100
-                        focus:outline-none focus:ring-2 focus:ring-blue-500">
-        </div>
+    <form method="post" action="/login" class="auth-form">
+      <div class="field">
+        <label class="label" for="login-username">用户名</label>
+        <input id="login-username" class="input" type="text" name="username" required autofocus autocomplete="username"
+               value="{{ form_username or '' }}">
       </div>
-      <button type="submit"
-              class="mt-6 w-full px-4 py-2 text-sm rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors">
-        登 录
-      </button>
+      <div class="field">
+        <label class="label" for="login-password">密码</label>
+        <input id="login-password" class="input" type="password" name="password" required autocomplete="current-password">
+      </div>
+      <button type="submit" class="btn btn-primary btn-block">登 录</button>
     </form>
+    <div class="auth-foot">内部系统 · 仅限授权人员使用</div>
   </div>
 </body>
 </html>
