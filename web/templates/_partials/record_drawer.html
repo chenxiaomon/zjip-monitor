@@ -4,7 +4,7 @@
 #}
 {% set kind_label = {'补正': '补正通知书', '公示': '公示通知书', '公告': '登记公告', '不予登记': '不予登记通知书', '异议': '异议通知书'} %}
 <div class="drawer-backdrop" onclick="closeDrawer()"></div>
-<aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+<aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" tabindex="-1" data-autofocus>
   <header class="drawer-head">
     <div class="grow">
       <div class="xs muted truncate">{{ acc.company }} · <span class="mono">{{ acc.username }}</span></div>
@@ -16,7 +16,7 @@
            title="在官网打开详情页（需登录平台）">{{ reg_no }}{{ icon('external-link') }}</a>
       </div>
     </div>
-    <button type="button" class="icon-btn" onclick="closeDrawer()" title="关闭（Esc）" data-autofocus>{{ icon('x') }}</button>
+    <button type="button" class="icon-btn" onclick="closeDrawer()" title="关闭（Esc）">{{ icon('x') }}</button>
   </header>
 
   <div class="drawer-body">
