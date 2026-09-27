@@ -130,10 +130,32 @@ python scripts/decrypt_accounts.py --out config/accounts.yaml   # 导出明文�
   登记证书期满前 180 天起列入「可续展」（续展登记后不再列出）。分组账号只看自己的企业。
 - 登记记录页：待补正的行带「截止 MM-DD · 剩 N 天」标签，快到期的登记成功记录带「MM-DD 到期」标签。
 - 运维横幅：补正不足 `ops_alerts.correction_warn_days` 天到期时提醒。
+- 「期限日历」页（`/calendar?month=YYYY-MM`）：补正截止与证书到期排在月历上，下方是本月议程，侧栏列出
+  所有已逾期的期限和「截止日期未知」的补正。证书到期在这里不受 180 天窗口限制，远期的也能看到。
+- 记录详情抽屉：在登记记录、待办、变更历史、日历里点一条记录，右侧滑出它的补正要点（含历次补正通知）、
+  证书有效期、附件、按登记号过滤的完整状态历史和平台原始数据。
 
 历史文件的 `facts` 由 `python scripts/backfill_notice_facts.py` 一次性补齐；已经释放到本机归档、服务器上没有文件的公告，
 用本机的 `python -m archive push-facts` 把解析结果送到服务器。通知书没有文字层或解析失败时，待办里显示「截止日期未知」，
 不会漏掉这条申请。
+
+## 登记趋势（每日统计）
+
+仪表盘「登记趋势」和指标卡上的迷你折线，读的是 `data/control/daily_stats.json`：每轮巡检收尾时
+（所有出口，持全局巡检锁）按北京日期记下各公司「申请年份 × 状态码」的记录数，同一天后一轮覆盖前一轮，
+保留 400 天，全年约 1.3MB。口径与仪表盘卡片完全一致，web 请求只读这个小文件（按 mtime 缓存）。
+
+- 文件按公司名记录，分组账号只汇总自己能看到的企业；已删除账号的历史自然不再显示。
+- 新部署后先回填一次，用服务器上现存的快照补出之前约两周：
+
+  ```bash
+  .venv/bin/python scripts/backfill_daily_stats.py --dry-run   # 看能补多少天
+  .venv/bin/python scripts/backfill_daily_stats.py
+  ```
+
+  回填持巡检锁（有巡检在跑会退出码 2，稍后再试），已有的日期不覆盖；某家公司某天巡检失败时沿用
+  它上一次的数字，不会出现假的下跌。
+- 文件损坏时会被改名为 `daily_stats.json.bad-<时间>` 留存，然后从空白重新记录。
 
 ## 控制台界面
 
@@ -157,6 +179,24 @@ cdn.tailwindcss.com 和 unpkg 现场拉 Tailwind 与 htmx，外网一抖整站�
   `Cache-Control: immutable` 一年，不带的一小时；部署新版本后浏览器自动拿到新文件，不需要强刷。
 - **手机端**：900px 以下侧边栏折叠成抽屉，表格在卡片内横向滚动，次要列（行业、申请时间）在
   640px 以下隐藏；顶栏的全局搜索框直接跳到「登记记录」页按关键字过滤。
+- **手机桌面图标**：`manifest.webmanifest` 加三枚 PNG 图标，手机浏览器「添加到主屏幕」后有正式
+  图标和名称。服务器只有 IP、走明文 HTTP，所以没有 Service Worker、Android 也不弹安装提示。
+  图标从 `web/static/app-icon.svg` 渲染，改了图形后用本机 Playwright 重新生成：
+
+  ```bash
+  .venv/bin/python - <<'PY'
+  from pathlib import Path
+  from playwright.sync_api import sync_playwright
+  svg = Path("web/static/app-icon.svg").read_text(encoding="utf-8")
+  with sync_playwright() as p:
+      b = p.chromium.launch()
+      for name, n in (("icon-512.png", 512), ("icon-192.png", 192), ("apple-touch-icon.png", 180)):
+          page = b.new_page(viewport={"width": n, "height": n})
+          page.set_content('<body style="margin:0">' + svg.replace("<svg ", '<svg width="%d" height="%d" ' % (n, n), 1))
+          page.locator("svg").screenshot(path="web/static/" + name)
+      b.close()
+  PY
+  ```
 - 想再省一点带宽，可以在 nginx 里对 `text/css application/javascript image/svg+xml` 开 `gzip on`
   （压缩后总量约 30KB）；应用层没有开 gzip，是为了不影响 SSE 长连接。
 
