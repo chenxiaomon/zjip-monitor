@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import mimetypes
 import os
 import secrets
 from contextlib import asynccontextmanager
@@ -240,6 +241,8 @@ async def _auth_middleware(request: Request, call_next) -> Response:  # type: ig
     return await call_next(request)
 
 
+# Python's table does not know the web-app manifest type on every platform.
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 app.mount("/static", StaticFiles(directory=_HERE / "static"), name="static")
 
 
