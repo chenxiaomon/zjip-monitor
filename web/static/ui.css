@@ -685,3 +685,11 @@ a.todo-title:hover, .link-quiet:hover { color: var(--accent-text); text-decorati
   .cal-head div { padding: 6px 4px; text-align: center; }
   .cal-num { margin: 0 auto; }
 }
+
+/* ---------- 可排序表头 ---------- */
+.th-sort { display: inline-flex; align-items: center; gap: 3px; color: inherit; }
+.th-sort:hover, .th-sort.on { color: var(--text); }
+.th-sort .ic { width: 12px; height: 12px; }
+.th-sort .ic.idle { opacity: .35; }
+.th-sort:hover .ic.idle { opacity: .8; }
+.chip .ic { width: 12px; height: 12px; }

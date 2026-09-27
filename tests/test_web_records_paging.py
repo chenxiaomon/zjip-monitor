@@ -40,8 +40,8 @@ def test_every_link_keeps_the_other_filters(many_records, web_client, login_as):
     html = login_as(web_client, *ADMIN).get(
         "/records?account=ua1&status=7&q=%E6%95%B0%E6%8D%AE&start_date=2020-01-01&end_date=2030-12-31&page=2"
     ).text
-    # status chip keeps account/q/dates, resets the page
-    assert 'href="/records?account=ua1&amp;status=2&amp;q=%E6%95%B0%E6%8D%AE&amp;start_date=2020-01-01&amp;end_date=2030-12-31"' in html
+    # status chip keeps account/q/dates, resets the page; chips toggle, so 2 joins the selected 7
+    assert 'href="/records?account=ua1&amp;status=2,7&amp;q=%E6%95%B0%E6%8D%AE&amp;start_date=2020-01-01&amp;end_date=2030-12-31"' in html
     # account chip keeps status/q/dates
     assert 'href="/records?account=ub1&amp;status=7&amp;q=%E6%95%B0%E6%8D%AE&amp;start_date=2020-01-01&amp;end_date=2030-12-31"' in html
     # 清除 drops q and dates but keeps account/status

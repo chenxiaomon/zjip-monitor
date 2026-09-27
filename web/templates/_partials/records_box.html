@@ -1,32 +1,63 @@
-<!-- Count header + table: one HTMX swap unit so the 共N条 count never goes stale -->
-<div class="card" id="records-table-box">
-  <div class="card-head">
-    <span class="card-sub">共 {{ total }} 条记录{% if pages > 1 %} · 第 {{ page }}/{{ pages }} 页{% endif %}（点击行查看详情）</span>
-    <span class="pager">
-      {% if page > 1 %}
-      <a href="{{ records_url(page=page-1) }}" hx-get="{{ records_url(partial=True, page=page-1) }}" hx-target="#records-table-box" hx-swap="outerHTML" class="btn btn-xs">{{ icon('chevron-left') }}上一页</a>
-      {% endif %}
-      {% if page < pages %}
-      <a href="{{ records_url(page=page+1) }}" hx-get="{{ records_url(partial=True, page=page+1) }}" hx-target="#records-table-box" hx-swap="outerHTML" class="btn btn-xs">下一页{{ icon('chevron-right') }}</a>
-      {% endif %}
-      {# Rendered with the table, so the link always carries the filters in effect #}
-      <a href="{{ records_url(csv=True) }}" title="导出当前筛选的全部记录（Excel 可直接打开）" class="btn btn-xs">{{ icon('download') }}导出 CSV</a>
-    </span>
+<!-- The swap unit: filter chips + count + table, so neither the 共N条 count nor
+     the chips' links can go stale after an HTMX refresh. Chips and sortable
+     headers are plain links (a full page load keeps the form's hidden inputs
+     in step); the pager and typing swap only this box. -->
+<div id="records-table-box" class="stack" style="gap:12px">
+  <div class="card">
+    <div class="card-body filters" style="margin-bottom:0">
+      <div class="chips" id="filter-bar">
+        <a href="{{ records_url(account='', page=1) }}" class="chip{% if not filter_account %} active{% endif %}">全部账号</a>
+        {% for acc in accounts_list %}
+        <a href="{{ records_url(account=acc.username, page=1) }}" class="chip{% if filter_account == acc.username %} active{% endif %}">{{ acc.company }}</a>
+        {% endfor %}
+      </div>
+      <div class="chips" aria-label="按状态筛选（可多选）">
+        <a href="{{ records_url(status='', page=1) }}" class="chip{% if not filter_statuses %} active{% endif %}">全部状态</a>
+        {% for code, label in AUDIT_STATUS.items() %}
+        {% set on = code in filter_statuses %}
+        <a href="{{ records_url(status=status_toggle(code), page=1) }}" aria-pressed="{{ 'true' if on else 'false' }}"
+           class="chip s-chip s-pill-{{ code }}{% if on %} active{% endif %}">{% if on %}{{ icon('check') }}{% endif %}{{ label }}</a>
+        {% endfor %}
+        {% if filter_statuses|length > 1 %}<span class="xs muted">已选 {{ filter_statuses|length }} 个状态</span>{% endif %}
+      </div>
+    </div>
   </div>
-  <div class="table-wrap">
-    <table class="tbl">
-      <thead>
-        <tr>
-          <th>公司 / 账号</th>
-          <th>登记编号</th>
-          <th>数据名称</th>
-          <th class="hide-sm">行业</th>
-          <th class="hide-sm">申请时间</th>
-          <th>状态</th>
-          <th>附件</th>
-        </tr>
-      </thead>
-      {% include "_partials/records_table.html" %}
-    </table>
+
+  <div class="card">
+    <div class="card-head">
+      <span class="card-sub">共 {{ total }} 条记录{% if pages > 1 %} · 第 {{ page }}/{{ pages }} 页{% endif %}（点击行查看详情）</span>
+      <span class="pager">
+        {% if page > 1 %}
+        <a href="{{ records_url(page=page-1) }}" hx-get="{{ records_url(partial=True, page=page-1) }}" hx-target="#records-table-box" hx-swap="outerHTML" class="btn btn-xs">{{ icon('chevron-left') }}上一页</a>
+        {% endif %}
+        {% if page < pages %}
+        <a href="{{ records_url(page=page+1) }}" hx-get="{{ records_url(partial=True, page=page+1) }}" hx-target="#records-table-box" hx-swap="outerHTML" class="btn btn-xs">下一页{{ icon('chevron-right') }}</a>
+        {% endif %}
+        {# Rendered with the table, so the link always carries the filters in effect #}
+        <a href="{{ records_url(csv=True) }}" title="导出当前筛选的全部记录（Excel 可直接打开）" class="btn btn-xs">{{ icon('download') }}导出 CSV</a>
+      </span>
+    </div>
+    {% macro th_sort(column, label, cls='') -%}
+    {%- set h = sort_header(column) -%}
+    <th class="{{ cls }}"{% if h.state %} aria-sort="{{ 'ascending' if h.state == 'asc' else 'descending' }}"{% endif %}>
+      <a class="th-sort{% if h.state %} on{% endif %}" href="{{ h.url }}" title="按{{ label }}排序">{{ label }}{% if h.state == 'asc' %}{{ icon('chevron-up') }}{% elif h.state == 'desc' %}{{ icon('chevron-down') }}{% else %}{{ icon('arrows-sort', 'idle') }}{% endif %}</a>
+    </th>
+    {%- endmacro %}
+    <div class="table-wrap">
+      <table class="tbl">
+        <thead>
+          <tr>
+            {{ th_sort('company', '公司 / 账号') }}
+            <th>登记编号</th>
+            {{ th_sort('name', '数据名称') }}
+            <th class="hide-sm">行业</th>
+            {{ th_sort('apply', '申请时间', 'hide-sm') }}
+            {{ th_sort('status', '状态') }}
+            <th>附件</th>
+          </tr>
+        </thead>
+        {% include "_partials/records_table.html" %}
+      </table>
+    </div>
   </div>
 </div>

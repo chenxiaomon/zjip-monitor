@@ -31,28 +31,19 @@
 </div>
 {% endif %}
 
-<!-- Filters: account chips, status chips, keyword + date range -->
-<div class="card mb-4">
-  <div class="card-body filters" style="margin-bottom:0">
-    <div class="chips" id="filter-bar">
-      <a href="{{ records_url(account='', page=1) }}" class="chip{% if not filter_account %} active{% endif %}">全部账号</a>
-      {% for acc in accounts_list %}
-      <a href="{{ records_url(account=acc.username, page=1) }}" class="chip{% if filter_account == acc.username %} active{% endif %}">{{ acc.company }}</a>
-      {% endfor %}
-    </div>
-    <div class="chips">
-      <a href="{{ records_url(status='', page=1) }}" class="chip{% if filter_status is none %} active{% endif %}">全部状态</a>
-      {% for code, label in AUDIT_STATUS.items() %}
-      <a href="{{ records_url(status=code, page=1) }}" class="chip s-chip s-pill-{{ code }}{% if filter_status == code %} active{% endif %}">{{ label }}</a>
-      {% endfor %}
-    </div>
+<!-- Keyword + date range. Outside the swap unit, so typing never loses focus;
+     the chips live inside it (_partials/records_box.html) and always carry
+     the keyword that is actually in effect. -->
+<div class="card mb-3">
+  <div class="card-body" style="padding-top:12px;padding-bottom:12px">
     <form class="row row-wrap gap-2" id="records-filter-form"
           hx-get="/partials/records-table"
           hx-target="#records-table-box"
           hx-swap="outerHTML"
           hx-trigger="change">
       <input type="hidden" name="account" value="{{ filter_account or '' }}">
-      <input type="hidden" name="status" value="{{ filter_status if filter_status is not none else '' }}">
+      <input type="hidden" name="status" value="{{ status_param }}">
+      <input type="hidden" name="sort" value="{{ sort }}">
       <div class="search-field">
         {{ icon('search') }}
         <input type="search" name="q" value="{{ q }}"
