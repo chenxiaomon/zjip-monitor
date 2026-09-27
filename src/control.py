@@ -228,6 +228,32 @@ class RunContext:
         return False
 
 
+def _schedule_file() -> Path:
+    # Computed per call so tests that move _CONTROL_DIR move this file too.
+    return _CONTROL_DIR / "schedule.json"
+
+
+def write_schedule_state(crons: list[str], source: str) -> None:
+    """The daemon publishes the schedule it is actually running (source:
+    settings / default / cli), so the settings page can say whether a saved
+    change has been picked up. Never raises."""
+    try:
+        atomic_write_text(_schedule_file(), json.dumps({
+            "crons": list(crons), "source": source, "pid": os.getpid(),
+            "loaded_at": datetime.now(timezone.utc).isoformat(),
+        }, ensure_ascii=False))
+    except Exception as exc:  # noqa: BLE001 — bookkeeping only
+        logger.warning(f"schedule.json 写入失败（非致命）: {exc!r}")
+
+
+def read_schedule_state() -> dict | None:
+    try:
+        data = json.loads(_schedule_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) and isinstance(data.get("crons"), list) else None
+
+
 def try_acquire(kind: str, trigger: str) -> RunContext | None:
     """Take the global run lock without blocking.
 

@@ -693,3 +693,8 @@ a.todo-title:hover, .link-quiet:hover { color: var(--accent-text); text-decorati
 .th-sort .ic.idle { opacity: .35; }
 .th-sort:hover .ic.idle { opacity: .8; }
 .chip .ic { width: 12px; height: 12px; }
+
+/* ---------- 设置页 ---------- */
+.input.invalid { border-color: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
+.schedule-preview { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.run-list { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; }

@@ -86,10 +86,13 @@
       <label class="label">收件人（多个用英文逗号分隔）</label>
       <input type="text" name="to_addrs" value="{{ c.get('to_addrs', '') }}" class="input input-sm">
     </div>
-    <label class="check">
-      <input type="checkbox" name="use_tls" value="on" {% if c.get('use_tls', True) %}checked{% endif %}>
-      <span>使用 TLS</span>
-    </label>
+    <div class="field">
+      <label class="check">
+        <input type="checkbox" name="use_tls" value="on" {% if c.get('use_tls', True) %}checked{% endif %}>
+        <span>SSL 直连</span>
+      </label>
+      <p class="help">勾选：SSL 直连，常见端口 465。不勾：普通连接后用 STARTTLS 加密，常见端口 587。两种都是加密传输。</p>
+    </div>
     {% endif %}
 
     <div>

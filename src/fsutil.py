@@ -19,12 +19,17 @@ def _tmp_for(path: Path) -> Path:
     )
 
 
-def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
-    """Write text so readers never observe a truncated file."""
+def atomic_write_text(path: Path, text: str, encoding: str = "utf-8", mode: int | None = None) -> None:
+    """Write text so readers never observe a truncated file.
+
+    mode: permission bits for the new file (set before it replaces the old
+    one, so there is no moment with looser permissions)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = _tmp_for(path)
     try:
         tmp.write_text(text, encoding=encoding)
+        if mode is not None:
+            os.chmod(tmp, mode)
         os.replace(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)

@@ -8,6 +8,11 @@ Usage:
 Default schedule (settings.yaml → schedule.crons):
     09:00 and 18:00 every day (Asia/Shanghai)
 
+The schedule is hot-reloaded: a job checks settings.yaml once a minute and
+reschedules when schedule.crons really changed (not on every console save,
+which rewrites the whole file). The schedule actually in force is published
+to data/control/schedule.json for the settings page.
+
 Press Ctrl-C to stop.
 """
 
@@ -35,18 +40,106 @@ from src.main import run_all
 _SETTINGS = ROOT / "config" / "settings.yaml"
 _DEFAULT_CRONS = ["0 9 * * *", "0 18 * * *"]
 _TIMEZONE = "Asia/Shanghai"
+_WATCH_SECONDS = 60
+_JOB_PREFIX = "cron:"
+
+
+class _Unreadable(Exception):
+    pass
+
+
+def _read_crons() -> list[str]:
+    """schedule.crons as configured ([] when not set or the file is missing).
+    Raises _Unreadable when the file exists but cannot be read or parsed."""
+    try:
+        text = _SETTINGS.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        raise _Unreadable(str(exc)) from exc
+    try:
+        data = yaml.safe_load(text) or {}
+    except yaml.YAMLError as exc:
+        raise _Unreadable(str(exc)) from exc
+    schedule = data.get("schedule") if isinstance(data, dict) else None
+    crons = schedule.get("crons") if isinstance(schedule, dict) else None
+    return [str(c) for c in crons] if isinstance(crons, list) else []
 
 
 def _load_crons() -> list[str]:
     try:
-        if _SETTINGS.exists():
-            data = yaml.safe_load(_SETTINGS.read_text(encoding="utf-8")) or {}
-            crons = data.get("schedule", {}).get("crons")
-            if crons:
-                return list(crons)
-    except Exception as exc:
+        crons = _read_crons()
+    except _Unreadable as exc:
         logger.error(f"读取 settings.yaml 失败（{exc}）— 使用默认计划 {_DEFAULT_CRONS}")
-    return _DEFAULT_CRONS
+        return list(_DEFAULT_CRONS)
+    return crons or list(_DEFAULT_CRONS)
+
+
+def _settings_key() -> tuple[int, int] | None:
+    try:
+        st = _SETTINGS.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _valid(crons: list[str]) -> list[str]:
+    ok = []
+    for expr in crons:
+        try:
+            CronTrigger.from_crontab(expr, timezone=_TIMEZONE)
+        except ValueError as exc:
+            logger.error(f"非法 cron 表达式 {expr!r}（{exc}）— 已跳过")
+            continue
+        ok.append(expr)
+    return ok
+
+
+def _apply_schedule(scheduler, crons: list[str], source: str) -> list[str]:
+    """Replace the scan jobs with `crons` (already validated) and publish the
+    result. Other jobs (the wedge probe, the schedule watch) are untouched."""
+    for job in scheduler.get_jobs():
+        if job.id.startswith(_JOB_PREFIX):
+            job.remove()
+    for i, expr in enumerate(crons):
+        scheduler.add_job(
+            _job, CronTrigger.from_crontab(expr, timezone=_TIMEZONE),
+            id=f"{_JOB_PREFIX}{i}", misfire_grace_time=300,
+        )
+        logger.info(f"Scheduled: {expr} ({_TIMEZONE})")
+    control.write_schedule_state(crons, source)
+    return list(crons)
+
+
+class _ScheduleWatch:
+    """Runs every minute: settings.yaml unchanged → nothing; changed but the
+    crons are the same (a notify or login save) → nothing; an unreadable
+    file or a list with no valid expression → keep the running schedule.
+    Only a real, valid change reschedules."""
+
+    def __init__(self, scheduler, current: list[str], key: tuple[int, int] | None):
+        self.scheduler = scheduler
+        self.current = list(current)
+        self.key = key
+
+    def __call__(self) -> None:
+        key = _settings_key()
+        if key == self.key:
+            return
+        self.key = key
+        try:
+            configured = _read_crons()
+        except _Unreadable as exc:
+            logger.warning(f"settings.yaml 暂时读不了（{exc}）— 保持现有巡检计划 {self.current}")
+            return
+        valid = _valid(configured or list(_DEFAULT_CRONS))
+        if not valid:
+            logger.error(f"新的巡检计划里没有可用的 cron 表达式 — 保持现有计划 {self.current}")
+            return
+        if valid == self.current:
+            return
+        logger.info(f"巡检计划已热加载：{self.current} → {valid}")
+        self.current = _apply_schedule(self.scheduler, valid, "settings" if configured else "default")
 
 
 def _exit_if_wedged_on_self() -> None:
@@ -112,26 +205,24 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    crons = [args.cron] if args.cron else _load_crons()
-
     scheduler = BlockingScheduler(timezone=_TIMEZONE)
-    for expr in crons:
-        # One bad expression must not keep the daemon from starting
-        try:
-            trigger = CronTrigger.from_crontab(expr, timezone=_TIMEZONE)
-        except ValueError as exc:
-            logger.error(f"非法 cron 表达式 {expr!r}（{exc}）— 已跳过")
-            continue
-        scheduler.add_job(_job, trigger, misfire_grace_time=300)
-        logger.info(f"Scheduled: {expr} ({_TIMEZONE})")
-
-    if not scheduler.get_jobs():
+    key = _settings_key()  # before reading, so an edit in between is still noticed
+    if args.cron:
+        crons, source = [args.cron], "cli"
+    else:
+        crons = _load_crons()
+        source = "default" if crons == _DEFAULT_CRONS else "settings"
+    # One bad expression must not keep the daemon from starting
+    valid = _valid(crons)
+    if not valid:
         logger.error(f"没有可用的 cron 表达式 — 回退默认计划 {_DEFAULT_CRONS}")
-        for expr in _DEFAULT_CRONS:
-            scheduler.add_job(
-                _job, CronTrigger.from_crontab(expr, timezone=_TIMEZONE),
-                misfire_grace_time=300,
-            )
+        valid, source = list(_DEFAULT_CRONS), "default"
+    applied = _apply_schedule(scheduler, valid, source)
+
+    if not args.cron:
+        # --cron pins the schedule for this process; otherwise follow settings.yaml.
+        scheduler.add_job(_ScheduleWatch(scheduler, applied, key), "interval",
+                          seconds=_WATCH_SECONDS, id="schedule-watch")
 
     # Self-heal probe: catches a run wedged inside this process within minutes
     # instead of waiting for the next cron slot (which APScheduler may even

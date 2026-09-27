@@ -93,7 +93,9 @@ def _entry(data: dict, username: str, company: str | None = None) -> dict:
 
 
 def _max_failures() -> int:
-    raw = get_settings().get("login", {}).get(
+    login = get_settings().get("login")
+    # `login:` left empty in the YAML is None, not a mapping.
+    raw = (login if isinstance(login, dict) else {}).get(
         "max_consecutive_failures", _DEFAULT_MAX_CONSECUTIVE_FAILURES
     )
     try:

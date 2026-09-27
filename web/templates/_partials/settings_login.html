@@ -21,10 +21,14 @@
       <input id="token-age" type="number" name="token_max_age_hours" value="{{ login.get('token_max_age_hours', 12) }}"
              min="1" max="72" class="input input-sm" style="width:6rem">
     </div>
-    <label class="check">
-      <input type="checkbox" name="headless" value="on" {% if login.get('headless', True) %}checked{% endif %}>
-      <span>无头模式（headless browser，仅浏览器登录时生效）</span>
-    </label>
+    {% if error %}<div class="alert alert-danger alert-inline">{{ icon('alert-circle') }}<div>{{ error }}</div></div>{% endif %}
+    <div class="field">
+      <label class="check">
+        <input type="checkbox" name="headless" value="on" {% if login.get('headless', True) %}checked{% endif %}>
+        <span>无头模式（headless browser，仅浏览器登录时生效）</span>
+      </label>
+      <p class="help">服务器没有显示器，取消勾选会让浏览器登录失败；只在本机手动过验证码时取消。</p>
+    </div>
     <div class="help">浏览器：{{ login.get('browser', 'chromium') }}（只读，仅浏览器登录时使用）</div>
     <div>
       <button type="submit" class="btn btn-sm btn-primary">保存参数</button>

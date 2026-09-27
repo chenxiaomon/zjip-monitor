@@ -1,20 +1,18 @@
-<template id="cron-tpl">
-  <div class="row gap-2">
-    <input type="text" name="crons" placeholder="0 9 * * *" class="input input-sm mono grow">
-    <button type="button" onclick="this.parentElement.remove()" class="icon-btn" title="删除此时间点">{{ icon('x') }}</button>
-  </div>
-</template>
-
 <div id="schedule-section" class="card">
+  <template id="cron-tpl">
+    <div class="row gap-2">
+      <input type="text" name="crons" placeholder="0 9 * * *" class="input input-sm mono grow" aria-label="cron 表达式">
+      <button type="button" onclick="this.parentElement.remove()" class="icon-btn" title="删除此时间点">{{ icon('x') }}</button>
+    </div>
+  </template>
   <div class="card-head">
     <span class="card-title">{{ icon('calendar-event') }}巡检计划</span>
-    {% if saved %}<span class="pill pill-good">{{ icon('check') }}已保存，重启 daemon 后生效</span>{% else %}<span class="card-sub">cron 表达式 · Asia/Shanghai</span>{% endif %}
+    {% if saved %}<span class="pill pill-good">{{ icon('check') }}已保存，daemon 约 1 分钟内采用</span>{% else %}<span class="card-sub">cron 表达式 · 北京时间</span>{% endif %}
   </div>
   <div class="card-body stack">
     {% if error %}
     <div class="alert alert-danger alert-inline">{{ icon('alert-circle') }}<div>{{ error }}</div></div>
     {% endif %}
-    <p class="help">修改后需在服务器重启 daemon（systemctl restart zjip-daemon）方可生效</p>
     <form hx-post="/settings/schedule"
           hx-target="#schedule-section"
           hx-swap="outerHTML"
@@ -22,7 +20,7 @@
       <div id="cron-list" class="stack" style="gap:8px">
         {% for cron in crons %}
         <div class="row gap-2">
-          <input type="text" name="crons" value="{{ cron }}" placeholder="0 9 * * *" class="input input-sm mono grow">
+          <input type="text" name="crons" value="{{ cron }}" placeholder="0 9 * * *" class="input input-sm mono grow" aria-label="cron 表达式">
           <button type="button" onclick="this.parentElement.remove()" class="icon-btn" title="删除此时间点">{{ icon('x') }}</button>
         </div>
         {% endfor %}
@@ -36,5 +34,23 @@
         <button type="submit" class="btn btn-sm btn-primary">保存计划</button>
       </div>
     </form>
+
+    <div class="schedule-preview">
+      <div class="xs muted mb-1">接下来 {{ next_runs|length }} 次运行{% if not crons %}（未保存计划，daemon 用默认的 {{ default_crons | join('、') }}）{% endif %}</div>
+      <ul class="run-list">
+        {% for r in next_runs %}<li><span class="mono">{{ r.when }}</span> <span class="faint">周{{ r.weekday }}</span></li>{% endfor %}
+      </ul>
+      <p class="help mt-2">星期字段按 0 = 周一计数（与常见 cron 的 0 = 周日不同），以上面列出的日期为准。</p>
+    </div>
+
+    <div class="xs row gap-1">
+      {% if daemon.kind == 'adopted' %}
+      <span class="good row gap-1">{{ icon('circle-check') }}daemon 正在按这份计划运行</span><span class="faint">（{{ daemon.loaded_at | fmt_time }} 读取）</span>
+      {% elif daemon.kind == 'pending' %}
+      <span class="warn row gap-1">{{ icon('hourglass-high') }}等待 daemon 读取新计划</span><span class="faint">（当前运行：{{ daemon.crons | join('、') or '无' }}）</span>
+      {% else %}
+      <span class="faint row gap-1">{{ icon('info-circle') }}daemon 还没有上报它在用的计划（刚部署或未运行时会这样）</span>
+      {% endif %}
+    </div>
   </div>
 </div>
