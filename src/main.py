@@ -24,7 +24,7 @@ from typing import Any
 
 from loguru import logger
 
-from . import control, diskstat, status_store
+from . import control, daily_stats, diskstat, status_store
 from .attachments import sync_attachments
 from .config_loader import Account, ConfigError, load_accounts
 from .control import CancelToken
@@ -139,19 +139,43 @@ def _prune_data() -> None:
         logger.warning(f"Data pruning failed (non-fatal): {exc!r}")
 
 
+def _record_daily_stats() -> None:
+    """Today's per-company status counts → data/control/daily_stats.json.
+
+    Counts every account's latest snapshot, not just the ones this round
+    touched: a single-account scan or a failed company still belongs in
+    today's totals with the numbers it last had. Goes through this module's
+    load_accounts name so tests (and a bad accounts file) behave the same
+    way run_all does.
+    """
+    try:
+        accounts = load_accounts()
+    except Exception as exc:  # noqa: BLE001 — a bad accounts file already failed the run
+        logger.warning(f"每日统计跳过：读取账号失败 {exc!r}")
+        return
+    daily_stats.record_round(accounts, load_latest_snapshot)
+
+
 def _finalize_run(ctx: control.RunContext, status: str, error: str | None = None) -> None:
-    """Prune, then publish the final state and release the global run lock.
+    """Prune, record today's counts, then publish the final state and
+    release the global run lock.
 
     Every exit from run_all()/run_single() goes through here — done,
     cancelled, crashed — because the disk is tightest exactly when runs
     fail or get interrupted, and pruning must happen while the lock is
     still ours (another process's run could otherwise be writing the
-    snapshots we are deleting). A prune failure must never cost the lock.
+    snapshots we are deleting). The daily counts are written here too, so
+    the dashboard's trend has one entry per day whichever way the round
+    ended. Neither a prune nor a stats failure may cost the lock.
     """
     try:
         _prune_data()
     except Exception as exc:  # _prune_data catches its own; belt and braces
         logger.warning(f"Data pruning failed (non-fatal): {exc!r}")
+    try:
+        _record_daily_stats()
+    except Exception as exc:  # record_round catches its own; belt and braces
+        logger.warning(f"每日统计失败（非致命）: {exc!r}")
     ctx.finish(status, error=error)
 
 

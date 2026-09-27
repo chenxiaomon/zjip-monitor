@@ -128,3 +128,76 @@ def test_status_distribution_helper_orders_by_family_then_code():
     ]
     assert dist["segments"][-1]["label"] == "状态99"
     assert status_distribution([]) == {"total": 0, "segments": []}
+
+
+# ---------------------------------------------------------------------------
+# 登记趋势 (data/control/daily_stats.json)
+# ---------------------------------------------------------------------------
+
+def _seed_trend(days_back_and_counts):
+    """{days_back: {company: {"2026": {"7": n, ...}}}} → the trend file, dated from today."""
+    from datetime import timedelta as _td
+
+    from src import daily_stats
+
+    today = daily_stats.local_date()
+    daily_stats._write({
+        (today - _td(days=back)).isoformat(): {"at": "x", "companies": companies}
+        for back, companies in days_back_and_counts.items()
+    })
+
+
+def test_trend_shows_an_empty_state_until_two_days_exist(board, web_client, login_as):
+    html = login_as(web_client, *ADMIN).get("/").text
+    assert 'id="trend-card"' in html and "还没有趋势数据" in html
+    assert 'class="spark"' not in html and "较 7 天前" not in html
+
+    _seed_trend({0: {"甲 公司": {"2026": {"7": 1}}}})
+    html = login_as(web_client, *ADMIN).get("/").text
+    assert "趋势从 " in html and 'data-chart=' not in html
+
+
+def test_trend_chart_sparklines_and_deltas(board, web_client, login_as):
+    _seed_trend({
+        8: {"甲 公司": {"2026": {"7": 1, "2": 3}}, "丙公司": {"2026": {"7": 1}}},
+        7: {"甲 公司": {"2026": {"7": 1, "2": 3}}, "丙公司": {"2026": {"7": 1}}},
+        0: {"甲 公司": {"2026": {"7": 2, "2": 1}}, "丙公司": {"2026": {"7": 3}}},
+        1: {"已删除的公司": {"2026": {"7": 50}}},  # not a visible account → ignored
+    })
+    html = login_as(web_client, *ADMIN).get("/").text
+    assert 'class="chart" data-chart="' in html
+    assert re.search(r'登记总数<b>6</b>', html) and re.search(r'登记成功<b>5</b>', html)
+    assert html.count('class="spark"') == 3
+    assert "较 7 天前 +1" in html            # 登记总数 5 → 6 (neutral)
+    assert 'stat-delta good" title="与 7 天前的记录相比">较 7 天前 +3' in html   # 登记成功 2 → 5
+    assert 'stat-delta good" title="与 7 天前的记录相比">较 7 天前 −2' in html   # 待补正 3 → 1: down is good
+    assert "查看每日数据" in html and ">50<" not in html
+    assert html.count('hx-trigger="sse:update"') == 1
+
+
+def test_trend_is_scoped_to_the_viewers_companies(board, web_client, login_as):
+    _seed_trend({
+        1: {"甲 公司": {"2026": {"7": 1}}, "丙公司": {"2026": {"7": 10}}},
+        0: {"甲 公司": {"2026": {"7": 2}}, "丙公司": {"2026": {"7": 10}}},
+    })
+    group = login_as(web_client, *GROUP_A_USER).get("/").text
+    assert re.search(r'登记总数<b>2</b>', group)
+    admin = login_as(web_client, *ADMIN).get("/").text
+    assert re.search(r'登记总数<b>12</b>', admin)
+
+
+def test_trend_range_and_year_travel_with_every_link(board, web_client, login_as):
+    _seed_trend({40: {"甲 公司": {"2026": {"7": 1}, "2024": {"7": 1}}},
+                 0: {"甲 公司": {"2026": {"7": 4}, "2024": {"7": 1}}}})
+    client = login_as(web_client, *ADMIN)
+    default = client.get("/").text
+    assert 'hx-get="/partials/dashboard"' in default
+    assert 'href="/?range=90"' in default and "data-chart=" not in default  # 40 days back is outside 30
+
+    ninety = client.get("/?range=90&year=2026").text
+    assert 'hx-get="/partials/dashboard?year=2026&amp;range=90"' in ninety
+    assert 'href="/?year=2024&amp;range=90"' in ninety and 'href="/?range=90"' in ninety
+    assert "data-chart=" in ninety and re.search(r'登记总数<b>4</b>', ninety)  # year filter applied
+    assert 'href="/?year=2026"' in ninety  # the 30-day chip drops the default range
+
+    assert client.get("/?range=bogus").status_code == 200

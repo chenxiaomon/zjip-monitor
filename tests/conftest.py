@@ -66,7 +66,7 @@ def _isolated_diskstat(tmp_path_factory, _own_patcher):
     out of run_all()/run_single() now prunes, which sweeps .part files under
     data/attachments and writes data/control/disk_stats.json as a side
     effect — none of that may reach the real data/."""
-    from src import attachments, diskstat, todo
+    from src import attachments, daily_stats, diskstat, todo
     from src import main as src_main
 
     root = tmp_path_factory.mktemp("diskstat")
@@ -85,9 +85,14 @@ def _isolated_diskstat(tmp_path_factory, _own_patcher):
     _own_patcher.setattr(diskstat, "_LOGS_DIR", root / "logs")
     _own_patcher.setattr(diskstat, "_STATS_FILE", data / "control" / "disk_stats.json")
     _own_patcher.setattr(src_main, "_ATTACHMENTS_DIR", data / "attachments")
+    # Every round's finalizer writes the trend file; no test may reach the
+    # real data/control/daily_stats.json.
+    _own_patcher.setattr(daily_stats, "_STATS_FILE", data / "control" / "daily_stats.json")
     diskstat._read_cache = None
+    daily_stats._read_cache = None
     yield
     diskstat._read_cache = None
+    daily_stats._read_cache = None
 
 
 @pytest.fixture(autouse=True)

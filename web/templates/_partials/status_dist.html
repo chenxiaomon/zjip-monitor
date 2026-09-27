@@ -4,7 +4,7 @@
   图例列出每个状态的数量与占比并可点进筛选；颜色与状态徽章同源（web/deps.py）。
 #}
 {% if status_dist.total %}
-<div class="card mb-4" id="status-dist">
+<div class="card" id="status-dist">
   <div class="card-head">
     <span class="card-title">{{ icon('chart-bar') }}状态分布</span>
     <span class="card-sub">共 {{ status_dist.total }} 条 · 点图例可筛选记录</span>

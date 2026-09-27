@@ -5,7 +5,7 @@
 #}
 {% set standalone = false %}
 <div id="dashboard-body"
-     hx-get="/partials/dashboard{% if filter_year %}?year={{ filter_year }}{% endif %}"
+     hx-get="{{ dash_url(partial=True) }}"
      hx-trigger="sse:update"
      hx-swap="outerHTML">
   {% include "_partials/run_bar.html" %}
@@ -29,7 +29,10 @@
   {% endif %}
 
   {% include "_partials/metric_cards.html" %}
-  {% include "_partials/status_dist.html" %}
+  <div class="overview">
+    {% include "_partials/status_dist.html" %}
+    {% include "_partials/trend.html" %}
+  </div>
   {% include "_partials/todo.html" %}
   <div class="section-title">账号状态 <span class="count">{{ account_snapshots|length }} 家</span></div>
   {% include "_partials/account_grid.html" %}

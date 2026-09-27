@@ -1,4 +1,5 @@
 {# Standalone (its own route) it refreshes itself; inside dashboard_body.html the body does. #}
+{% from "_partials/_trend_macros.html" import spark, delta_note %}
 {% set failed = account_snapshots | selectattr('scan_failed') | list | length %}
 {% set urgent = todo.corrections | selectattr('urgency', 'in', ['overdue', 'red']) | list | length %}
 <div id="metrics-section"
@@ -27,8 +28,12 @@
       <div class="stat-label">登记总数</div>
       <div class="stat-value">{{ total_records }}</div>
       <div class="stat-note">{% if filter_year %}{{ filter_year }} 年申请{% else %}全部年份{% endif %}</div>
+      {{ delta_note(trend.delta.total) }}
     </div>
-    <span class="stat-icon">{{ icon('file-text') }}</span>
+    <div class="stat-side">
+      <span class="stat-icon">{{ icon('file-text') }}</span>
+      {{ spark(trend.spark.total) }}
+    </div>
   </a>
   <!-- 登记成功 -->
   <a href="/records?status=7" class="card stat">
@@ -36,8 +41,12 @@
       <div class="stat-label">登记成功</div>
       <div class="stat-value">{{ success_count }}</div>
       <div class="stat-note">{% if total_records %}占登记总数 {{ (success_count * 100 / total_records) | round | int }}%{% else %}暂无记录{% endif %}</div>
+      {{ delta_note(trend.delta.success, 'up') }}
     </div>
-    <span class="stat-icon good">{{ icon('certificate') }}</span>
+    <div class="stat-side">
+      <span class="stat-icon good">{{ icon('certificate') }}</span>
+      {{ spark(trend.spark.success) }}
+    </div>
   </a>
   <!-- 待补正（需要动作） -->
   <a href="/records?status=2" class="card stat">
@@ -51,7 +60,11 @@
       {% else %}
       <div class="stat-note">暂无需要补正的申请</div>
       {% endif %}
+      {{ delta_note(trend.delta.pending, 'down') }}
     </div>
-    <span class="stat-icon warn">{{ icon('alarm') }}</span>
+    <div class="stat-side">
+      <span class="stat-icon warn">{{ icon('alarm') }}</span>
+      {{ spark(trend.spark.pending) }}
+    </div>
   </a>
 </div>

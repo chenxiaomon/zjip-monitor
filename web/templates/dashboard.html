@@ -6,10 +6,10 @@
 {% block content %}
 <div class="toolbar">
   <div class="chips">
-    <a href="/" class="chip{% if not filter_year %} active{% endif %}">全部年份</a>
+    <a href="{{ dash_url(year=None) }}" class="chip{% if not filter_year %} active{% endif %}">全部年份</a>
     {# The years actually present in the visible snapshots' application dates #}
     {% for y in years %}
-    <a href="/?year={{ y }}" class="chip{% if filter_year == y %} active{% endif %}">{{ y }}</a>
+    <a href="{{ dash_url(year=y) }}" class="chip{% if filter_year == y %} active{% endif %}">{{ y }}</a>
     {% endfor %}
   </div>
   <span class="row gap-1 xs muted" title="可见账号中最近一次巡检成功的时间">{{ icon('clock') }}上次成功巡检：{{ last_success_at | fmt_time if last_success_at else '尚无' }}</span>

@@ -9,8 +9,9 @@ inside the body it carries no refresh attributes of its own.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlencode
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 
 from src import ops_alerts, status_store, todo
@@ -19,6 +20,7 @@ from src.scraper import AUDIT_STATUS
 from web.auth import allowed_usernames, is_admin, visible_accounts
 from web.deps import STATUS_COLORS, account_dot, in_year, int_or_none, templates
 from web.deps import status_distribution
+from web.services import trends
 from web.services.events import read_events
 from web.services.run_state import run_state_ctx
 from web.services.snapshot import get_latest_snapshot
@@ -64,7 +66,26 @@ def _run_ctx(request: Request) -> dict:
     return {**run, "progress": progress}
 
 
-def _dashboard_ctx(request: Request, year: int | None = None) -> dict:
+def _range_days(raw: str | None) -> int:
+    """?range=90 switches the trend to 90 days; anything else means 30."""
+    value = int_or_none(raw)
+    return value if value in trends.RANGES else trends.RANGES[0]
+
+
+def _dash_url_factory(year: int | None, range_days: int):
+    """Links and the SSE refresh URL all carry the same year and range, and
+    the defaults (all years, 30 days) never appear in the query string."""
+    def dash_url(*, partial: bool = False, **overrides) -> str:
+        params = {"year": year, "range": range_days, **overrides}
+        if params.get("range") == trends.RANGES[0]:
+            params["range"] = None
+        query = urlencode({k: v for k, v in params.items() if v not in (None, "")})
+        base = "/partials/dashboard" if partial else "/"
+        return f"{base}?{query}" if query else base
+    return dash_url
+
+
+def _dashboard_ctx(request: Request, year: int | None = None, range_days: int = 30) -> dict:
     accounts = visible_accounts(request)
     allowed = allowed_usernames(request)
     all_status = status_store.get_all()
@@ -136,6 +157,10 @@ def _dashboard_ctx(request: Request, year: int | None = None) -> dict:
         "success_count": success_count,
         "pending_correction": pending_correction,
         "status_dist": status_distribution(account_snapshots),
+        # Visible companies only: the trend file also holds deleted accounts'
+        # history and other groups' companies.
+        "trend": trends.trend_ctx({a.company for a in accounts}, year, range_days),
+        "dash_url": _dash_url_factory(year, range_days),
         "account_snapshots": account_snapshots,
         "login_alerts": login_alerts,
         # Scoped to what this user may see: a group user must never learn from
@@ -154,14 +179,18 @@ def _dashboard_ctx(request: Request, year: int | None = None) -> dict:
 
 
 @router.get("/", response_class=HTMLResponse)
-def dashboard_page(request: Request, year: int | None = None) -> HTMLResponse:
-    return templates.TemplateResponse(request, "dashboard.html", _dashboard_ctx(request, year))
+def dashboard_page(request: Request, year: int | None = None,
+                   range_: str | None = Query(None, alias="range")) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request, "dashboard.html", _dashboard_ctx(request, year, _range_days(range_)))
 
 
 @router.get("/partials/dashboard", response_class=HTMLResponse)
-def partial_dashboard(request: Request, year: int | None = None) -> HTMLResponse:
+def partial_dashboard(request: Request, year: int | None = None,
+                      range_: str | None = Query(None, alias="range")) -> HTMLResponse:
     """Everything below the year chips, in one response — the SSE target."""
-    return templates.TemplateResponse(request, "_partials/dashboard_body.html", _dashboard_ctx(request, year))
+    return templates.TemplateResponse(
+        request, "_partials/dashboard_body.html", _dashboard_ctx(request, year, _range_days(range_)))
 
 
 @router.get("/partials/run-bar", response_class=HTMLResponse)
