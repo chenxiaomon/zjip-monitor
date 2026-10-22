@@ -30,7 +30,7 @@
             hx-target="#row-{{ u }}"
             hx-swap="outerHTML"
             class="select select-sm">
-      <option value="" {% if not row.account.group %}selected{% endif %}>未分组</option>
+      <option value="" {% if not row.account.group %}selected{% endif %}>未分组（仅管理员可见）</option>
       {% for gkey, gname in get_groups().items() %}
       <option value="{{ gkey }}" {% if row.account.group == gkey %}selected{% endif %}>{{ gname }}</option>
       {% endfor %}
@@ -126,7 +126,7 @@
         重登
       </button>
       {% endif %}
-      {% if is_admin %}
+      {% if can_edit %}
       {% if scan_task == 'running' %}
       <button disabled class="btn btn-xs"><span class="live-dot neutral" style="width:6px;height:6px"></span>巡检中</button>
       {% else %}
@@ -157,11 +157,11 @@
         {{ icon('pencil') }}编辑
       </button>
       {% endif %}
-      {% if task.status != 'pending' and is_admin %}
+      {% if task.status != 'pending' and can_edit %}
       <button hx-post="/accounts/{{ u }}/delete"
               hx-target="#row-{{ u }}"
               hx-swap="delete"
-              hx-confirm="确认删除账号 {{ u }}？此操作不可恢复。"
+              hx-confirm="确认删除账号 {{ u }}？删除后不再巡检；已下载的通知书和历史快照保留在服务器上。"
               class="btn btn-xs btn-danger">
         {{ icon('trash') }}删除
       </button>

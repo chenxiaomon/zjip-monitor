@@ -95,6 +95,29 @@ def _relogin_cooldown_left(username: str) -> int:
     return _login_wait(username, _RELOGIN_LIMIT)
 
 
+# A 经办人's 手动巡检 takes the global run lock like any scan; once per
+# account per window keeps a bored clicker from occupying it (the daemon
+# waits for a single-account scan, but only for so long — run_daemon.py).
+_SCAN_COOLDOWN_SECONDS = 600
+_last_scan: dict[str, float] = {}
+
+
+def _scan_cooldown_left(username: str) -> int:
+    last = _last_scan.get(username)
+    if last is None:
+        return 0
+    return max(0, int(_SCAN_COOLDOWN_SECONDS - (time.monotonic() - last)))
+
+
+def _my_groups(request: Request) -> set[str]:
+    return set((current_user(request) or {}).get("groups") or [])
+
+
+# A colleague must not learn which other companies or platform accounts the
+# system holds: a clash with someone else's is reported without naming it.
+_TAKEN_ELSEWHERE = "该企业或平台账号已在系统中（可能由其他同事管理），请联系管理员"
+
+
 def _bump_verify_seq(username: str) -> int:
     _verify_seq[username] = _verify_seq.get(username, 0) + 1
     return _verify_seq[username]
@@ -321,13 +344,25 @@ def token_status_poll(request: Request, username: str) -> HTMLResponse:
 @router.post("/accounts/{username}/scan", response_class=HTMLResponse)
 async def scan_account(request: Request, username: str) -> HTMLResponse:
     # A single-account scan takes the GLOBAL run lock and one of the two shared
-    # workers: repeated clicks by a group user would keep both the daemon's
-    # round and the admin's 立即巡检 answering "already running".
-    require_admin(request)
-    accounts_list = visible_accounts(request)
-    acc = next((a for a in accounts_list if a.username == username), None)
+    # workers, so 经办人 (their own groups' companies only) get one per
+    # account per window; 只读 users none. Admins are not limited.
+    if not can_edit_accounts(request):
+        require_admin(request)
+    acc = editable_account(request, username)
     if acc is None:
         return _row_error_on(request, username)
+
+    if not is_admin(request) and _scan_tasks.get(username) != "running":
+        left = _scan_cooldown_left(username)
+        if left:
+            audit_log.record_request(request, "account.scan", company=acc.company, target=username,
+                                     ok=False, detail={"error": "过于频繁"})
+            return templates.TemplateResponse(
+                request, "_partials/account_row.html",
+                {"row": _row(acc, task={"status": "error",
+                                        "msg": f"手动巡检过于频繁，请 {left // 60 + 1} 分钟后再试"})},
+            )
+        _last_scan[username] = time.monotonic()
 
     already = _scan_tasks.get(username) == "running"
     if not already:
@@ -394,9 +429,15 @@ def run_once_status(request: Request) -> HTMLResponse:
 
 @router.get("/accounts/new-form", response_class=HTMLResponse)
 def new_account_form(request: Request) -> HTMLResponse:
-    require_admin(request)
+    """经办人 add companies to their own groups, owned by themselves by default."""
+    if not can_edit_accounts(request):
+        require_admin(request)
+    form = None
+    if not is_admin(request):
+        mine = sorted(_my_groups(request))
+        form = {"group": mine[0] if mine else "", "owner": (current_user(request) or {}).get("username", "")}
     return templates.TemplateResponse(
-        request, "_partials/account_form.html", {"error": None, "mode": "add"}
+        request, "_partials/account_form.html", {"error": None, "mode": "add", "form": form}
     )
 
 
@@ -410,7 +451,12 @@ async def add_account(
     group: str = Form(""),
     owner: str = Form(""),
 ) -> HTMLResponse:
-    require_admin(request)
+    """New company account. 经办人 may add to their own groups only — a
+    company they put 未分组 or into someone else's group would vanish from
+    their own sight the moment it was saved."""
+    if not can_edit_accounts(request):
+        require_admin(request)
+    admin = is_admin(request)
     company = company.strip()
     username = username.strip()
     password = password.strip()
@@ -437,6 +483,8 @@ async def add_account(
         return _err("密码不能为空")
     if group and group not in get_groups():
         return _err(f"分组 {group} 不存在")
+    if not admin and group not in _my_groups(request):
+        return _err("请选择你自己的分组")
     if (problem := _owner_error(owner, group)):
         return _err(problem)
 
@@ -447,9 +495,13 @@ async def add_account(
             # Never fall back to an empty list: save_accounts() overwrites the
             # whole file, which would wipe every existing account.
             return _err(_public_error(exc, "load_accounts failed, refusing to write", username=username))
-        if any(a.username == username for a in accounts_list):
+        clash_user = any(a.username == username for a in accounts_list)
+        clash_company = any(_company_key(a.company) == _company_key(company) for a in accounts_list)
+        if not admin and (clash_user or clash_company):
+            return _err(_TAKEN_ELSEWHERE)
+        if clash_user:
             return _err(f"账号 {username} 已存在")
-        if any(_company_key(a.company) == _company_key(company) for a in accounts_list):
+        if clash_company:
             # Snapshots/attachments are keyed by the sanitized company name —
             # a duplicate (even one that only collides after sanitization)
             # would overwrite the other account's history.
@@ -520,8 +572,18 @@ async def verify_account(
     if not is_admin(request):
         mine = editable_account(request, username)
         if mine is None:
-            return _result(False, f"账号 {username} 不存在")
-        company = mine.company
+            # Not theirs. A platform account the system does not hold yet is
+            # the 新增 dialog's test — allowed with a typed password; one that
+            # belongs to another group's company is not, and looks the same
+            # as one that does not exist.
+            try:
+                held = any(a.username == username for a in load_accounts())
+            except ConfigError:
+                held = True
+            if held or not password:
+                return _result(False, f"账号 {username} 不存在")
+        else:
+            company = mine.company
         wait = _login_wait(username, _VERIFY_LIMIT)
         if wait:
             return _result(False, f"测试登录过于频繁，请 {wait // 60 + 1} 分钟后再试")
@@ -774,14 +836,19 @@ def platform_access(
 
 @router.post("/accounts/{username}/delete", response_class=HTMLResponse)
 def delete_account(request: Request, username: str) -> HTMLResponse:
-    require_admin(request)
+    """经办人 may delete their own groups' companies (decided again under the
+    write lock). Snapshots and attachments stay on disk; only monitoring stops."""
+    if not can_edit_accounts(request):
+        require_admin(request)
+    admin = is_admin(request)
+    my_groups = _my_groups(request)
     with _ACCOUNTS_WRITE_LOCK:
         try:
             accounts_list = load_accounts()
         except ConfigError as exc:
             return HTMLResponse(_public_error(exc, "load_accounts failed, refusing to write", username=username), status_code=500)
         gone = next((a for a in accounts_list if a.username == username), None)
-        if gone is None:
+        if gone is None or (not admin and gone.group not in my_groups):
             return HTMLResponse(status_code=404)
         new_list = [a for a in accounts_list if a.username != username]
         try:

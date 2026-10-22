@@ -71,12 +71,15 @@
                  placeholder="可选"
                  class="input">
         </div>
-        {% if is_admin %}
+        {% if is_admin or not is_edit %}
+        {# Admins pick any group (未分组 = only admins see it); a 经办人 adding a
+           company picks among their own groups — anything else would hide it from them. #}
+        {% set my_groups = request.state.user.groups if request.state.user else [] %}
         <div class="field">
           <label class="label" for="acc-group">分组</label>
           <select id="acc-group" name="group" class="select">
-            <option value="">未分组</option>
-            {% for gkey, gname in get_groups().items() %}
+            {% if is_admin %}<option value="">未分组（仅管理员可见）</option>{% endif %}
+            {% for gkey, gname in get_groups().items() if is_admin or gkey in my_groups %}
             {% set chosen = account.group if is_edit else (form.group if form else '') %}
             <option value="{{ gkey }}" {% if chosen == gkey %}selected{% endif %}>{{ gname }}</option>
             {% endfor %}

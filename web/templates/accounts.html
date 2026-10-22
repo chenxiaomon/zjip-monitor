@@ -5,12 +5,18 @@
 
 {% block content %}
 <!-- Toolbar -->
-{% set is_admin = request.state.user.role == 'admin' if request.state.user else false %}
-{% if is_admin %}
+{% set user = request.state.user %}
+{% set is_admin = user.role == 'admin' if user else false %}
+{% set can_edit = user.role in ('admin', 'operator') if user else false %}
+{% if can_edit %}
 <div class="toolbar">
+  {% if is_admin %}
   <div id="run-once-status-wrapper" hx-ext="sse" sse-connect="/sse">
     {% include "_partials/run_once_status.html" %}
   </div>
+  {% else %}
+  <p class="help">这里只有你分组里的企业：可以新增、编辑、手动巡检（每家 10 分钟一次）和删除。</p>
+  {% endif %}
   <div class="row gap-2">
     <button hx-get="/accounts/new-form"
             hx-target="#modal-container"
@@ -18,6 +24,7 @@
             class="btn btn-success">
       {{ icon('plus') }}新增账号
     </button>
+    {% if is_admin %}
     <button hx-post="/run-once"
             hx-target="#run-once-status"
             hx-swap="outerHTML"
@@ -25,6 +32,7 @@
             class="btn btn-primary">
       {{ icon('player-play') }}立即巡检全部
     </button>
+    {% endif %}
   </div>
 </div>
 {% endif %}
