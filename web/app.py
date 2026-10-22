@@ -23,14 +23,14 @@ from loguru import logger
 # Production runs `uvicorn web.app:app`, so importing this module is the only
 # hook the command line offers, and two things have to happen first:
 #
-#   1. load_dotenv(): web.auth reads WEB_USER/WEB_PASS/SESSION_SECRET/
-#      VIEW_TOKEN from os.environ at IMPORT time, and logging_setup reads the
+#   1. load_dotenv(): web.auth reads WEB_USER/WEB_PASS/SESSION_SECRET
+#      from os.environ at IMPORT time, and logging_setup reads the
 #      ZJIP_LOG_* knobs. python-dotenv never overrides an already-set
 #      variable, so a later call cannot repair a module that already read the
 #      unset defaults.
 #   2. setup_logging("web"): that same import-time code also LOGS — web.auth
-#      warns "VIEW_TOKEN 未配置…" whenever the public read-only page is open
-#      to everyone. With the route imports first, that warning was emitted
+#      logs an error when WEB_USER is a reserved name, and app.py notes a
+#      missing API_KEY. With the route imports first, such lines were emitted
 #      through loguru's DEFAULT sink, which is bare stderr (ANSI-coloured on a
 #      terminal) and writes no file at all — so the line never reached
 #      logs/web_*.log and was invisible to anyone reading the file log after
@@ -229,11 +229,10 @@ async def _auth_middleware(request: Request, call_next) -> Response:  # type: ig
             f"path={path}"
         )
         return Response("跨站请求被拒绝", status_code=403)
-    # 公开路径：只读展示页、静态资源、登录/登出、健康检查
+    # 公开路径：静态资源、登录/登出、健康检查（/view 已不再公开，需登录）
     # /health must be here or the deploy probe gets 302→/login, which reads as
     # "up" to anything that only checks for a non-5xx — see web/routes/health.py.
-    if (path == "/view" or path.startswith("/view/")
-            or path.startswith("/static/")
+    if (path.startswith("/static/")
             or path in ("/favicon.ico", "/health", "/login", "/logout", "/robots.txt")):
         response = await call_next(request)
         if path.startswith("/static/") and response.status_code == 200:
