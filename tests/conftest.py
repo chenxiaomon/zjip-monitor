@@ -129,6 +129,18 @@ def _isolated_settings_file(tmp_path_factory, _own_patcher):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_audit(tmp_path_factory, _own_patcher):
+    """Every route and the archive-release script append to the operation
+    log as a side effect; no test may write the real data/control/audit/.
+    Yields the temp directory so tests can read what was recorded."""
+    from src import audit
+
+    d = tmp_path_factory.mktemp("audit") / "audit"
+    _own_patcher.setattr(audit, "_AUDIT_DIR", d)
+    yield d
+
+
+@pytest.fixture(autouse=True)
 def _reset_login_guard():
     """The console login guard keeps process-global counters; a failed-auth
     assertion in one test must not eat another test's lockout budget."""
