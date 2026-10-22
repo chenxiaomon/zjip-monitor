@@ -29,6 +29,8 @@ from src.config_loader import Account  # noqa: E402
 ADMIN = ("admin", "test-admin-pass")
 GROUP_A_USER = ("ga", "test-ga-pass")
 GROUP_B_USER = ("gb", "test-gb-pass")
+# Console users live in config/users.yaml now; _isolated_users seeds these.
+OPERATOR_A = ("opa", "test-opa-pass")
 API_KEY = "test-api-key-0123456789"
 
 
@@ -126,6 +128,41 @@ def _isolated_settings_file(tmp_path_factory, _own_patcher):
     settings_cache._cache = None
     yield
     settings_cache._cache = None
+
+
+@pytest.fixture(autouse=True)
+def _isolated_users(tmp_path_factory, _own_patcher):
+    """A temp config/users.yaml holding the console users the web tests log
+    in with — never the developer's real file.
+
+    PBKDF2 drops to 1000 iterations: at the production 600k every login in
+    the suite would cost a few hundred ms. Hashes carry their own count, so
+    nothing else changes.
+    """
+    from web.services import users
+
+    path = tmp_path_factory.mktemp("users") / "users.yaml"
+    _own_patcher.setattr(users, "_USERS_FILE", path)
+    _own_patcher.setattr(users, "PBKDF2_ITERATIONS", 1000)
+    users.invalidate()
+    seed = {}
+    for (name, password), role, groups in (
+        (GROUP_A_USER, "viewer", ["group_a"]),
+        (GROUP_B_USER, "viewer", ["group_b"]),
+        (OPERATOR_A, "operator", ["group_a"]),
+    ):
+        seed[name] = {
+            "display_name": "",
+            "role": role,
+            "groups": groups,
+            "password_hash": users.hash_password(password),
+            "disabled": False,
+            "session_key": "",
+        }
+    path.write_text(yaml.safe_dump({"version": 1, "users": seed}), encoding="utf-8")
+    users.invalidate()
+    yield path
+    users.invalidate()
 
 
 @pytest.fixture(autouse=True)
