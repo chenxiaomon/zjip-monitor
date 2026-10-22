@@ -44,7 +44,7 @@
     {% endfor %}
     {% if not limited %}
     <div class="nav-label">管理</div>
-    {% for href, name, label in [('/notify', 'bell', '通知'), ('/reports', 'report-analytics', '报表'), ('/settings', 'settings', '设置'), ('/users', 'id-badge-2', '用户')] %}
+    {% for href, name, label in [('/notify', 'bell', '通知'), ('/reports', 'report-analytics', '报表'), ('/settings', 'settings', '设置'), ('/users', 'id-badge-2', '用户'), ('/audit', 'list-details', '操作日志')] %}
     <a href="{{ href }}" class="nav-item{% if request.url.path == href %} active{% endif %}">{{ icon(name) }}{{ label }}</a>
     {% endfor %}
     {% endif %}

@@ -39,7 +39,8 @@ def _row(request: Request, name: str, rec: dict) -> dict:
 def _rows(request: Request) -> list[dict]:
     found = users.load()
     names = sorted(found, key=lambda n: (_ROLE_ORDER.get(found[n]["role"], 9), n))
-    return [_row(request, name, found[name]) for name in names]
+    logins = audit_log.last_logins()
+    return [{**_row(request, name, found[name]), "last_login": logins.get(name)} for name in names]
 
 
 def _group_choices(existing: list[str]) -> dict[str, str]:
@@ -81,9 +82,8 @@ def _row_response(request: Request, name: str) -> HTMLResponse:
     rec = users.get(name)
     if rec is None:
         return HTMLResponse("")
-    return templates.TemplateResponse(
-        request, "_partials/user_row.html", {"row": _row(request, name, rec)}
-    )
+    row = {**_row(request, name, rec), "last_login": audit_log.last_logins().get(name)}
+    return templates.TemplateResponse(request, "_partials/user_row.html", {"row": row})
 
 
 def _refuse(msg: str, status: int = 400) -> PlainTextResponse:
@@ -102,7 +102,8 @@ def users_page(request: Request) -> HTMLResponse:
         request,
         "users.html",
         {"rows": _rows(request), "load_error": users.load_error(),
-         "env_admin": users.env_admin_name(), "role_labels": users.ROLE_LABELS},
+         "env_admin": users.env_admin_name(), "role_labels": users.ROLE_LABELS,
+         "last_logins": audit_log.last_logins()},
     )
 
 
@@ -111,7 +112,8 @@ def users_rows(request: Request) -> HTMLResponse:
     require_admin(request)
     return templates.TemplateResponse(
         request, "_partials/users_rows.html",
-        {"rows": _rows(request), "env_admin": users.env_admin_name()},
+        {"rows": _rows(request), "env_admin": users.env_admin_name(),
+         "last_logins": audit_log.last_logins()},
     )
 
 

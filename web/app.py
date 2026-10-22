@@ -53,6 +53,7 @@ from web.routes import (  # noqa: E402 — same reason
     accounts,
     api,
     attachments,
+    audit,
     changes,
     dashboard,
     deadlines,
@@ -277,7 +278,7 @@ async def _auth_middleware(request: Request, call_next) -> Response:  # type: ig
         and not getattr(request.state, "audited", False)
     ):
         audit_log.record_request(request, "http.unaudited", target=path,
-                                 detail={"method": request.method, "status": response.status_code})
+                                 detail={"http_method": request.method, "status": response.status_code})
     return response
 
 
@@ -308,6 +309,7 @@ app.include_router(notify.router)
 app.include_router(reports.router)
 app.include_router(settings.router)
 app.include_router(users.router)
+app.include_router(audit.router)
 app.include_router(view.router)
 app.include_router(api.router)
 app.include_router(attachments.router)
