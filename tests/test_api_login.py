@@ -78,6 +78,30 @@ def test_a_disabled_user_is_told_so(web_client):
     assert resp.status_code == 403 and "停用" in resp.json()["error"]
 
 
+def test_an_initial_password_is_changed_in_the_console_first(
+    web_client, two_companies, _isolated_audit
+):
+    """The console only reminds; the mini program has nowhere to change it."""
+    users.set_password("opa", "set-by-the-admin", must_change=True)
+    resp = _login(web_client, "opa", "set-by-the-admin")
+    assert resp.status_code == 403
+    assert "修改初始口令" in resp.json()["error"] and "token" not in resp.json()
+    (entry,) = _audit(_isolated_audit)
+    assert entry["action"] == "auth.login_failed"
+    assert entry["detail"] == {"via": "api", "reason": "需先修改初始口令"}
+
+    users.set_password("opa", "chosen-by-opa-1", must_change=False)  # what /me/password does
+    resp = _login(web_client, "opa", "chosen-by-opa-1")
+    assert resp.status_code == 200 and resp.json()["token"]
+
+
+def test_a_token_from_before_the_rule_stops_working(web_client, two_companies):
+    users.set_password("opa", "set-by-the-admin", must_change=True)
+    token, _ = auth.make_api_token("opa")  # as /api/login used to hand out
+    resp = web_client.get("/api/status", headers=_bearer(token))
+    assert resp.status_code == 401
+
+
 def test_the_lockout_is_shared_with_the_console_form(web_client):
     for _ in range(login_guard.MAX_FAILURES):
         web_client.post("/login", data={"username": "opa", "password": "wrong-password"})

@@ -73,6 +73,15 @@ async def api_login(request: Request) -> JSONResponse:
 
     login_guard.record_success(ip, username)
     user = auth.lookup(matched, via="api")
+    if user.get("must_change_password"):
+        # The console only reminds, because it can take the new password right
+        # there. The mini program has nowhere to change it, so a 30-day token
+        # would let an initial password set by the administrator (or imported
+        # from WEB_USERS) live on unchanged.
+        audit_log.record_request(request, "auth.login_failed", actor=who, ok=False,
+                                 detail={"via": "api", "reason": "需先修改初始口令"})
+        return JSONResponse({"error": "请先登录控制台修改初始口令，再用小程序登录"},
+                            status_code=403)
     audit_log.record_request(request, "auth.login", as_user=user)
     token, expiry = auth.make_api_token(matched)
     return JSONResponse({

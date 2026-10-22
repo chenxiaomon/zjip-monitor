@@ -177,7 +177,12 @@ def make_api_token(username: str) -> tuple[str, int]:
 
 
 def user_from_api_token(token: str | None) -> dict | None:
-    """Verify a mini program token, like user_from_cookie does a cookie."""
+    """Verify a mini program token, like user_from_cookie does a cookie.
+
+    Unlike a cookie, it is refused while the user still has to change an
+    initial password: /api/login no longer hands such users a token, and one
+    handed out before that rule must not keep working for its 30 days.
+    """
     if not token:
         return None
     try:
@@ -190,7 +195,7 @@ def user_from_api_token(token: str | None) -> dict | None:
         ok = secrets.compare_digest(sig, _sign_api(username, expiry_str, ""))
         return _env_admin("api") if ok else None
     rec = users.get(username)
-    if rec is None or rec["disabled"]:
+    if rec is None or rec["disabled"] or rec["must_change_password"]:
         return None
     if not secrets.compare_digest(sig, _sign_api(username, expiry_str, rec["session_key"])):
         return None
