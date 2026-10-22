@@ -52,9 +52,9 @@ Page({
           accounts,
         })
       },
-      fail: () => {
+      fail: (err) => {
         this.setData({ loading: false })
-        wx.showToast({ title: '加载失败', icon: 'none' })
+        wx.showToast({ title: (err && err.errMsg) || '加载失败', icon: 'none' })
       },
       complete: () => done && done(),
     })
