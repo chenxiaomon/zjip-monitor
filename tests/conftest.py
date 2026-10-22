@@ -262,10 +262,12 @@ def fake_accounts(monkeypatch):
 
     from web import auth as web_auth
     from web.routes import accounts as accounts_routes
+    from web.routes import users as users_routes
+    from web.services import groups as group_svc
 
-    # Both modules imported the symbol into their own namespace.
-    monkeypatch.setattr(web_auth, "load_accounts", lambda: list(accounts))
-    monkeypatch.setattr(accounts_routes, "load_accounts", lambda: list(accounts))
+    # Each module imported the symbol into its own namespace.
+    for module in (web_auth, accounts_routes, users_routes, group_svc):
+        monkeypatch.setattr(module, "load_accounts", lambda: list(accounts))
     return accounts
 
 

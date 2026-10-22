@@ -1,0 +1,52 @@
+{# 分组：同事之间、同事与管理员之间的隔离边界。未分组的企业只有管理员看得到。 #}
+<div id="groups-card" class="card mt-4">
+  <div class="card-head">
+    <span class="card-title">{{ icon('users') }}分组</span>
+    <span class="card-sub">经办人和只读用户只看得到所在分组的企业；未分组的企业只有管理员看得到</span>
+  </div>
+  {% if group_error %}
+  <div class="card-body" style="padding-bottom:0">
+    <div class="alert alert-danger alert-inline">{{ icon('alert-circle') }}<div>{{ group_error }}</div></div>
+  </div>
+  {% endif %}
+  <div class="table-wrap">
+    <table class="tbl tbl-compact">
+      <thead>
+        <tr><th>分组名称</th><th class="num">企业</th><th>能看到的同事</th><th>操作</th></tr>
+      </thead>
+      <tbody>
+        {% for g in group_rows %}
+        <tr id="group-{{ g.key }}">
+          <td>
+            <form class="row gap-2" hx-post="/users/groups/{{ g.key }}/rename" hx-target="#groups-card" hx-swap="outerHTML">
+              <input type="text" name="label" value="{{ g.label }}" maxlength="32" class="input input-sm" style="width:12rem" aria-label="分组名称">
+              <button type="submit" class="btn btn-xs">改名</button>
+            </form>
+            <div class="xs faint mono mt-1">{{ g.key }}</div>
+          </td>
+          <td class="num">{{ g.companies }}</td>
+          <td class="sm">{% if g.members %}{{ g.members | join('、') }}{% else %}<span class="faint">—</span>{% endif %}</td>
+          <td>
+            {% if g.companies or g.members %}
+            <span class="xs faint" title="先把企业和同事移出这个分组">有企业或同事，不能删除</span>
+            {% else %}
+            <button hx-post="/users/groups/{{ g.key }}/delete" hx-target="#groups-card" hx-swap="outerHTML"
+                    hx-confirm="删除分组「{{ g.label }}」？" class="btn btn-xs btn-danger">{{ icon('trash') }}删除</button>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        <tr>
+          <td><span class="sm">未分组</span><div class="xs faint mt-1">只有管理员看得到，适合放你自己的企业</div></td>
+          <td class="num">{{ ungrouped }}</td>
+          <td class="sm faint">仅管理员</td>
+          <td></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <form class="card-body row row-wrap gap-2" hx-post="/users/groups" hx-target="#groups-card" hx-swap="outerHTML">
+    <input type="text" name="label" maxlength="32" placeholder="新分组名称，如 张三的企业" class="input input-sm" style="width:16rem" aria-label="新分组名称">
+    <button type="submit" class="btn btn-sm">{{ icon('plus') }}新建分组</button>
+  </form>
+</div>

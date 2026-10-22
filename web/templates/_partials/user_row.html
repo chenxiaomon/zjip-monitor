@@ -12,6 +12,7 @@
     {% for g in row.groups %}<span class="pill pill-accent">{{ g | group_label }}</span> {% endfor %}
     {% endif %}
   </td>
+  <td class="num">{% if row.visible is none %}<span class="xs faint">全部</span>{% else %}{{ row.visible }}{% endif %}</td>
   <td>
     {% if row.disabled %}
     <span class="pill pill-danger">已停用</span>

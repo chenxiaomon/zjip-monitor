@@ -104,6 +104,9 @@ ACTION_LABELS: dict[str, str] = {
     "user.revoke": "强制下线",
     "user.delete": "删除用户",
     "user.import": "导入 WEB_USERS",
+    "group.create": "新建分组",
+    "group.rename": "分组改名",
+    "group.delete": "删除分组",
     "account.add": "新增企业账号",
     "account.edit": "编辑企业账号",
     "account.group": "调整企业分组",
@@ -133,7 +136,7 @@ ACTION_LABELS: dict[str, str] = {
 
 CATEGORIES: dict[str, tuple[str, tuple[str, ...]]] = {
     "auth": ("登录", ("auth.",)),
-    "user": ("用户", ("user.", "self.")),
+    "user": ("用户与分组", ("user.", "self.", "group.")),
     "account": ("企业账号", ("account.",)),
     "scan": ("巡检", ("scan.",)),
     "settings": ("设置与通知", ("settings.", "notify.")),
@@ -144,7 +147,8 @@ CATEGORIES: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 
 # Detail keys whose value is a [before, after] pair, by the actions that write them.
-_CHANGE_ACTIONS = ("account.edit", "account.group", "account.owner", "user.update", "settings.", "notify.")
+_CHANGE_ACTIONS = ("account.edit", "account.group", "account.owner", "user.update", "group.rename",
+                   "settings.", "notify.")
 _FLAG_TEXT = {
     "password_changed": ("改了密码", ""),
     "stored_password": ("用已保存的密码", "用填写的密码"),
@@ -161,6 +165,7 @@ _KEY_LABELS = {
     "rows": "行数", "reg_no": "登记号", "account": "账号", "statuses": "状态", "start_date": "起", "end_date": "止",
     "q": "关键字", "files": "文件数", "bytes": "字节", "users": "用户", "via": "方式",
     "minutes": "锁定分钟", "status": "状态码", "http_method": "请求",
+    "label": "名称", "for_user": "给用户",
 }
 
 

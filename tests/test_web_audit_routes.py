@@ -60,6 +60,9 @@ def world(monkeypatch, tmp_path, fake_accounts, isolated_settings, isolated_snap
     accounts_routes._web_logins.clear()
     users.create_user(BOSS[0], display_name="老板", role="admin", groups=[],
                       password=BOSS[1], by="t", must_change=False)
+    settings = isolated_settings.read()
+    settings["groups"]["g_empty"] = "空组"  # something the delete route may remove
+    isolated_settings.write(settings)
     yield
     accounts_routes._web_logins.clear()
     # spawn is stubbed, so a "running" scan would never finish and leak into later tests.
@@ -110,6 +113,10 @@ ROUTES = {
     "/users/{username}/enable": ("/users/opa/enable", {}, "user.enable", "opa"),
     "/users/{username}/revoke": ("/users/opa/revoke", {}, "user.revoke", "opa"),
     "/users/{username}/delete": ("/users/gb/delete", {}, "user.delete", "gb"),
+    "/users/groups": ("/users/groups", {"label": "新组"}, "group.create", None),
+    "/users/groups/{key}/rename": ("/users/groups/group_a/rename", {"label": "来源一甲"},
+                                   "group.rename", "group_a"),
+    "/users/groups/{key}/delete": ("/users/groups/g_empty/delete", {}, "group.delete", "g_empty"),
     "/me/password": ("/me/password", {"current": BOSS[1], "password": "boss-new-password",
                                       "password2": "boss-new-password"}, "self.password_change", "boss"),
 }
