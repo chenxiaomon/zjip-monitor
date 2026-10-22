@@ -172,3 +172,51 @@ def test_unarchive_forgets_marks_of_files_that_are_back(server):
 def test_unarchive_refuses_a_bad_directory(server):
     with pytest.raises(ValueError):
         archive_release.unarchive("../甲公司")
+
+
+# --- the operation log ---------------------------------------------------------
+
+def _audit_lines(d):
+    return [json.loads(ln) for f in sorted(d.glob("*.jsonl"))
+            for ln in f.read_text(encoding="utf-8").splitlines()]
+
+
+def test_a_release_is_logged_once_per_record(server, _isolated_audit, monkeypatch):
+    att, files = server
+    monkeypatch.setenv("SSH_CLIENT", "198.51.100.7 52114 22")
+    _release(files, ["甲公司/DONE/国家局登记证书.pdf", "甲公司/DONE/《登记公告通知书》.pdf",
+                     "甲公司/ACTIVE/《补正通知书》_2026-09-01.pdf"])
+    lines = _audit_lines(_isolated_audit)
+    assert sorted((e["action"], e["company"], e["target"]) for e in lines) == [
+        ("archive.release", "甲公司", "ACTIVE"), ("archive.release", "甲公司", "DONE"),
+    ]
+    done = next(e for e in lines if e["target"] == "DONE")
+    assert done["actor"] == "本机归档" and done["via"] == "ssh" and done["ip"] == "198.51.100.7"
+    assert done["detail"]["files"] == 2 and done["detail"]["bytes"] == len(b"cert") + len(b"notice")
+
+
+def test_a_dry_run_logs_nothing(server, _isolated_audit):
+    att, files = server
+    _release(files, ["甲公司/DONE/国家局登记证书.pdf"], dry_run=True)
+    assert _audit_lines(_isolated_audit) == []
+
+
+def test_unarchive_is_logged(server, _isolated_audit):
+    att, files = server
+    _release(files, ["甲公司/DONE/国家局登记证书.pdf"])
+    (att / "甲公司/DONE/国家局登记证书.pdf").write_bytes(b"cert")
+    archive_release.unarchive("甲公司/DONE")
+    last = _audit_lines(_isolated_audit)[-1]
+    assert last["action"] == "archive.unarchive" and last["detail"]["names"] == ["国家局登记证书.pdf"]
+
+
+def test_stdout_stays_one_json_line_when_the_log_cannot_be_written(
+        server, _isolated_audit, monkeypatch, capsys):
+    att, files = server
+    _isolated_audit.parent.mkdir(parents=True, exist_ok=True)
+    _isolated_audit.write_text("not a directory")
+    items = [{"path": "甲公司/DONE/《登记公告通知书》.pdf", "sha256": files["甲公司/DONE/《登记公告通知书》.pdf"]}]
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(items, ensure_ascii=False)))
+    assert archive_release.main([]) == 0
+    out = capsys.readouterr().out.strip().splitlines()
+    assert len(out) == 1 and json.loads(out[0])["released"] == ["甲公司/DONE/《登记公告通知书》.pdf"]

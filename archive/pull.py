@@ -37,6 +37,9 @@ def plan(cfg: ArchiveConfig, *, reports: bool = False, stamp: str | None = None)
         # events-*.jsonl never change. No backup: each old copy is a prefix
         # of the next one.
         job("events", backup=False, source=f"{src}/events*.jsonl"),
+        # The console's operation log: monthly files that only grow — the
+        # same reasoning as events, so no backup either.
+        job("audit", backup=False, source=f"{src}/control/audit/"),
     ]
     if reports:
         jobs.append(job("reports"))
