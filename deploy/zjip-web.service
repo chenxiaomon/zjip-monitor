@@ -8,7 +8,8 @@ After=network.target
 [Service]
 User=root
 WorkingDirectory=/opt/zjip-monitor
-# .env 里是 WEB_USER/WEB_PASS/SESSION_SECRET/API_KEY 等，不进仓库、不被 deploy.sh 覆盖
+# .env 里是 WEB_USER/WEB_PASS（备用管理员）/SESSION_SECRET/API_KEY 等，不进仓库、不被 deploy.sh 覆盖；
+# 控制台用户在 config/users.yaml（同样只在服务器上）
 EnvironmentFile=/opt/zjip-monitor/.env
 # 注意入口是 uvicorn 直接加载 web.app:app，不是 run_web.py
 ExecStart=/opt/zjip-monitor/.venv/bin/uvicorn web.app:app --host 127.0.0.1 --port 8000

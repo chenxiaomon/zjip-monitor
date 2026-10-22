@@ -34,17 +34,19 @@ cp deploy/deploy.env.example deploy/deploy.env   # 按需改 SERVER / REMOTE
 | `help` | 用法 |
 
 选项：`--allow-dirty`（工作区有未提交改动仍部署）、`--skip-tests`（跳过本地 pytest）、`--yes`（跳过交互确认）、`--with-config`（仅 `rollback`，见下）。
-环境变量：`DEPLOY_DELETE=1`（rsync 加 `--delete`，先预览要删的远端文件并确认；排除清单里的 `.env`、`.env.bak`、`config/*.yaml`、`config/accounts.enc[.bak]`、`data/` 等受保护不会被删）、`DEPLOY_SSH_CMD`、`DEPLOY_ENV`。
+环境变量：`DEPLOY_DELETE=1`（rsync 加 `--delete`，先预览要删的远端文件并确认；排除清单里的 `.env`、`.env.bak`、`config/settings.yaml`、`config/users.yaml`、`config/accounts.enc[.bak]`、`data/` 等受保护不会被删）、`DEPLOY_SSH_CMD`、`DEPLOY_ENV`。
+
+`config/users.yaml`（控制台用户）只由服务器上的控制台写入：本机就算有一份（例如本地调试时生成的），也绝不能传上去覆盖同事的账号。
 
 排除清单里有三类只存在于服务器、本地永远没有的文件，`--delete` 必须绕开它们：`.env.bak` 与 `config/accounts.enc.bak`（控制台改设置时留下的一代备份，出事时正好要用），以及本地才有的 `miniprogram/project.private.config.json`（`.gitignore` 里有，但 rsync 不读 gitignore）。
 
 ## 备份与回滚
 
 - 每次 `deploy` 先在服务器上 `tar czf BACKUP_DIR/code-<UTC时间戳>-pre-<新sha>.tgz`。名字里的 **`pre-<新sha>` 表示「部署 `<新sha>` 之前服务器上的代码」**——归档内容是被这次部署替换掉的旧版本，不是 `<新sha>` 本身。
-- 内容是代码目录里除 `data/ logs/ .venv/ .pytest_cache/ __pycache__` 之外的一切——包括 `.env`、`config/`（`settings.yaml`、`accounts.enc`）、`requirements.lock`、`RELEASE`，都是灾难恢复所需且很小。
+- 内容是代码目录里除 `data/ logs/ .venv/ .pytest_cache/ __pycache__` 之外的一切——包括 `.env`、`config/`（`settings.yaml`、`accounts.enc`、`users.yaml`）、`requirements.lock`、`RELEASE`，都是灾难恢复所需且很小。
 - 归档里有明文口令（`.env` 的 `FERNET_KEY` / `WEB_PASS` / `API_KEY`），所以备份目录是 `700`、tgz 是 `600`。
 - 只保留最近 `KEEP_BACKUPS` 份（默认 3）。**必须是正整数（≥1）**：0 会让清理逻辑把刚生成的那份也删掉，脚本因此直接拒绝启动。
-- `rollback` 是解包覆盖，**默认只恢复代码**：解包时排除 `.env`、`.env.bak`、`config/`。控制台会在部署之后改写 `config/accounts.enc` 与 `settings.yaml`，把它们退回备份时刻等于静默抹掉这些改动，是数据丢失而不是回滚。
+- `rollback` 是解包覆盖，**默认只恢复代码**：解包时排除 `.env`、`.env.bak`、`config/`。控制台会在部署之后改写 `config/accounts.enc`、`settings.yaml` 与 `users.yaml`，把它们退回备份时刻等于静默抹掉这些改动（已停用或删除的同事还会被恢复），是数据丢失而不是回滚。
 - 真正的灾难恢复（配置本身被写坏）用 `./deploy.sh rollback <备份名> --with-config`，它会连 `.env` 与 `config/` 一起覆盖回备份时刻；确认提示里会说明这个差别。
 - 部署新增的文件不会被解包删掉（旧代码不引用它们，无害）。
 
