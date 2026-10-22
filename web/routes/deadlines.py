@@ -13,7 +13,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from src import todo
-from web.auth import visible_accounts
+from web.auth import shown_accounts
 from web.deps import templates
 
 router = APIRouter()
@@ -38,7 +38,7 @@ def _month(raw: str | None, today: date) -> date:
 def calendar_page(request: Request, month: str | None = None) -> HTMLResponse:
     today = todo.today_local()
     first = _month(month, today)
-    data = todo.deadline_items(visible_accounts(request), today)
+    data = todo.deadline_items(shown_accounts(request), today)
     key = first.strftime("%Y-%m")
 
     by_day: dict[str, list[dict]] = {}

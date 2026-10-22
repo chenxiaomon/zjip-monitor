@@ -349,6 +349,45 @@ def visible_accounts(request: Request) -> list[Account]:
     return [a for a in accounts if a.group and a.group in groups]
 
 
+# ---------------------------------------------------------------------------
+# 我负责的 — a display preference, never a permission
+# ---------------------------------------------------------------------------
+# Colleagues split the work by client: whoever is a company's 负责人 sees
+# 「我负责的」by default on the dashboard, calendar, records and changes, and
+# can switch to everything they may see. The choice lives in a cookie. Rights
+# (editing, attachments, the record drawer) keep using visible_accounts().
+SCOPE_COOKIE = "zjip_scope"
+
+
+def view_scope(request: Request) -> dict:
+    """{"mine": bool, "owned": n, "visible": n, "accounts": [...]} — cached
+    on the request, since a page and its template both ask."""
+    cached = getattr(request.state, "view_scope", None)
+    if cached is not None:
+        return cached
+    visible = visible_accounts(request)
+    me = (current_user(request) or {}).get("username")
+    owned = [a for a in visible if me and a.owner == me]
+    mine = bool(owned) and request.cookies.get(SCOPE_COOKIE) != "all"
+    scope = {"mine": mine, "owned": len(owned), "visible": len(visible),
+             "accounts": owned if mine else visible}
+    request.state.view_scope = scope
+    return scope
+
+
+def shown_accounts(request: Request) -> list[Account]:
+    """The companies a page lists: 我负责的 or everything visible."""
+    return view_scope(request)["accounts"]
+
+
+def shown_usernames(request: Request) -> set[str] | None:
+    """As allowed_usernames(), narrowed to 我负责的 when that is on."""
+    scope = view_scope(request)
+    if not scope["mine"]:
+        return allowed_usernames(request)
+    return {a.username for a in scope["accounts"]}
+
+
 def allowed_usernames(request: Request) -> set[str] | None:
     """None = no restriction (admin); otherwise the set of visible usernames."""
     if is_admin(request):

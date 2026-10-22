@@ -40,8 +40,9 @@
       <!-- Dot -->
       <view class="dot dot-{{item.dot}}"></view>
 
-      <!-- Company name -->
+      <!-- Company name; 我负责 marks the companies this colleague follows up -->
       <text class="company-name">{{item.company}}</text>
+      <text wx:if="{{item.mine}}" class="mine-tag">我负责</text>
 
       <!-- Status pills -->
       <view class="pills" wx:if="{{item.pills.length > 0}}">

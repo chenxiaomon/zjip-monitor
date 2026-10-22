@@ -72,6 +72,15 @@
     <button type="button" class="icon-btn nav-toggle" onclick="document.body.classList.toggle('nav-open')" aria-label="打开菜单">{{ icon('menu-2') }}</button>
     <h1 class="topbar-title">{% block page_title %}{% endblock %}</h1>
     <div class="topbar-right">
+      {# 我负责的 / 全部 — only on the pages that honour it, only for someone who owns companies #}
+      {% set scope = view_scope(request) if current_user and request.url.path in ('/', '/records', '/calendar', '/changes') else none %}
+      {% if scope and scope.owned %}
+      {% set back = (request.url.path ~ ('?' ~ request.url.query if request.url.query else '')) | urlencode %}
+      <div class="chips scope-toggle" role="group" aria-label="显示范围">
+        <a href="/scope?to=mine&next={{ back }}" class="chip chip-sm{% if scope.mine %} active{% endif %}" title="只看我负责的企业">我负责的 {{ scope.owned }}</a>
+        <a href="/scope?to=all&next={{ back }}" class="chip chip-sm{% if not scope.mine %} active{% endif %}" title="我能看到的全部企业">全部 {{ scope.visible }}</a>
+      </div>
+      {% endif %}
       <form class="topbar-search" action="/records" method="get" role="search">
         {{ icon('search') }}
         <input type="search" name="q" placeholder="搜索登记号 / 数据名称 / 公司" aria-label="搜索登记记录">

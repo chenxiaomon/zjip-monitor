@@ -18,7 +18,7 @@ from loguru import logger
 from src.scraper import AUDIT_STATUS, decode_status
 from web import auth, login_guard
 from web.auth import current_user, visible_accounts
-from web.deps import _fmt_time, account_dot, detail_url, in_year, int_or_none
+from web.deps import _fmt_time, account_dot, detail_url, in_year, int_or_none, owner_label
 from web.services import audit_log
 from web.services.snapshot import get_latest_snapshot
 
@@ -109,21 +109,22 @@ def _ms_to_date(ms: int | None) -> str:
         return ""
 
 
-def _visible_snapshots(request: Request) -> list[dict]:
-    """Latest snapshot per account the caller is allowed to see.
+def _visible_pairs(request: Request) -> list[tuple]:
+    """(account, latest snapshot) for every account the caller may see — the
+    caller's own companies (负责人) first.
 
     This used to read every snapshot on disk regardless of the caller, so the
-    console's group isolation stopped at the API boundary. The key carries
-    admin scope today, so the set is the same minus orphan snapshots of
-    accounts that no longer exist — but binding keys to groups is now a change
-    to the middleware, not to every handler.
+    console's group isolation stopped at the API boundary; going through
+    visible_accounts() also drops orphan snapshots of deleted accounts.
     """
-    snaps = []
+    me = (current_user(request) or {}).get("username")
+    pairs = []
     for acc in visible_accounts(request):
         snap = get_latest_snapshot(acc.company)
         if snap is not None:
-            snaps.append(snap)
-    return snaps
+            pairs.append((acc, snap))
+    pairs.sort(key=lambda p: not (me and p[0].owner == me))  # stable: mine first
+    return pairs
 
 
 @router.get("/status")
@@ -134,7 +135,8 @@ def api_status(request: Request, year: int | None = Query(None)) -> JSONResponse
     success_count = 0
     pending_correction = 0
 
-    for snap in _visible_snapshots(request):
+    me = (current_user(request) or {}).get("username")
+    for acc, snap in _visible_pairs(request):
         status_counts: dict[int, int] = {}
         for r in snap.get("records", []):
             if not in_year(r.get("dataRegApplyTime"), year):
@@ -150,6 +152,8 @@ def api_status(request: Request, year: int | None = Query(None)) -> JSONResponse
             "total": total,
             "status_counts": {str(k): v for k, v in status_counts.items()},
             "last_check": _fmt_time(snap.get("snapshot_time")),
+            "owner": owner_label(acc.owner, acc.group),
+            "mine": bool(me and acc.owner == me),
         })
         total_records += total
         success_count += status_counts.get(7, 0)
@@ -174,7 +178,7 @@ def api_records(
     """Registration records, filtered by company name, status and/or application year."""
     rows: list[dict] = []
 
-    for snap in _visible_snapshots(request):
+    for _acc, snap in _visible_pairs(request):
         snap_company = snap.get("company", "")
         if company and snap_company != company:
             continue

@@ -259,6 +259,14 @@ def owner_choices(group: str) -> list[tuple[str, str]]:
     ]
 
 
+def view_scope(request) -> dict:
+    """web.auth.view_scope for templates (the topbar's 我负责的 / 全部)."""
+    # Lazy: web.auth reads .env and logs at import; deps must not pull that in.
+    from web.auth import view_scope as _view_scope
+
+    return _view_scope(request)
+
+
 # Deadline pill modifiers (ui.css .pill-*; src/todo.urgency_of): overdue solid red,
 # ≤3 days red, ≤7 amber, further out green, deadline unknown grey.
 URGENCY_CLASSES: dict[str, str] = {
@@ -302,6 +310,7 @@ templates.env.globals["detail_url"] = detail_url
 templates.env.globals["get_groups"] = get_groups
 templates.env.globals["owner_label"] = owner_label
 templates.env.globals["owner_choices"] = owner_choices
+templates.env.globals["view_scope"] = view_scope
 
 
 # ---------------------------------------------------------------------------

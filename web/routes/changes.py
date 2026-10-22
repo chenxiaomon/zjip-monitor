@@ -9,7 +9,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 
 from src.scraper import AUDIT_STATUS
-from web.auth import allowed_usernames, visible_accounts
+from web.auth import shown_accounts, shown_usernames
 from web.deps import STATUS_COLORS, templates
 from web.services.events import read_change_rows
 
@@ -50,7 +50,7 @@ def _changes_ctx(
     # The allow-list goes INTO the reader: filtering afterwards let a busy
     # account the user may not see push that user's own changes out of the
     # window, leaving them an empty page.
-    rows = read_change_rows(account=account, accounts=allowed_usernames(request), since=since, until=until)
+    rows = read_change_rows(account=account, accounts=shown_usernames(request), since=since, until=until)
     total = len(rows)
     pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
     current = min(_page_number(page), pages)
@@ -70,7 +70,7 @@ def _changes_ctx(
         "start_date": start_date or "",
         "end_date": end_date or "",
         "default_days": DEFAULT_DAYS,
-        "accounts_list": visible_accounts(request),
+        "accounts_list": shown_accounts(request),
         "changes_url": changes_url,
         "STATUS_COLORS": STATUS_COLORS,
         "AUDIT_STATUS": AUDIT_STATUS,
