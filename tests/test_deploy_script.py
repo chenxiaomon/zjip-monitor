@@ -138,6 +138,7 @@ MINI_REPO_FILES = {
     ".env": "SECRET=1\n",
     "config/settings.yaml": "secret: 1\n",
     "config/accounts.enc": "SECRET",
+    "config/users.yaml": "users: {laptop: {}}\n",
     "miniprogram/config.js": "SECRET",
     "miniprogram/project.private.config.json": "{\"appid\": \"SECRET\"}",
     "deploy/deploy.env": "SERVER=secret@host\n",
@@ -164,6 +165,8 @@ REMOTE_SEED = {
     "config/settings.yaml": "server: 1\n",
     "config/accounts.enc": "ENC",
     "config/accounts.enc.bak": "ENC_OLD",
+    # The console's user store — written by the server's web process only.
+    "config/users.yaml": "users: {server: {}}\n",
     "requirements.lock": "fastapi==0.0\n",
     "RELEASE": "0000000 main 2026-01-01T00:00:00Z oldhost\n",
     "data/snapshots/snap.json": "{}",
@@ -441,7 +444,7 @@ def test_dry_run_lists_transfer_and_honours_excludes(harness):
                  "deploy/deploy.env.example", "config/settings.yaml.example"):
         assert must in listed, f"{must} missing from transfer list:\n{res.stdout}"
 
-    for never in (".env", "config/settings.yaml", "config/accounts.enc",
+    for never in (".env", "config/settings.yaml", "config/accounts.enc", "config/users.yaml",
                   "miniprogram/config.js", "miniprogram/project.private.config.json",
                   "deploy/deploy.env", "archive/archive.env", "deploy.sh", ".git"):
         assert never not in listed, f"{never} must not be transferred"
@@ -514,7 +517,7 @@ def test_deploy_pipeline_runs_steps_in_order(harness):
     assert archives[0].name.endswith(f"-pre-{sha[:7]}.tgz"), archives[0].name
     names = _tar_names(archives[0])
     for must in ("src/main.py", ".env", ".env.bak", "config/settings.yaml",
-                 "config/accounts.enc", "config/accounts.enc.bak",
+                 "config/accounts.enc", "config/accounts.enc.bak", "config/users.yaml",
                  "requirements.lock", "RELEASE", "stale_old.py"):
         assert must in names, (must, names)
     for never in ("data", "logs", ".venv", ".pytest_cache"):
@@ -532,7 +535,7 @@ def test_deploy_pipeline_runs_steps_in_order(harness):
     assert (harness.remote / "deploy" / "zjip-web.service").exists()
     assert (harness.remote / "stale_old.py").exists()  # no --delete by default
     for untouched in (".env", ".env.bak", "config/settings.yaml", "config/accounts.enc",
-                      "config/accounts.enc.bak", "data/snapshots/snap.json",
+                      "config/accounts.enc.bak", "config/users.yaml", "data/snapshots/snap.json",
                       "logs/app.log", ".venv/lib/python3.12/site.py"):
         assert (harness.remote / untouched).read_text() == REMOTE_SEED[untouched], untouched
     for never in ("deploy/deploy.env", "archive/archive.env", "miniprogram/config.js", ".git",
@@ -826,12 +829,14 @@ def test_deploy_delete_previews_and_requires_yes(harness):
     assert not (harness.remote / "stale_old.py").exists()
     assert (harness.remote / "src" / "main.py").read_text() == "print('new')\n"
     for untouched in (".env", ".env.bak", "config/settings.yaml", "config/accounts.enc",
-                      "config/accounts.enc.bak", "RELEASE", "data/snapshots/snap.json",
+                      "config/accounts.enc.bak", "config/users.yaml", "RELEASE",
+                      "data/snapshots/snap.json",
                       "logs/app.log", ".venv/lib/python3.12/site.py"):
         assert (harness.remote / untouched).read_text() == REMOTE_SEED[untouched], untouched
     # The server-only recovery copies are never even proposed for deletion.
     assert "deleting .env.bak" not in res.stdout
     assert "accounts.enc.bak" not in res.stdout
+    assert "users.yaml" not in res.stdout
     rsync_lines = [ln for ln in harness.scripts().splitlines() if ln.startswith("RSYNC ")]
     assert len(rsync_lines) == 2  # preview + real
     assert all("--delete" in ln for ln in rsync_lines)
@@ -898,6 +903,7 @@ def test_rollback_keeps_live_env_and_config_by_default(harness):
     (harness.remote / "config" / "accounts.enc").write_text("ENC_NEW_PASSWORD")
     (harness.remote / "config" / "accounts.enc.bak").write_text("ENC")
     (harness.remote / "config" / "settings.yaml").write_text("server: 2\n")
+    (harness.remote / "config" / "users.yaml").write_text("users: {colleague: {}}\n")
 
     harness.reset_log()
     res = harness.run("rollback", "--yes", script=repo / "deploy.sh", real_steps=True)
@@ -912,6 +918,7 @@ def test_rollback_keeps_live_env_and_config_by_default(harness):
     assert (harness.remote / "config" / "accounts.enc").read_text() == "ENC_NEW_PASSWORD"
     assert (harness.remote / "config" / "accounts.enc.bak").read_text() == "ENC"
     assert (harness.remote / "config" / "settings.yaml").read_text() == "server: 2\n"
+    assert (harness.remote / "config" / "users.yaml").read_text() == "users: {colleague: {}}\n"
     # the operator is told both what was skipped and how to ask for it
     assert "--with-config" in res.stdout + res.stderr
 
@@ -925,6 +932,7 @@ def test_rollback_with_config_restores_env_and_config(harness):
     assert res.returncode == 0, res.stdout + res.stderr
     (harness.remote / ".env").write_text("SERVER_SECRET_ROTATED\n")
     (harness.remote / "config" / "accounts.enc").write_text("ENC_NEW_PASSWORD")
+    (harness.remote / "config" / "users.yaml").write_text("users: {colleague: {}}\n")
 
     harness.reset_log()
     res = harness.run("rollback", "--with-config", "--yes",
@@ -934,6 +942,7 @@ def test_rollback_with_config_restores_env_and_config(harness):
     assert (harness.remote / ".env").read_text() == REMOTE_SEED[".env"]
     assert (harness.remote / "config" / "accounts.enc").read_text() == REMOTE_SEED["config/accounts.enc"]
     assert (harness.remote / "config" / "settings.yaml").read_text() == REMOTE_SEED["config/settings.yaml"]
+    assert (harness.remote / "config" / "users.yaml").read_text() == REMOTE_SEED["config/users.yaml"]
     assert "丢失" in res.stdout + res.stderr  # the warning names the cost
 
 

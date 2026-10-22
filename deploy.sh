@@ -108,6 +108,9 @@ confirm() {  # confirm "提示" → 0 继续；--yes 时直接通过
 # .env.bak and config/accounts.enc.bak exist only on the server (save_accounts
 # keeps one generation; the laptop never has them). Without an exclude, --delete
 # would remove precisely the files a bad settings edit needs to recover from.
+# config/users.yaml is the console's user store (written only by the server's
+# web process): a stray laptop copy must never overwrite colleagues' accounts,
+# and --delete must never remove it.
 RSYNC_EXCLUDES=(
   --exclude='.venv/'
   --exclude='__pycache__/'
@@ -118,6 +121,7 @@ RSYNC_EXCLUDES=(
   --exclude='config/accounts.enc.bak'
   --exclude='config/accounts.yaml'
   --exclude='config/settings.yaml'
+  --exclude='config/users.yaml'
   --exclude='miniprogram/config.js'
   --exclude='miniprogram/project.private.config.json'
   --exclude='data/'
@@ -420,9 +424,9 @@ EOF
   echo
   echo "  将回滚到：$target"
   if [ "$WITH_CONFIG" = 1 ]; then
-    warn "--with-config：除代码外，备份里的 .env 与 config/（settings.yaml、accounts.enc）也会覆盖回备份时刻——本次部署之后在控制台里改过的账号、密码、设置会全部丢失"
+    warn "--with-config：除代码外，备份里的 .env 与 config/（settings.yaml、accounts.enc、users.yaml）也会覆盖回备份时刻——本次部署之后在控制台里改过的账号、密码、设置会全部丢失，已停用或删除的控制台用户也会恢复"
   else
-    echo "  只恢复代码：.env 与 config/（settings.yaml、accounts.enc）保持服务器现状不动"
+    echo "  只恢复代码：.env 与 config/（settings.yaml、accounts.enc、users.yaml）保持服务器现状不动"
     echo "  （data/ logs/ .venv/ 同样不动；确实要连配置一起回退到备份时刻，用 --with-config）"
   fi
   confirm "确认回滚？" || fail "已取消，服务器未改动"
