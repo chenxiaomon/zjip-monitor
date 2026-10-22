@@ -18,6 +18,7 @@ from fastapi import APIRouter, Request
 from loguru import logger
 from sse_starlette.sse import EventSourceResponse
 
+from web import auth
 from web.auth import allowed_usernames
 
 _DATA_DIR = Path(__file__).parent.parent / "data"
@@ -128,6 +129,25 @@ def _visible_to(allowed: set[str] | None, data: str) -> bool:
     return account in allowed
 
 
+def _still_signed_in(request: Request) -> bool:
+    """Re-check a cookie session mid-stream. The stream outlives the request
+    that authenticated it, so without this a disabled user — or one whose
+    password was reset — would keep receiving events until they closed the
+    tab. Refreshes request.state.user so a groups change narrows or widens
+    what the stream lets through. Basic-Auth callers have no cookie to
+    re-check; their credential is the .env admin's."""
+    user = getattr(request.state, "user", None)
+    if user is None:
+        return False
+    if user.get("via") != "cookie":
+        return True
+    fresh = auth.user_from_cookie(request.cookies.get(auth.COOKIE_NAME))
+    if fresh is None:
+        return False
+    request.state.user = fresh
+    return True
+
+
 async def _stream(request: Request) -> AsyncGenerator[dict, None]:
     allowed = allowed_usernames(request)
     q: asyncio.Queue[str] = asyncio.Queue(maxsize=_QUEUE_MAX)
@@ -141,6 +161,11 @@ async def _stream(request: Request) -> AsyncGenerator[dict, None]:
                 if _visible_to(allowed, data):
                     yield {"event": "update", "data": data}
             except asyncio.TimeoutError:
+                # The browser's EventSource reconnects on its own; that
+                # request then meets the login redirect and stops.
+                if not _still_signed_in(request):
+                    break
+                allowed = allowed_usernames(request)
                 yield {"event": "ping", "data": ""}
     finally:
         _subscribers.discard(q)

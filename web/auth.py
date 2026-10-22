@@ -1,13 +1,25 @@
-"""Console user store, session cookies, and per-request visibility helpers.
+"""Console identities, session cookies, and per-request visibility helpers.
 
 Users:
-    admin        — from WEB_USER / WEB_PASS (sees and manages everything)
-    group users  — from WEB_USERS="user1:pass1:group_a,user2:pass2:group_b"
-                   each bound to one group key defined in config/settings.yaml
+    .env admin   — WEB_USER / WEB_PASS: sees and manages everything; the way
+                   back in when config/users.yaml is broken, and the Basic-Auth
+                   credential scripts use. Never stored in or editable from the
+                   user file.
+    file users   — config/users.yaml (web/services/users.py), managed on the
+                   用户 page: admin / operator (经办人) / viewer (只读), each
+                   non-admin bound to one or more group keys from
+                   config/settings.yaml. Role and groups are read on every
+                   request, so a change applies without a new login.
 
 Session:
     Stateless HMAC-signed cookie "szt_session" = "username|expiry|signature".
     Secret from SESSION_SECRET, else derived from FERNET_KEY, else WEB_PASS.
+    The signature also covers the user's session_key: rotating it (password
+    reset, 强制下线, disable, role change) ends every session issued so far.
+    The .env admin and users imported from the old WEB_USERS table have an
+    empty key, which signs exactly what the old cookies signed — so the
+    switch logged nobody out. An .env admin session can only be ended by
+    rotating SESSION_SECRET.
 """
 
 from __future__ import annotations
@@ -24,6 +36,7 @@ from fastapi import HTTPException, Request
 from loguru import logger
 
 from src.config_loader import Account, ConfigError, load_accounts
+from web.services import users
 from web.services.attachments_svc import _safe_name as _safe_company_key
 
 _ROOT = Path(__file__).parent.parent
@@ -48,84 +61,118 @@ def _session_secret() -> bytes:
 
 _SECRET = _session_secret()
 
-
-def _parse_users() -> dict[str, dict]:
-    """Build the user table: admin + group users from WEB_USERS."""
-    users: dict[str, dict] = {
-        _ADMIN_USER: {"password": _ADMIN_PASS, "role": "admin", "group": ""},
-    }
-    raw = os.getenv("WEB_USERS", "").strip()
-    if not raw:
-        return users
-    for i, entry in enumerate(raw.split(",")):
-        entry = entry.strip()
-        if not entry:
-            continue
-        # username:password:group — split from both ends so the password
-        # itself may contain colons. Never echo the entry (it holds a password).
-        username, sep1, rest = entry.partition(":")
-        password, sep2, group = rest.rpartition(":")
-        if not sep1 or not sep2 or not username.strip() or not password.strip() or not group.strip():
-            raise RuntimeError(
-                f"WEB_USERS 第 {i + 1} 项格式错误（应为 用户名:密码:分组key）"
-            )
-        username, password, group = username.strip(), password.strip(), group.strip()
-        if username in users:
-            raise RuntimeError(f"WEB_USERS 用户名重复：{username!r}")
-        users[username] = {"password": password, "role": "group", "group": group}
-    return users
-
-
-_USERS = _parse_users()
+if _ADMIN_USER.lower() in users.RESERVED_NAMES:
+    # "view|expiry|sig" is the /view page's cookie; an admin of that name
+    # would make the two interchangeable.
+    logger.error(f"WEB_USER 不能是保留名 {_ADMIN_USER!r}，请在 .env 中改名")
 
 
 # ---------------------------------------------------------------------------
 # Login / session cookie
 # ---------------------------------------------------------------------------
 
-def check_login(username: str, password: str) -> str | None:
-    """Return the username if credentials match a known user, else None."""
-    matched = None
-    for name, info in _USERS.items():
-        user_ok = secrets.compare_digest(username.encode(), name.encode())
-        pass_ok = secrets.compare_digest(password.encode(), info["password"].encode())
-        if user_ok and pass_ok:
-            matched = name
-    return matched
+def _is_env_admin(username: str) -> bool:
+    return secrets.compare_digest(username.encode(), _ADMIN_USER.encode())
 
 
-def _sign(payload: str) -> str:
-    return hmac.new(_SECRET, payload.encode(), hashlib.sha256).hexdigest()
+def _env_admin(via: str) -> dict:
+    return {
+        "username": _ADMIN_USER, "display_name": "", "role": "admin",
+        "groups": [], "source": "env", "via": via,
+    }
+
+
+def _file_user(username: str, rec: dict, via: str) -> dict:
+    return {
+        "username": username, "display_name": rec["display_name"], "role": rec["role"],
+        "groups": list(rec["groups"]), "source": "file", "via": via,
+        "must_change_password": rec["must_change_password"],
+    }
+
+
+def authenticate(username: str, password: str) -> tuple[str | None, str]:
+    """Check a login. Returns (username, "ok"), (None, "bad") or
+    (None, "disabled") — the last only for the right password, so it tells
+    a guesser nothing.
+
+    Slow on purpose (one PBKDF2 per call): run it off the event loop. Every
+    attempt costs exactly one hash — a dummy one for an unknown name and for
+    the .env admin, whose password is compared in plain — so the response
+    time does not reveal which usernames exist. A file user who shares the
+    .env admin's name is ignored: the rescue login always wins.
+    """
+    if len(password) > users.MAX_PASSWORD_LEN:
+        return None, "bad"
+    if _is_env_admin(username):
+        users.dummy_verify(password)
+        ok = secrets.compare_digest(password.encode(), _ADMIN_PASS.encode())
+        return (_ADMIN_USER, "ok") if ok else (None, "bad")
+    name = users.normalize_username(username)
+    rec = users.get(name)
+    if rec is None or not rec["password_hash"]:
+        users.dummy_verify(password)
+        return None, "bad"
+    if not users.verify_password(password, rec["password_hash"]):
+        return None, "bad"
+    if rec["disabled"]:
+        return None, "disabled"
+    return name, "ok"
+
+
+def is_known_user(username: str) -> bool:
+    """Whether a login name belongs to someone — the operation log stores
+    an unknown one masked (it is often a password typed in the wrong box)."""
+    return _is_env_admin(username) or users.get(username) is not None
+
+
+def _sign(payload: str, key: str = "") -> str:
+    # An empty key signs the bare payload: byte-for-byte the pre-users.yaml
+    # signature, so the .env admin's and imported users' cookies stay valid.
+    message = f"{payload}|{key}" if key else payload
+    return hmac.new(_SECRET, message.encode(), hashlib.sha256).hexdigest()
+
+
+def _session_key(username: str) -> str:
+    if _is_env_admin(username):
+        return ""
+    rec = users.get(username)
+    return rec["session_key"] if rec else ""
 
 
 def make_cookie(username: str) -> str:
     expiry = int(time.time()) + SESSION_MAX_AGE
     payload = f"{username}|{expiry}"
-    return f"{payload}|{_sign(payload)}"
+    return f"{payload}|{_sign(payload, _session_key(username))}"
 
 
 def user_from_cookie(cookie: str | None) -> dict | None:
-    """Verify the session cookie and return the user dict, else None."""
+    """Verify the session cookie and return the user dict, else None.
+
+    Looks the user up on every call: a deleted or disabled user, or one whose
+    session_key was rotated, is signed out on the next request.
+    """
     if not cookie:
         return None
     try:
         username, expiry_str, sig = cookie.rsplit("|", 2)
-        payload = f"{username}|{expiry_str}"
-        if not secrets.compare_digest(sig, _sign(payload)):
-            return None
         if int(expiry_str) < time.time():
             return None
     except (ValueError, TypeError):
         return None
-    info = _USERS.get(username)
-    if info is None:
+    payload = f"{username}|{expiry_str}"
+    if _is_env_admin(username):
+        return _env_admin("cookie") if secrets.compare_digest(sig, _sign(payload)) else None
+    rec = users.get(username)
+    if rec is None or rec["disabled"]:
         return None
-    return {"username": username, "role": info["role"], "group": info["group"]}
+    if not secrets.compare_digest(sig, _sign(payload, rec["session_key"])):
+        return None
+    return _file_user(users.normalize_username(username), rec, "cookie")
 
 
-def admin_user() -> dict:
-    """Synthesized user for Basic-Auth admin fallback."""
-    return {"username": _ADMIN_USER, "role": "admin", "group": ""}
+def admin_user(via: str = "basic") -> dict:
+    """The .env admin, for the Basic-Auth fallback and the API-key lane."""
+    return _env_admin(via)
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +262,10 @@ def visible_accounts(request: Request) -> list[Account]:
         return []
     if is_admin(request):
         return accounts
-    return [a for a in accounts if a.group == user.get("group", "")]
+    # Not intersected with settings.yaml's groups: a settings file that
+    # fails to parse reads as {} and would otherwise hide every company.
+    groups = set(user.get("groups") or [])
+    return [a for a in accounts if a.group and a.group in groups]
 
 
 def allowed_usernames(request: Request) -> set[str] | None:

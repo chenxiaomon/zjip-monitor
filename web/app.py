@@ -80,8 +80,27 @@ if not _API_KEY:
     logger.warning("API_KEY 未配置，/api/* 仅接受 Basic Auth 访问（小程序将无法直连）")
 
 
+async def _migrate_users() -> None:
+    """One-time WEB_USERS → config/users.yaml import (one hash per user, so
+    off the event loop). Here and not at import: importing web.app happens
+    in the deploy smoke test and the test suite too. Never fatal — the .env
+    admin can still log in and fix things from the 用户 page."""
+    from web.services import users
+
+    try:
+        await asyncio.to_thread(users.migrate_from_env)
+        if users.get(_WEB_USER) is not None:
+            logger.error(
+                f"config/users.yaml 里有与 WEB_USER 同名的用户 {_WEB_USER!r}，已忽略；"
+                "该名字只代表 .env 备用管理员"
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"导入 WEB_USERS 失败：{exc!r}")
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):  # type: ignore[type-arg]
+    await _migrate_users()
     task = asyncio.create_task(start_watcher())
     yield
     # Graceful shutdown: signal in-flight scans to stop at their next
@@ -223,13 +242,13 @@ async def _auth_middleware(request: Request, call_next) -> Response:  # type: ig
             # lets the /api handlers go through the same visible_accounts()
             # path as the console, so binding keys to groups later is a change
             # to this line, not to every handler.
-            request.state.user = auth.admin_user()
+            request.state.user = auth.admin_user(via="api")
             return await call_next(request)
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     # 控制台：会话 cookie，Basic 管理员兜底
     user = auth.user_from_cookie(request.cookies.get(auth.COOKIE_NAME))
     if user is None and _basic_admin_ok(request):
-        user = auth.admin_user()
+        user = auth.admin_user(via="basic")
     if user is None:
         if request.headers.get("HX-Request"):
             # 会话过期的 HTMX 轮询：让整页跳转登录页

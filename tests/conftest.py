@@ -12,7 +12,9 @@ import os
 
 os.environ.setdefault("WEB_USER", "admin")
 os.environ.setdefault("WEB_PASS", "test-admin-pass")
-os.environ.setdefault("WEB_USERS", "ga:test-ga-pass:group_a,gb:test-gb-pass:group_b")
+# Console users come from config/users.yaml (seeded by _isolated_users); an
+# empty WEB_USERS keeps a developer's .env from feeding the one-time import.
+os.environ.setdefault("WEB_USERS", "")
 os.environ.setdefault("SESSION_SECRET", "test-session-secret")
 os.environ.setdefault("API_KEY", "test-api-key-0123456789")
 os.environ.setdefault("ZJIP_LOG_TO_FILE", "0")
@@ -25,11 +27,11 @@ import yaml  # noqa: E402
 from src import control, settings_cache, status_store  # noqa: E402
 from src.config_loader import Account  # noqa: E402
 
-# Credentials the web fixtures log in with — keep in sync with the setdefaults.
+# Credentials the web fixtures log in with — ADMIN is the .env admin (keep in
+# sync with the setdefaults), the rest are seeded by _isolated_users.
 ADMIN = ("admin", "test-admin-pass")
 GROUP_A_USER = ("ga", "test-ga-pass")
 GROUP_B_USER = ("gb", "test-gb-pass")
-# Console users live in config/users.yaml now; _isolated_users seeds these.
 OPERATOR_A = ("opa", "test-opa-pass")
 API_KEY = "test-api-key-0123456789"
 

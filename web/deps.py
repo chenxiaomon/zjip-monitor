@@ -18,6 +18,7 @@ from fastapi.templating import Jinja2Templates
 # rendering and snapshot diffing can never disagree about a status code.
 from src.scraper import AUDIT_STATUS, int_or_none  # noqa: F401  (re-exported for routes/templates)
 from src.settings_cache import get_settings
+from web.services.users import ROLE_LABELS
 
 _HERE = Path(__file__).parent
 _SHANGHAI_TZ = timezone(timedelta(hours=8))
@@ -268,6 +269,7 @@ templates.env.globals["record_url"] = record_url
 templates.env.globals["status_class"] = status_class
 templates.env.filters["tojson"] = _tojson
 templates.env.filters["group_label"] = group_label
+templates.env.filters["role_label"] = lambda role: ROLE_LABELS.get(role, role or "")
 templates.env.globals["detail_url"] = detail_url
 templates.env.globals["get_groups"] = get_groups
 

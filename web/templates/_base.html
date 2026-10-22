@@ -51,10 +51,11 @@
   </nav>
   {% if current_user %}
   <div class="sidebar-foot">
-    <span class="avatar">{{ current_user.username[:1] }}</span>
+    {% set shown_name = current_user.display_name or current_user.username %}
+    <span class="avatar">{{ shown_name[:1] }}</span>
     <div class="grow">
-      <div class="user-name truncate">{{ current_user.username }}</div>
-      <div class="user-role truncate">{% if limited %}{{ current_user.group | group_label }}{% else %}管理员{% endif %}</div>
+      <div class="user-name truncate" title="{{ current_user.username }}">{{ shown_name }}</div>
+      <div class="user-role truncate">{{ current_user.role | role_label }}{% if limited %} · {{ current_user.groups | map('group_label') | join('、') }}{% endif %}</div>
     </div>
     <form method="post" action="/logout">
       <button type="submit" class="icon-btn" title="退出登录">{{ icon('logout') }}</button>

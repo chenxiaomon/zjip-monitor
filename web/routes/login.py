@@ -8,8 +8,8 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from loguru import logger
 
-from web import login_guard
-from web.auth import COOKIE_NAME, SESSION_MAX_AGE, check_login, make_cookie
+from web import auth, login_guard
+from web.auth import COOKIE_NAME, SESSION_MAX_AGE, make_cookie
 from web.deps import templates
 
 router = APIRouter()
@@ -49,7 +49,17 @@ async def login_submit(
             headers={"Retry-After": str(wait)},
         )
 
-    matched = check_login(username, password)
+    # PBKDF2 takes a few hundred ms on the production box — never on the loop.
+    matched, reason = await asyncio.to_thread(auth.authenticate, username, password)
+    if reason == "disabled":
+        # Only reachable with the right password, so it tells a guesser nothing.
+        logger.warning(f"已停用的控制台用户尝试登录 ip={ip} user={login_guard.mask(username)}")
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"error": "账号已停用，请联系管理员", "form_username": username},
+            status_code=403,
+        )
     if matched is None:
         just_locked = login_guard.record_failure(ip, username)
         await asyncio.sleep(FAILED_LOGIN_DELAY_SECONDS)
