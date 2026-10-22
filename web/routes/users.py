@@ -16,10 +16,16 @@ from __future__ import annotations
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
+from collections import Counter
+
+from src.config_loader import ConfigError, load_accounts
 from web import auth, login_guard
 from web.auth import current_user, require_admin
 from web.deps import get_groups, templates
 from web.services import audit_log, users
+from web.services import groups as group_svc
+from web.services.groups import GroupError
+from web.services.settings_svc import REFUSED_HINT, SettingsUnreadable
 from web.services.users import UserError, UsersUnreadable
 
 router = APIRouter()
@@ -36,11 +42,43 @@ def _row(request: Request, name: str, rec: dict) -> dict:
     return {**rec, "username": name, "is_me": name == _me(request)}
 
 
+def _company_counts() -> Counter:
+    """Companies per group key ("" = 未分组)."""
+    try:
+        return Counter(a.group for a in load_accounts())
+    except ConfigError:
+        return Counter()
+
+
+def _visible_count(rec: dict, counts: Counter) -> int | None:
+    """How many companies this user sees; None = all (admins)."""
+    if rec["role"] == "admin":
+        return None
+    return sum(counts.get(g, 0) for g in set(rec["groups"]))
+
+
 def _rows(request: Request) -> list[dict]:
     found = users.load()
     names = sorted(found, key=lambda n: (_ROLE_ORDER.get(found[n]["role"], 9), n))
     logins = audit_log.last_logins()
-    return [{**_row(request, name, found[name]), "last_login": logins.get(name)} for name in names]
+    counts = _company_counts()
+    return [{**_row(request, name, found[name]), "last_login": logins.get(name),
+             "visible": _visible_count(found[name], counts)} for name in names]
+
+
+def _groups_ctx(error: str | None = None) -> dict:
+    """The 分组 card: every group with its companies and members."""
+    counts = _company_counts()
+    found = users.load()
+    rows = []
+    for key, label in get_groups().items():
+        members = [found[n]["display_name"] or n for n in sorted(found) if key in found[n]["groups"]]
+        rows.append({"key": key, "label": label, "companies": counts.get(key, 0), "members": members})
+    return {"group_rows": rows, "ungrouped": counts.get("", 0), "group_error": error}
+
+
+def _groups_card(request: Request, error: str | None = None) -> HTMLResponse:
+    return templates.TemplateResponse(request, "_partials/groups_card.html", _groups_ctx(error))
 
 
 def _group_choices(existing: list[str]) -> dict[str, str]:
@@ -82,7 +120,8 @@ def _row_response(request: Request, name: str) -> HTMLResponse:
     rec = users.get(name)
     if rec is None:
         return HTMLResponse("")
-    row = {**_row(request, name, rec), "last_login": audit_log.last_logins().get(name)}
+    row = {**_row(request, name, rec), "last_login": audit_log.last_logins().get(name),
+           "visible": _visible_count(rec, _company_counts())}
     return templates.TemplateResponse(request, "_partials/user_row.html", {"row": row})
 
 
@@ -103,7 +142,7 @@ def users_page(request: Request) -> HTMLResponse:
         "users.html",
         {"rows": _rows(request), "load_error": users.load_error(),
          "env_admin": users.env_admin_name(), "role_labels": users.ROLE_LABELS,
-         "last_logins": audit_log.last_logins()},
+         "last_logins": audit_log.last_logins(), **_groups_ctx()},
     )
 
 
@@ -131,22 +170,50 @@ def create_user(
     role: str = Form("viewer"),
     groups: list[str] = Form([]),
     password: str = Form(""),
+    own_group: str = Form("off"),
 ) -> HTMLResponse:
+    """New user. 「专属分组」(checked by default for non-admins) creates a
+    group just for them, so a colleague starts out seeing nothing but what
+    gets put in it — not the owner's companies, not another colleague's."""
     require_admin(request)
-    form = {"username": username, "display_name": display_name, "role": role, "groups": groups}
+    form = {"username": username, "display_name": display_name, "role": role, "groups": groups,
+            "own_group": own_group}
+    new_group = None
     try:
+        if own_group == "on" and role != "admin":
+            # Validate first: a refused user must not leave an orphan group behind.
+            name = users.validate_username(username)
+            users.validate_password(password, name)
+            label = f"{display_name.strip()[:24] or name}的企业"
+            try:
+                new_group = group_svc.create(label, key=group_svc.personal_key(name))
+            except GroupError as exc:
+                raise UserError(f"专属分组没建成：{exc}") from exc
+            except SettingsUnreadable as exc:
+                raise UserError(f"{exc}。{REFUSED_HINT}") from exc
+            groups_chosen = [*groups, new_group]
+        else:
+            groups_chosen = groups
         name = users.create_user(
             username, display_name=display_name, role=role,
-            groups=_check_groups(groups, []), password=password, by=_me(request),
+            groups=_check_groups(groups_chosen, []), password=password, by=_me(request),
         )
     except UserError as exc:
-        audit_log.nothing_changed(request)
+        if new_group:
+            group_svc.delete(new_group)  # empty — created a moment ago
+        else:
+            audit_log.nothing_changed(request)
         return _form(request, mode="add", error=str(exc), form=form)
     except UsersUnreadable as exc:
+        if new_group:
+            group_svc.delete(new_group)
         audit_log.record_request(request, "user.create", target=username, ok=False,
                                  detail={"error": str(exc)})
         return _form(request, mode="add", error=f"{exc}，未保存", form=form)
     rec = users.get(name) or {}
+    if new_group:
+        audit_log.record_request(request, "group.create", target=new_group,
+                                 detail={"label": label, "for_user": name})
     audit_log.record_request(request, "user.create", target=name,
                              detail={"role": rec.get("role"), "groups": rec.get("groups")})
     return _saved()
@@ -286,6 +353,44 @@ def revoke_user(request: Request, username: str) -> HTMLResponse:
 @router.post("/users/{username}/delete", response_class=HTMLResponse)
 def delete_user(request: Request, username: str) -> HTMLResponse:
     return _simple_change(request, username, "user.delete", users.delete_user)
+
+
+# ---------------------------------------------------------------------------
+# 分组
+# ---------------------------------------------------------------------------
+
+def _group_change(request: Request, action: str, change, *, target: str = "",
+                  detail: dict | None = None) -> HTMLResponse:
+    require_admin(request)
+    try:
+        result = change()
+    except GroupError as exc:
+        audit_log.nothing_changed(request)
+        return _groups_card(request, str(exc))
+    except SettingsUnreadable as exc:
+        audit_log.record_request(request, action, target=target, ok=False, detail={"error": str(exc)})
+        return _groups_card(request, f"{exc}。{REFUSED_HINT}")
+    audit_log.record_request(request, action, target=target or result, detail=detail)
+    return _groups_card(request)
+
+
+@router.post("/users/groups", response_class=HTMLResponse)
+def create_group(request: Request, label: str = Form("")) -> HTMLResponse:
+    return _group_change(request, "group.create", lambda: group_svc.create(label),
+                         detail={"label": label.strip()})
+
+
+@router.post("/users/groups/{key}/rename", response_class=HTMLResponse)
+def rename_group(request: Request, key: str, label: str = Form("")) -> HTMLResponse:
+    old = get_groups().get(key, "")
+    return _group_change(request, "group.rename", lambda: group_svc.rename(key, label), target=key,
+                         detail={"label": [old, label.strip()]})
+
+
+@router.post("/users/groups/{key}/delete", response_class=HTMLResponse)
+def delete_group(request: Request, key: str) -> HTMLResponse:
+    return _group_change(request, "group.delete", lambda: group_svc.delete(key), target=key,
+                         detail={"label": get_groups().get(key, "")})
 
 
 # ---------------------------------------------------------------------------

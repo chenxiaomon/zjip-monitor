@@ -66,13 +66,20 @@
             </label>
             {% endfor %}
           </div>
-          <p class="help">经办人和只读用户只看得到勾选分组里的企业，至少选一个；管理员不受分组限制</p>
+          <p class="help">经办人和只读用户只看得到勾选分组里的企业；管理员不受分组限制</p>
           {% else %}
           <p class="help">设置里还没有分组（settings.yaml → groups），只能先建管理员</p>
           {% endif %}
         </div>
 
         {% if not is_edit %}
+        <div class="field">
+          <label class="check">
+            <input type="checkbox" name="own_group" value="on" {% if form.own_group is not defined or form.own_group == 'on' %}checked{% endif %}>
+            <span>为这位同事新建专属分组（「显示名的企业」）</span>
+          </label>
+          <p class="help">同事之间互相隔离时勾上：该同事只看得到放进这个分组的企业，看不到你和其他同事的。选管理员时忽略</p>
+        </div>
         <div class="field">
           <label class="label" for="user-password">初始口令 <span class="req">*</span></label>
           <input id="user-password" type="password" name="password" required

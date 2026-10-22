@@ -62,8 +62,7 @@ def _session_secret() -> bytes:
 _SECRET = _session_secret()
 
 if _ADMIN_USER.lower() in users.RESERVED_NAMES:
-    # "view|expiry|sig" is the /view page's cookie; an admin of that name
-    # would make the two interchangeable.
+    # See users.RESERVED_NAMES: an old /view cookie must not sign anyone in.
     logger.error(f"WEB_USER 不能是保留名 {_ADMIN_USER!r}，请在 .env 中改名")
 
 
@@ -239,53 +238,6 @@ def user_from_cookie(cookie: str | None) -> dict | None:
 def admin_user(via: str = "basic") -> dict:
     """The .env admin, for the Basic-Auth fallback and the API-key lane."""
     return _env_admin(via)
-
-
-# ---------------------------------------------------------------------------
-# Public /view page access
-# ---------------------------------------------------------------------------
-# /view is deliberately unauthenticated, but it lists every monitored company
-# with its case counts and status breakdown — on a public IP, with no robots
-# rule. VIEW_TOKEN turns the URL itself into the credential: visit once with
-# ?t=<token> and a signed cookie carries access from then on.
-#
-# Left unset, the page stays open exactly as before: this must not silently
-# cut off whoever is using the link today.
-VIEW_TOKEN = os.getenv("VIEW_TOKEN", "").strip()
-VIEW_COOKIE = "szt_view"
-VIEW_COOKIE_MAX_AGE = int(os.getenv("VIEW_COOKIE_DAYS", "30")) * 86400
-
-if VIEW_TOKEN:
-    logger.info("VIEW_TOKEN 已配置 — /view 需要 ?t=<token> 或已登录控制台")
-else:
-    logger.warning("VIEW_TOKEN 未配置 — /view 公开只读页对任何人可见")
-
-
-def make_view_cookie() -> str:
-    expiry = int(time.time()) + VIEW_COOKIE_MAX_AGE
-    payload = f"view|{expiry}"
-    return f"{payload}|{_sign(payload)}"
-
-
-def view_cookie_ok(cookie: str | None) -> bool:
-    if not cookie:
-        return False
-    try:
-        kind, expiry_str, sig = cookie.rsplit("|", 2)
-        if kind != "view":
-            return False
-        if not secrets.compare_digest(sig, _sign(f"{kind}|{expiry_str}")):
-            return False
-        return int(expiry_str) >= time.time()
-    except (ValueError, TypeError):
-        return False
-
-
-def view_token_ok(token: str | None) -> bool:
-    """Constant-time check of the ?t= parameter."""
-    if not VIEW_TOKEN or not token:
-        return False
-    return secrets.compare_digest(token, VIEW_TOKEN)
 
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,6 @@
-"""经办人 (operator): own groups' platform password and contact, 测试登录 —
-nothing else — and the per-account limit on console-started platform logins."""
+"""经办人 (operator): manage the companies of their own groups — add, edit
+password/contact, 测试登录, 手动巡检, delete — and nothing outside them; plus
+the per-account limits on console-started platform logins and scans."""
 
 import pytest
 
@@ -15,10 +16,12 @@ def _no_platform(monkeypatch):
     monkeypatch.setattr(accounts_routes, "spawn", lambda coro: spawned.append(coro) or coro.close())
     monkeypatch.setattr(accounts_routes, "verify_credentials",
                         lambda u, p: verified.append(u) or "token")
-    for state in (accounts_routes._web_logins, accounts_routes._tasks, accounts_routes._scan_tasks):
+    states = (accounts_routes._web_logins, accounts_routes._tasks, accounts_routes._scan_tasks,
+              accounts_routes._last_scan)
+    for state in states:
         state.clear()
     yield {"spawned": spawned, "verified": verified}
-    for state in (accounts_routes._web_logins, accounts_routes._tasks, accounts_routes._scan_tasks):
+    for state in states:
         state.clear()
 
 
@@ -38,11 +41,13 @@ def operator(web_client, login_as, isolated_settings, isolated_snapshots, fake_a
 
 # --- what an operator can do -------------------------------------------------------
 
-def test_operator_sees_edit_but_not_delete_or_scan(operator):
+def test_operator_manages_only_their_groups_companies(operator):
     body = operator.get("/accounts").text
-    assert "/accounts/ua1/edit-form" in body
-    assert "/accounts/ua1/delete" not in body and "/accounts/ua1/scan" not in body
+    for action in ("edit-form", "delete", "scan", "platform-access"):
+        assert f"/accounts/ua1/{action}" in body
     assert "/accounts/ub1/" not in body  # another group's company is not even listed
+    assert "/accounts/new-form" in body and "/run-once" not in body
+    assert 'name="group"' not in body  # moving a company between groups stays with admins
 
 
 def test_operator_edit_form_has_no_group_selector(operator):
@@ -78,11 +83,7 @@ def test_operator_edit_respects_the_group_at_write_time(operator, saved, fake_ac
 
 
 @pytest.mark.parametrize("method,path,data", [
-    ("get", "/accounts/new-form", None),
-    ("post", "/accounts", {"company": "新公司", "username": "n1", "password": "p"}),
-    ("post", "/accounts/ua1/delete", None),
     ("post", "/accounts/ua1/group", {"group": "group_b"}),
-    ("post", "/accounts/ua1/scan", None),
     ("post", "/run-once", None),
     ("get", "/settings", None),
     ("get", "/notify", None),
@@ -108,9 +109,14 @@ def test_viewers_cannot_edit_or_test(web_client, login_as, fake_accounts, isolat
 def test_operator_verify_on_another_group_never_reaches_the_platform(operator, _no_platform):
     resp = operator.post("/accounts/verify", data={"username": "ub1", "password": "guess"})
     assert "不存在" in resp.text
-    resp = operator.post("/accounts/verify", data={"username": "unsaved", "password": "guess"})
-    assert "不存在" in resp.text
+    # No typed password: there is nothing stored they may test.
+    assert "不存在" in operator.post("/accounts/verify", data={"username": "unsaved"}).text
     assert _no_platform["verified"] == []
+
+
+def test_operator_can_test_a_new_account_before_adding_it(operator, _no_platform):
+    resp = operator.post("/accounts/verify", data={"username": "brand-new", "password": "typed"})
+    assert "登录成功" in resp.text and _no_platform["verified"] == ["brand-new"]
 
 
 def test_operator_verify_is_limited_per_account(operator, _no_platform):
@@ -153,3 +159,51 @@ def test_a_user_in_two_groups_sees_both(web_client, login_as, fake_accounts, iso
     body = web_client.get("/accounts").text
     assert "甲 公司" in body and "丙公司" in body
     assert web_client.get("/accounts/ub1/edit-form").status_code == 200
+
+
+# --- self-service: add, delete, scan --------------------------------------------------
+
+def test_the_add_form_offers_only_their_groups(operator):
+    form = operator.get("/accounts/new-form").text
+    assert 'value="group_a"' in form and 'value="group_b"' not in form
+    assert "未分组" not in form
+    assert '<option value="opa" selected>' in form  # they own what they add
+
+
+def test_operator_adds_a_company_to_their_group(operator, saved, _isolated_audit):
+    resp = operator.post("/accounts", data={"company": "新公司", "username": "n1", "password": "p",
+                                            "group": "group_a", "owner": "opa"})
+    assert resp.headers.get("HX-Trigger") == "accountSaved", resp.text[:200]
+    assert saved[-1]["n1"] == ("p", "", "group_a")
+
+
+@pytest.mark.parametrize("group", ["", "group_b"])
+def test_operator_cannot_add_outside_their_groups(operator, saved, group):
+    resp = operator.post("/accounts", data={"company": "新公司", "username": "n1", "password": "p",
+                                            "group": group})
+    assert "你自己的分组" in resp.text and not saved
+
+
+@pytest.mark.parametrize("field,value", [("username", "ub1"), ("company", "丙公司")])
+def test_a_clash_with_another_groups_company_names_nothing(operator, saved, field, value):
+    data = {"company": "新公司", "username": "n1", "password": "p", "group": "group_a", field: value}
+    resp = operator.post("/accounts", data=data)
+    assert accounts_routes._TAKEN_ELSEWHERE in resp.text and not saved
+    # The admin's messages would say whose account it is or which company it clashes with.
+    assert "已存在" not in resp.text and "重名" not in resp.text
+
+
+def test_operator_deletes_only_their_own(operator, saved):
+    assert operator.post("/accounts/ub1/delete").status_code == 404
+    assert not saved
+    assert operator.post("/accounts/ua1/delete").status_code == 200
+    assert "ua1" not in saved[-1]
+
+
+def test_operator_scan_is_limited_per_account(operator, _no_platform, _isolated_audit):
+    first = operator.post("/accounts/ua1/scan")
+    assert first.status_code == 200 and len(_no_platform["spawned"]) == 1
+    accounts_routes._scan_tasks.clear()  # the stubbed scan never finishes by itself
+    again = operator.post("/accounts/ua1/scan")
+    assert "过于频繁" in again.text and len(_no_platform["spawned"]) == 1
+    assert "不存在" in operator.post("/accounts/ub1/scan").text

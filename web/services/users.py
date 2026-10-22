@@ -66,8 +66,9 @@ ROLES = ("admin", "operator", "viewer")
 ROLE_LABELS = {"admin": "管理员", "operator": "经办人", "viewer": "只读"}
 
 _USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,31}$")
-# "view" would make a session cookie signed with an empty session_key
-# indistinguishable from the /view page's "view|expiry|sig" cookie.
+# "view" once collided with the public /view page's own signed cookie
+# ("view|expiry|sig"). That cookie is gone; the name stays reserved so an
+# old cookie of that shape can never belong to anyone.
 RESERVED_NAMES = frozenset({"view"})
 
 _cache_lock = threading.Lock()

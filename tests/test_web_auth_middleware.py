@@ -17,9 +17,10 @@ def test_public_paths_need_no_auth(web_client):
     assert resp.headers["location"] == "/static/favicon.svg"
 
 
-def test_view_page_is_public(web_client, isolated_snapshots):
-    assert web_client.get("/view/").status_code == 200
-    assert web_client.get("/view/partial").status_code == 200
+def test_view_page_needs_a_login(web_client, isolated_snapshots):
+    """Not public any more: it listed every company to anyone with the address."""
+    assert web_client.get("/view/", follow_redirects=False).status_code == 302
+    assert web_client.get("/view/partial", follow_redirects=False).status_code == 302
 
 
 def test_console_redirects_to_login_without_cookie(web_client):

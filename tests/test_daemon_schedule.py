@@ -88,3 +88,48 @@ def test_an_empty_or_missing_schedule_means_the_defaults(daemon):
     assert run_daemon._load_crons() == run_daemon._DEFAULT_CRONS
     settings.write_text("schedule: null\n", encoding="utf-8")
     assert run_daemon._read_crons() == []
+
+
+# --- a scheduled round and a colleague's single-account scan --------------------
+
+@pytest.fixture
+def round_env(monkeypatch, isolated_control_dir):
+    calls, sleeps = [], []
+    monkeypatch.setattr(run_daemon.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(run_daemon, "_refresh_ops_alerts", lambda: None)
+    return calls, sleeps
+
+
+def _holder(monkeypatch, **state):
+    monkeypatch.setattr(run_daemon.control, "read_state", lambda: state)
+
+
+def test_the_round_waits_for_a_single_account_scan(round_env, monkeypatch):
+    calls, sleeps = round_env
+    outcomes = [{"skipped": "already_running"}, {"skipped": "already_running"}, {"results": []}]
+    monkeypatch.setattr(run_daemon, "run_all", lambda **kw: calls.append(kw) or outcomes.pop(0))
+    _holder(monkeypatch, kind="scan_one", status="running")
+    assert run_daemon._run_round() == {"results": []}
+    assert len(calls) == 3 and len(sleeps) == 2
+
+
+@pytest.mark.parametrize("state", [
+    {"kind": "run_all", "status": "running"},   # another full round: skip as before
+    {"kind": "scan_one", "status": "stale"},    # a wedged scan: the wedge probe handles it
+])
+def test_the_round_does_not_wait_for_anything_else(round_env, monkeypatch, state):
+    calls, sleeps = round_env
+    monkeypatch.setattr(run_daemon, "run_all", lambda **kw: calls.append(kw) or {"skipped": "already_running"})
+    _holder(monkeypatch, **state)
+    assert run_daemon._run_round()["skipped"]
+    assert len(calls) == 1 and sleeps == []
+
+
+def test_the_wait_is_bounded(round_env, monkeypatch):
+    calls, sleeps = round_env
+    clock = iter(range(0, 10_000, 100))
+    monkeypatch.setattr(run_daemon.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(run_daemon, "run_all", lambda **kw: calls.append(kw) or {"skipped": "already_running"})
+    _holder(monkeypatch, kind="scan_one", status="running")
+    assert run_daemon._run_round()["skipped"]
+    assert len(calls) <= run_daemon._SHORT_RUN_WAIT_SECONDS // 100 + 2
