@@ -38,7 +38,7 @@
             {% if row.ok %}
             <span class="sm">{{ row.label }}</span>
             {% else %}
-            <span class="pill pill-xs pill-danger">{{ row.label }} · 失败</span>
+            <span class="pill pill-xs pill-danger">{{ row.label }}{% if '失败' not in row.label %} · 失败{% endif %}</span>
             {% endif %}
           </td>
           <td class="sm text-2">
