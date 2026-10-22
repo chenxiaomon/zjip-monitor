@@ -168,6 +168,29 @@ def _refresh_ops_alerts() -> None:
         logger.warning(f"运维告警刷新失败（非致命）: {exc!r}")
 
 
+# A colleague's single-account scan holds the global run lock for a minute or
+# two. Skipping the whole scheduled round because one company was being
+# re-checked at 9:00 would leave every other company a round behind, so the
+# round waits for such a scan instead — never for a full round or a wedged one.
+_SHORT_RUN_WAIT_SECONDS = 600
+_SHORT_RUN_POLL_SECONDS = 15
+
+
+def _run_round() -> dict:
+    deadline = time.monotonic() + _SHORT_RUN_WAIT_SECONDS
+    while True:
+        output = run_all(trigger="daemon")
+        if not output.get("skipped"):
+            return output
+        holder = control.read_state() or {}
+        if holder.get("kind") != "scan_one" or holder.get("status") != "running":
+            return output
+        if time.monotonic() >= deadline:
+            return output
+        logger.info("单账号巡检进行中 — 等它结束后开始本轮定时巡检")
+        time.sleep(_SHORT_RUN_POLL_SECONDS)
+
+
 def _job() -> None:
     if control.is_daemon_paused():
         logger.info("巡检已暂停（data/control/pause.flag 存在）— 跳过本轮")
@@ -175,7 +198,7 @@ def _job() -> None:
         return
     logger.info("Scheduled job triggered — starting run…")
     try:
-        output = run_all(trigger="daemon")
+        output = _run_round()
     except Exception as exc:
         logger.exception(f"Scheduled run failed: {exc}")
         _refresh_ops_alerts()
