@@ -23,6 +23,39 @@ function showToast(msg, kind) {
   }, 3200);
 }
 
+// 复制：明文 HTTP 下没有 navigator.clipboard（只在 HTTPS / localhost 可用），退回 execCommand。
+// data-copy-from 指向一个输入框的 id，复制它的值（口令只在那一个地方出现在页面上）。
+function copyText(btn) {
+  var src = document.getElementById(btn.getAttribute('data-copy-from'));
+  var text = src ? (src.value || src.textContent || '') : '';
+  var ok = function () { showToast('已复制', 'success'); };
+  var fallback = function () {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    var done = false;
+    try { done = document.execCommand('copy'); } catch (e) { done = false; }
+    document.body.removeChild(ta);
+    if (done) { ok(); } else { showToast('复制失败，请点「显示」后手动选中复制', 'danger'); }
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(ok, fallback);
+  } else {
+    fallback();
+  }
+}
+
+function togglePassword(btn) {
+  var el = document.getElementById(btn.getAttribute('data-target'));
+  if (!el) return;
+  el.type = el.type === 'password' ? 'text' : 'password';
+  btn.textContent = el.type === 'password' ? '显示' : '隐藏';
+}
+
 (function () {
   // 顶部细进度条：只对用户触发、且超过 150ms 的请求显示；轮询（every）和 SSE 刷新不闪。
   var timer = null, safety = null;

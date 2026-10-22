@@ -108,6 +108,7 @@ ACTION_LABELS: dict[str, str] = {
     "account.edit": "编辑企业账号",
     "account.group": "调整企业分组",
     "account.owner": "指定负责人",
+    "account.reveal": "查看平台口令（去平台办理）",
     "account.delete": "删除企业账号",
     "account.verify": "测试登录",
     "account.relogin": "重登",
@@ -157,7 +158,7 @@ _KEY_LABELS = {
     "owner": "负责人",
     "crons": "计划", "method": "登录方式", "token_max_age_hours": "Token 有效期",
     "headless": "无头模式", "enabled": "启用", "error": "原因", "reason": "原因",
-    "rows": "行数", "account": "账号", "statuses": "状态", "start_date": "起", "end_date": "止",
+    "rows": "行数", "reg_no": "登记号", "account": "账号", "statuses": "状态", "start_date": "起", "end_date": "止",
     "q": "关键字", "files": "文件数", "bytes": "字节", "users": "用户", "via": "方式",
     "minutes": "锁定分钟", "status": "状态码", "http_method": "请求",
 }

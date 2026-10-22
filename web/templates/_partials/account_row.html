@@ -139,6 +139,15 @@
       </button>
       {% endif %}
       {% endif %}
+      {% if can_edit %}
+      <button hx-post="/accounts/{{ u }}/platform-access"
+              hx-target="#modal-container"
+              hx-swap="innerHTML"
+              title="查看这家企业的平台账号口令，去 zjip.org.cn 办理（会记入操作日志）"
+              class="btn btn-xs">
+        {{ icon('key') }}去平台办理
+      </button>
+      {% endif %}
       {% if task.status != 'pending' and can_edit %}
       <button hx-get="/accounts/{{ u }}/edit-form"
               hx-target="#modal-container"

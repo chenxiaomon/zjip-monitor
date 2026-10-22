@@ -1,0 +1,55 @@
+{#
+  去平台办理：一家企业的平台账号与口令 + 平台登录页。
+  modal=True → 账号页的弹窗（#modal-container）；否则 → 记录详情抽屉里的一块（#platform-access）。
+  口令只出现在一个 input 的 value 里，复制按钮读它（web/static/ui.js copyText）。
+#}
+{# One panel at a time (the modal or the drawer), so fixed ids are enough. #}
+{% set pw_id = 'pa-pw-' ~ ('m' if modal else 'd') %}
+{% set user_id = 'pa-user-' ~ ('m' if modal else 'd') %}
+{% set panel %}
+<div class="stack">
+  <div class="alert alert-info alert-inline">{{ icon('info-circle') }}<div>
+    用这家企业的平台账号登录 zjip.org.cn 办理，提交仍在平台上由你本人完成，本系统不代为操作。查看口令会记入操作日志。
+  </div></div>
+  <div class="field">
+    <span class="label">平台账号</span>
+    <div class="row">
+      <input id="{{ user_id }}" type="text" class="input mono grow" value="{{ acc.username }}" readonly>
+      <button type="button" class="btn btn-sm" data-copy-from="{{ user_id }}" onclick="copyText(this)">{{ icon('copy') }}复制</button>
+    </div>
+  </div>
+  <div class="field">
+    <span class="label">平台口令</span>
+    <div class="row">
+      <input id="{{ pw_id }}" type="password" class="input mono grow" value="{{ acc.password }}" readonly autocomplete="off">
+      <button type="button" class="btn btn-sm" data-target="{{ pw_id }}" onclick="togglePassword(this)">显示</button>
+      <button type="button" class="btn btn-sm" data-copy-from="{{ pw_id }}" onclick="copyText(this)">{{ icon('copy') }}复制</button>
+    </div>
+  </div>
+  <div class="row row-wrap gap-2">
+    <a href="{{ login_url }}" target="_blank" rel="noopener noreferrer" class="btn btn-primary">{{ icon('external-link') }}打开平台登录页</a>
+    {% if reg_no %}
+    <a href="{{ detail_url(reg_no) }}" target="_blank" rel="noopener noreferrer" class="btn">登录后打开这条记录</a>
+    {% endif %}
+  </div>
+  <p class="help">平台口令被改过、登录失败时，到「账号」页点「编辑」更新这里保存的口令。</p>
+</div>
+{% endset %}
+
+{% if modal %}
+<div class="modal-backdrop"
+     onclick="if(event.target===this)document.getElementById('modal-container').innerHTML=''">
+  <div class="modal" role="dialog" aria-modal="true" onclick="event.stopPropagation()">
+    <div class="modal-head">
+      <h2 class="modal-title">去平台办理 · {{ acc.company }}</h2>
+      <button type="button" class="icon-btn" title="关闭" onclick="document.getElementById('modal-container').innerHTML=''">{{ icon('x') }}</button>
+    </div>
+    <div class="modal-body">{{ panel }}</div>
+  </div>
+</div>
+{% else %}
+<section class="drawer-section">
+  <h3>{{ icon('key') }}去平台办理</h3>
+  {{ panel }}
+</section>
+{% endif %}

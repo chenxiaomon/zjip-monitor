@@ -16,6 +16,7 @@ from fastapi import Form
 from loguru import logger
 
 import html as _html
+import re
 
 from src import control, status_store
 from src.config_loader import Account, ConfigError, load_accounts, save_accounts
@@ -25,7 +26,7 @@ from src.main import run_all, run_single
 from web.auth import (
     can_edit_accounts, current_user, editable_account, is_admin, require_admin, visible_accounts,
 )
-from web.deps import executor as _executor, get_groups, group_label, spawn, templates
+from web.deps import executor as _executor, get_groups, group_label, spawn, templates, zjip_base_url
 from web.services import audit_log, users
 from web.services.run_state import run_state_ctx
 from web.services.session import _SESSIONS_DIR, _safe_name, get_session, token_status
@@ -734,6 +735,41 @@ def set_account_owner(request: Request, username: str, owner: str = Form("")) ->
     audit_log.record_request(request, "account.owner", company=acc.company, target=username,
                              detail={"owner": [old_owner, owner]})
     return templates.TemplateResponse(request, "_partials/account_row.html", {"row": _row(acc)})
+
+
+# What a registration number looks like; anything else is not put in a link.
+_REG_NO_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+@router.post("/accounts/{username}/platform-access", response_class=HTMLResponse)
+def platform_access(
+    request: Request, username: str, reg_no: str = Form(""), inline: str = Form(""),
+) -> HTMLResponse:
+    """去平台办理: show a company's platform account and password so whoever
+    handles it can sign in on zjip.org.cn and file there themselves.
+
+    The system stays read-only towards the platform — submitting a filing is
+    a person's act on the platform's own site. Showing the password is the
+    disclosure, so it is logged here, every time (the copy button is client
+    side). 经办人 for their own groups' companies, admins for any; 只读 users
+    never see a client's password. POST so no prefetch or history entry
+    carries it, and no-store so no cache keeps it.
+    """
+    if not can_edit_accounts(request):
+        require_admin(request)
+    acc = editable_account(request, username)
+    if acc is None:
+        return PlainTextResponse("账号不存在", status_code=404)
+    reg_no = reg_no.strip() if _REG_NO_RE.match(reg_no.strip()) else ""
+    audit_log.record_request(request, "account.reveal", company=acc.company, target=username,
+                             detail={"reg_no": reg_no} if reg_no else None)
+    return templates.TemplateResponse(
+        request,
+        "_partials/platform_access.html",
+        {"acc": acc, "reg_no": reg_no, "modal": inline != "1",
+         "login_url": f"{zjip_base_url()}/user/login"},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.post("/accounts/{username}/delete", response_class=HTMLResponse)
