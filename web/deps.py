@@ -18,6 +18,7 @@ from fastapi.templating import Jinja2Templates
 # rendering and snapshot diffing can never disagree about a status code.
 from src.scraper import AUDIT_STATUS, int_or_none  # noqa: F401  (re-exported for routes/templates)
 from src.settings_cache import get_settings
+from web.services import users as _users
 from web.services.users import ROLE_LABELS
 
 _HERE = Path(__file__).parent
@@ -231,6 +232,33 @@ def group_label(key: str | None) -> str:
     return get_groups().get(key, key)
 
 
+def owner_label(username: str | None, group: str = "") -> str:
+    """负责人 as shown on the page; flags an owner who can no longer see the
+    company (deleted, disabled, or not in the company's group any more)."""
+    if not username:
+        return ""
+    rec = _users.get(username)
+    if rec is None:
+        return f"{username}（已删除）"
+    name = rec["display_name"] or username
+    if rec["disabled"]:
+        return f"{name}（已停用）"
+    if rec["role"] != "admin" and group not in rec["groups"]:
+        return f"{name}（看不到该分组）"
+    return name
+
+
+def owner_choices(group: str) -> list[tuple[str, str]]:
+    """Who may be made responsible for a company in `group`: enabled users
+    who can see it (admins, or members of that group)."""
+    found = _users.load()
+    return [
+        (name, rec["display_name"] or name)
+        for name, rec in sorted(found.items())
+        if not rec["disabled"] and (rec["role"] == "admin" or (group and group in rec["groups"]))
+    ]
+
+
 # Deadline pill modifiers (ui.css .pill-*; src/todo.urgency_of): overdue solid red,
 # ≤3 days red, ≤7 amber, further out green, deadline unknown grey.
 URGENCY_CLASSES: dict[str, str] = {
@@ -272,6 +300,8 @@ templates.env.filters["group_label"] = group_label
 templates.env.filters["role_label"] = lambda role: ROLE_LABELS.get(role, role or "")
 templates.env.globals["detail_url"] = detail_url
 templates.env.globals["get_groups"] = get_groups
+templates.env.globals["owner_label"] = owner_label
+templates.env.globals["owner_choices"] = owner_choices
 
 
 # ---------------------------------------------------------------------------

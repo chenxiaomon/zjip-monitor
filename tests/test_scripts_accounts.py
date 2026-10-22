@@ -669,3 +669,24 @@ def test_legacy_non_string_fields_decrypt_and_round_trip(acct_env, tmp_path, cap
 
     reloaded = load_accounts()[0]
     assert (reloaded.password, reloaded.contact, reloaded.group) == ("123456", "13800000000", "")
+
+
+def test_the_owner_survives_an_export_and_re_encrypt(acct_env, tmp_path, capsys):
+    """负责人 is set in the console; the documented export → edit → encrypt
+    workflow must carry it through, and the diff must show a change to it."""
+    _encrypt_raw(acct_env.enc_path, acct_env.key, {"accounts": [
+        {"company": "甲公司", "username": "ua", "password": PW_A_OLD, "contact": "张三",
+         "group": "group_a", "owner": "zhangsan"},
+        {"company": "乙公司", "username": "ub", "password": PW_B, "contact": "", "group": "group_a"},
+    ]})
+    dump = tmp_path / "plain.yaml"
+    assert decrypt_accounts.main(["--out", str(dump)]) == 0
+    capsys.readouterr()
+    exported = yaml.safe_load(dump.read_text(encoding="utf-8"))["accounts"]
+    assert exported[0]["owner"] == "zhangsan" and "owner" not in exported[1]
+
+    text = dump.read_text(encoding="utf-8").replace("owner: zhangsan", "owner: lisi")
+    acct_env.yaml_path.write_text(text, encoding="utf-8")
+    assert encrypt_accounts.main(["--yes"]) == 0
+    assert "负责人 zhangsan → lisi" in capsys.readouterr().out
+    assert [a.owner for a in load_accounts()] == ["lisi", ""]

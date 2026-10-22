@@ -82,11 +82,31 @@
             {% endfor %}
           </select>
         </div>
+        {% set owner_now = account.owner if is_edit else (form.owner if form else '') %}
+        {% set owner_group = account.group if is_edit else (form.group if form else '') %}
+        <div class="field">
+          <label class="label" for="acc-owner">负责人</label>
+          <select id="acc-owner" name="owner" class="select">
+            <option value="">未指定</option>
+            {% set choices = owner_choices(owner_group) %}
+            {% for uname, label in choices %}
+            <option value="{{ uname }}" {% if owner_now == uname %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+            {% if owner_now and owner_now not in choices | map('first') | list %}
+            <option value="{{ owner_now }}" selected>{{ owner_label(owner_now, owner_group) }}</option>
+            {% endif %}
+          </select>
+          <p class="help">这家企业由谁跟进；只列出能看到该分组的同事。改了分组后，负责人名单在保存后刷新</p>
+        </div>
         {% else %}
         <div class="field">
           <span class="label">分组</span>
           <div class="readonly">{{ account.group | group_label }}</div>
           <p class="help">分组由管理员调整</p>
+        </div>
+        <div class="field">
+          <span class="label">负责人</span>
+          <div class="readonly">{{ owner_label(account.owner, account.group) or '未指定' }}</div>
         </div>
         {% endif %}
 

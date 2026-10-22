@@ -107,6 +107,7 @@ ACTION_LABELS: dict[str, str] = {
     "account.add": "新增企业账号",
     "account.edit": "编辑企业账号",
     "account.group": "调整企业分组",
+    "account.owner": "指定负责人",
     "account.delete": "删除企业账号",
     "account.verify": "测试登录",
     "account.relogin": "重登",
@@ -142,7 +143,7 @@ CATEGORIES: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 
 # Detail keys whose value is a [before, after] pair, by the actions that write them.
-_CHANGE_ACTIONS = ("account.edit", "account.group", "user.update", "settings.", "notify.")
+_CHANGE_ACTIONS = ("account.edit", "account.group", "account.owner", "user.update", "settings.", "notify.")
 _FLAG_TEXT = {
     "password_changed": ("改了密码", ""),
     "stored_password": ("用已保存的密码", "用填写的密码"),
@@ -153,6 +154,7 @@ _FLAG_TEXT = {
 }
 _KEY_LABELS = {
     "contact": "联系人", "group": "分组", "groups": "分组", "role": "角色", "display_name": "显示名",
+    "owner": "负责人",
     "crons": "计划", "method": "登录方式", "token_max_age_hours": "Token 有效期",
     "headless": "无头模式", "enabled": "启用", "error": "原因", "reason": "原因",
     "rows": "行数", "account": "账号", "statuses": "状态", "start_date": "起", "end_date": "止",

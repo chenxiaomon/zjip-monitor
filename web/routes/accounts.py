@@ -10,7 +10,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from fastapi import Form
 from loguru import logger
@@ -25,8 +25,8 @@ from src.main import run_all, run_single
 from web.auth import (
     can_edit_accounts, current_user, editable_account, is_admin, require_admin, visible_accounts,
 )
-from web.deps import executor as _executor, get_groups, spawn, templates
-from web.services import audit_log
+from web.deps import executor as _executor, get_groups, group_label, spawn, templates
+from web.services import audit_log, users
 from web.services.run_state import run_state_ctx
 from web.services.session import _SESSIONS_DIR, _safe_name, get_session, token_status
 from web.services.snapshot import get_latest_snapshot
@@ -99,6 +99,21 @@ def _bump_verify_seq(username: str) -> int:
     return _verify_seq[username]
 
 
+def _owner_error(owner: str, group: str) -> str | None:
+    """Why `owner` cannot be made responsible for a company in `group`, or
+    None. A 负责人 must be able to see the company — otherwise「我负责的」
+    would list nothing for them and nobody would notice."""
+    if not owner:
+        return None
+    rec = users.get(owner)
+    if rec is None or rec["disabled"]:
+        return f"用户 {owner} 不存在或已停用"
+    if rec["role"] != "admin" and group not in rec["groups"]:
+        name = rec["display_name"] or owner
+        return f"{name} 看不到「{group_label(group)}」分组的企业，请先在「用户」页给该同事加上这个分组"
+    return None
+
+
 def _company_key(company: str) -> str:
     """Same sanitizer the snapshot/attachment filenames use — duplicates must
     be detected on the SANITIZED name, since that's what collides on disk."""
@@ -136,7 +151,7 @@ def _row_error(username: str, msg: str = "账号不存在") -> HTMLResponse:
     SameSite=Lax, so a top-level navigation carries it).
     """
     u = _html.escape(username, quote=True)
-    cell = f'<td colspan="7" class="px-4 py-2 text-red-500 text-sm">{_html.escape(msg)}</td>'
+    cell = f'<td colspan="8" class="px-4 py-2 text-red-500 text-sm">{_html.escape(msg)}</td>'
     return HTMLResponse(f'<tr id="row-{u}">{cell}</tr>')
 
 
@@ -392,6 +407,7 @@ async def add_account(
     password: str = Form(...),
     contact: str = Form(""),
     group: str = Form(""),
+    owner: str = Form(""),
 ) -> HTMLResponse:
     require_admin(request)
     company = company.strip()
@@ -399,6 +415,7 @@ async def add_account(
     password = password.strip()
     contact = contact.strip()
     group = group.strip()
+    owner = users.normalize_username(owner)
 
     def _err(error: str) -> HTMLResponse:
         audit_log.nothing_changed(request)
@@ -406,7 +423,8 @@ async def add_account(
             request,
             "_partials/account_form.html",
             {"error": error, "mode": "add",
-             "form": {"company": company, "username": username, "contact": contact, "group": group}},
+             "form": {"company": company, "username": username, "contact": contact, "group": group,
+                      "owner": owner}},
             headers={"HX-Retarget": "#modal-container", "HX-Reswap": "innerHTML"},
         )
 
@@ -418,6 +436,8 @@ async def add_account(
         return _err("密码不能为空")
     if group and group not in get_groups():
         return _err(f"分组 {group} 不存在")
+    if (problem := _owner_error(owner, group)):
+        return _err(problem)
 
     with _ACCOUNTS_WRITE_LOCK:
         try:
@@ -434,7 +454,8 @@ async def add_account(
             # would overwrite the other account's history.
             return _err(f"公司名称 {company} 与现有账号的公司重名（或脱敏后同名），历史数据按公司名称存储，请区分开")
         accounts_list.append(Account(
-            company=company, username=username, password=password, contact=contact, group=group
+            company=company, username=username, password=password, contact=contact, group=group,
+            owner=owner,
         ))
         try:
             save_accounts(accounts_list)
@@ -442,7 +463,7 @@ async def add_account(
             return _err(_public_error(exc, "save_accounts failed", username=username))
 
     audit_log.record_request(request, "account.add", company=company, target=username,
-                             detail={"group": group})
+                             detail={"group": group, "owner": owner})
 
     # Auto-trigger first login for the new account
     _note_login(username)
@@ -554,8 +575,9 @@ async def edit_account(
     password: str = Form(""),
     contact: str = Form(""),
     group: str = Form(""),
+    owner: str = Form(""),
 ) -> HTMLResponse:
-    """Edit contact/group and optionally the password (empty = keep current).
+    """Edit contact/group/owner and optionally the password (empty = keep current).
 
     company/username are immutable here: snapshots, attachments and events are
     keyed by company name, and username keys the token cache + status store.
@@ -563,7 +585,7 @@ async def edit_account(
     session) and fires an automatic verify so the row shows the outcome.
 
     A 经办人 edits password and contact of their own groups' accounts only.
-    The group they submit is ignored, not applied: their form has no group
+    The group and owner they submit are ignored, not applied: their form has no group
     field, and applying the empty value would move the company out of their
     own sight. Whether the account is theirs is decided again on the list
     loaded under the write lock, not on the one loaded before it."""
@@ -602,10 +624,15 @@ async def edit_account(
         if acc is None or (not admin and acc.group not in my_groups):
             acc = None
             return _err(f"账号 {username} 不存在")
-        before = {"contact": acc.contact, "group": acc.group}
+        before = {"contact": acc.contact, "group": acc.group, "owner": acc.owner}
+        if admin:
+            owner = users.normalize_username(owner)
+            if (problem := _owner_error(owner, group)) and owner != acc.owner:
+                return _err(problem)
         acc.contact = contact
         if admin:
             acc.group = group
+            acc.owner = owner
         if password:
             acc.password = password
         try:
@@ -679,6 +706,33 @@ def set_account_group(request: Request, username: str, group: str = Form("")) ->
     audit_log.record_request(request, "account.group", company=acc.company, target=username,
                              detail={"group": [old_group, group]})
 
+    return templates.TemplateResponse(request, "_partials/account_row.html", {"row": _row(acc)})
+
+
+@router.post("/accounts/{username}/owner", response_class=HTMLResponse)
+def set_account_owner(request: Request, username: str, owner: str = Form("")) -> HTMLResponse:
+    """负责人, from the row's drop-down (admins). Whose companies are whose
+    is what「我负责的」on the dashboard, calendar and records is built on."""
+    require_admin(request)
+    owner = users.normalize_username(owner)
+    with _ACCOUNTS_WRITE_LOCK:
+        try:
+            accounts_list = load_accounts()
+        except ConfigError as exc:
+            return HTMLResponse(_public_error(exc, "load_accounts failed, refusing to write", username=username), status_code=500)
+        acc = next((a for a in accounts_list if a.username == username), None)
+        if acc is None:
+            return _row_error_on(request, username)
+        if (problem := _owner_error(owner, acc.group)):
+            return PlainTextResponse(problem, status_code=400)
+        old_owner = acc.owner
+        acc.owner = owner
+        try:
+            save_accounts(accounts_list)
+        except ConfigError as exc:
+            return HTMLResponse(_public_error(exc, "save_accounts failed", username=username), status_code=500)
+    audit_log.record_request(request, "account.owner", company=acc.company, target=username,
+                             detail={"owner": [old_owner, owner]})
     return templates.TemplateResponse(request, "_partials/account_row.html", {"row": _row(acc)})
 
 

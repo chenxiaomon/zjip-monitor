@@ -165,12 +165,14 @@ def build_accounts(data: object) -> list[Account]:
 
         contact = raw.get("contact")
         group = raw.get("group")
+        owner = raw.get("owner")
         accounts.append(Account(
             company=_as_text(raw["company"], f"accounts[{i}].company"),
             username=username,
             password=password,
             contact="" if contact is None else str(contact),
             group="" if group is None else str(group),
+            owner="" if owner is None else str(owner),
         ))
     return accounts
 
@@ -204,6 +206,8 @@ def summarize_changes(old: list[Account], new: list[Account]) -> str:
             fields.append(f"联系人 {_show(o.contact)} → {_show(n.contact)}")
         if o.group != n.group:
             fields.append(f"分组 {_show(o.group)} → {_show(n.group)}")
+        if o.owner != n.owner:
+            fields.append(f"负责人 {_show(o.owner)} → {_show(n.owner)}")
         if fields:
             changed.append((n, fields))
 

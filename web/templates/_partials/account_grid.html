@@ -17,6 +17,9 @@
         <a href="/records?account={{ snap.account.username | urlencode }}" class="acc-name truncate">{{ snap.account.company }}</a>
         <div class="acc-user">
           {{ snap.account.username }}
+          {% if snap.account.owner %}
+          <span class="xs faint">· {{ owner_label(snap.account.owner, snap.account.group) }}</span>
+          {% endif %}
           {% if show_group %}
           <span class="pill pill-xs {% if snap.account.group %}pill-accent{% else %}pill-neutral{% endif %}">{{ snap.account.group | group_label }}</span>
           {% endif %}

@@ -39,6 +39,31 @@
     <span class="pill pill-accent">{{ row.account.group | group_label }}</span>
     {% endif %}
   </td>
+  <!-- 负责人 -->
+  <td>
+    {% if is_admin %}
+    {% set choices = owner_choices(row.account.group) %}
+    <select name="owner"
+            hx-post="/accounts/{{ u }}/owner"
+            hx-trigger="change"
+            hx-target="#row-{{ u }}"
+            hx-swap="outerHTML"
+            class="select select-sm"
+            aria-label="负责人">
+      <option value="" {% if not row.account.owner %}selected{% endif %}>未指定</option>
+      {% for uname, label in choices %}
+      <option value="{{ uname }}" {% if row.account.owner == uname %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+      {% if row.account.owner and row.account.owner not in choices | map('first') | list %}
+      <option value="{{ row.account.owner }}" selected>{{ owner_label(row.account.owner, row.account.group) }}</option>
+      {% endif %}
+    </select>
+    {% elif row.account.owner %}
+    <span class="sm">{{ owner_label(row.account.owner, row.account.group) }}</span>
+    {% else %}
+    <span class="faint">—</span>
+    {% endif %}
+  </td>
   <!-- 账号 -->
   <td class="mono xs muted">{{ u }}</td>
   <!-- Token / 登录状态 -->

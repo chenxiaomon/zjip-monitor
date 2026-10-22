@@ -86,6 +86,7 @@ ROUTES = {
     "/accounts/{username}/edit": ("/accounts/ua1/edit", {"contact": "新联系人", "group": "group_a"},
                                   "account.edit", "ua1"),
     "/accounts/{username}/group": ("/accounts/ua1/group", {"group": "group_b"}, "account.group", "ua1"),
+    "/accounts/{username}/owner": ("/accounts/ua1/owner", {"owner": "opa"}, "account.owner", "ua1"),
     "/accounts/{username}/delete": ("/accounts/ua2/delete", {}, "account.delete", "ua2"),
     "/notify/dingtalk": ("/notify/dingtalk", {"webhook": "https://x/robot?access_token=t"},
                          "notify.dingtalk", None),

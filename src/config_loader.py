@@ -54,6 +54,7 @@ class Account:
     password: str
     contact: str = ""
     group: str = ""  # 分组 key（对应 settings.yaml groups；空 = 未分组）
+    owner: str = ""  # 负责人：控制台用户名（config/users.yaml；空 = 未指定）
 
     def __repr__(self) -> str:
         return f"Account(company={self.company!r}, username={self.username!r})"
@@ -213,6 +214,7 @@ def load_accounts() -> list[Account]:
             password=_text(raw["password"]),
             contact=_text(raw.get("contact")),
             group=_text(raw.get("group")),
+            owner=_text(raw.get("owner")),
         ))
 
     # Snapshots/attachments/events are keyed by the SANITIZED company name —
@@ -255,6 +257,7 @@ def save_accounts(accounts: list[Account]) -> None:
                 "password": a.password,
                 "contact": a.contact,
                 "group": a.group,
+                "owner": a.owner,
             }
             for a in accounts
         ]
