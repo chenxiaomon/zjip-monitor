@@ -32,7 +32,7 @@
           <td class="nowrap">
             <span class="sm">{{ row.actor_name or row.actor or '—' }}</span>
             {% if row.actor_name %}<div class="xs faint mono">{{ row.actor }}</div>{% endif %}
-            {% if row.role %}<div class="xs faint">{{ row.role | role_label }}{% if row.via == 'basic' %} · Basic{% elif row.via == 'ssh' %} · ssh{% endif %}</div>{% endif %}
+            {% if row.role %}<div class="xs faint">{{ row.role | role_label }}{% if row.via == 'basic' %} · Basic{% elif row.via == 'ssh' %} · ssh{% elif row.via == 'api' %} · 小程序{% endif %}</div>{% endif %}
           </td>
           <td class="nowrap">
             {% if row.ok %}

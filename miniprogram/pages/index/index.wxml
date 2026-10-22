@@ -1,5 +1,11 @@
 <view class="page">
 
+  <!-- Who is signed in -->
+  <view class="userbar" wx:if="{{userLabel}}">
+    <text class="user-name">{{userLabel}}</text>
+    <text class="logout" bindtap="onLogout">退出</text>
+  </view>
+
   <!-- Loading -->
   <view wx:if="{{loading}}" class="loading">
     <text>加载中...</text>

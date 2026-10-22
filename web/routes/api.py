@@ -1,7 +1,14 @@
-"""JSON API for the WeChat Mini Program — requires X-API-Key header (or Basic Auth)."""
+"""JSON API for the WeChat Mini Program.
+
+Colleagues sign in with their console account (POST /api/login) and send
+the token they get back as `Authorization: Bearer …`; they then see exactly
+the companies the console shows them. The X-API-Key header and Basic Auth
+still work for scripts and carry the .env admin's scope.
+"""
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Query, Request
@@ -9,11 +16,83 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 
 from src.scraper import AUDIT_STATUS, decode_status
-from web.auth import visible_accounts
+from web import auth, login_guard
+from web.auth import current_user, visible_accounts
 from web.deps import _fmt_time, account_dot, detail_url, in_year, int_or_none
+from web.services import audit_log
 from web.services.snapshot import get_latest_snapshot
 
 router = APIRouter(prefix="/api")
+
+# Same damping as the console login form (web/routes/login.py).
+FAILED_LOGIN_DELAY_SECONDS = 0.5
+
+
+def _public_user(user: dict) -> dict:
+    return {k: user.get(k) for k in ("username", "display_name", "role", "groups")}
+
+
+@router.post("/login")
+async def api_login(request: Request) -> JSONResponse:
+    """{"username", "password"} → {"token", "expires_at", "user"}.
+
+    The same login guard as the console form, keyed the same way, so the
+    mini program is not a second door for guessing a colleague's password.
+    """
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "请求格式错误"}, status_code=400)
+    username = str(body.get("username") or "").strip()
+    password = str(body.get("password") or "")
+    ip = login_guard.client_ip(request)
+
+    wait = login_guard.seconds_locked(ip, username)
+    if wait:
+        return JSONResponse({"error": f"失败次数过多，请 {wait // 60 + 1} 分钟后再试"},
+                            status_code=429, headers={"Retry-After": str(wait)})
+
+    matched, reason = await asyncio.to_thread(auth.authenticate, username, password)
+    who = username if auth.is_known_user(username) else login_guard.mask(username)
+    if reason == "disabled":
+        audit_log.record_request(request, "auth.login_failed", actor=who, ok=False,
+                                 detail={"via": "api", "reason": "已停用"})
+        return JSONResponse({"error": "账号已停用，请联系管理员"}, status_code=403)
+    if matched is None:
+        just_locked = login_guard.record_failure(ip, username)
+        await asyncio.sleep(FAILED_LOGIN_DELAY_SECONDS)
+        logger.warning(f"小程序登录失败 ip={ip} user={login_guard.mask(username)}")
+        audit_log.record_request(request, "auth.login_failed", actor=who, ok=False,
+                                 detail={"via": "api"})
+        if just_locked:
+            audit_log.record_request(request, "auth.lockout", actor=who, ok=False,
+                                     detail={"via": "api", "minutes": login_guard.LOCK_SECONDS // 60})
+        return JSONResponse({"error": "用户名或密码错误"}, status_code=401)
+
+    login_guard.record_success(ip, username)
+    user = auth.lookup(matched, via="api")
+    audit_log.record_request(request, "auth.login", as_user=user)
+    token, expiry = auth.make_api_token(matched)
+    return JSONResponse({
+        "token": token,
+        "expires_at": datetime.fromtimestamp(expiry, timezone.utc).isoformat(),
+        "user": _public_user(user),
+    })
+
+
+@router.post("/logout")
+def api_logout(request: Request) -> JSONResponse:
+    """The phone forgets its token; this only records that it did. The token
+    itself stays valid until it expires — 强制下线 on the 用户 page ends it."""
+    audit_log.record_request(request, "auth.logout")
+    return JSONResponse({"ok": True})
+
+
+@router.get("/me")
+def api_me(request: Request) -> JSONResponse:
+    return JSONResponse({"user": _public_user(current_user(request) or {})})
 
 _SHANGHAI_TZ = timezone(timedelta(hours=8))
 

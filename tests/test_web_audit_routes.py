@@ -114,8 +114,9 @@ ROUTES = {
 
 
 def test_every_state_changing_route_is_in_the_table():
-    """A new POST route has to be added here — and so has to decide what it logs."""
-    assert _post_paths() == set(ROUTES) | {"/login", "/logout"}
+    """A new POST route has to be added here — and so has to decide what it logs.
+    The login routes (console and mini program) are covered by their own tests."""
+    assert _post_paths() == set(ROUTES) | {"/login", "/logout", "/api/login", "/api/logout"}
 
 
 @pytest.mark.parametrize("route", sorted(ROUTES))

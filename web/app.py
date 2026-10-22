@@ -80,7 +80,8 @@ if (not os.getenv("WEB_PASS") or _WEB_PASS == "changeme") and os.getenv("WEB_ALL
     )
 
 if not _API_KEY:
-    logger.warning("API_KEY 未配置，/api/* 仅接受 Basic Auth 访问（小程序将无法直连）")
+    # The mini program logs in with personal accounts now; the key is for scripts.
+    logger.info("API_KEY 未配置：/api/* 接受小程序个人账号登录与 Basic Auth")
 
 
 async def _migrate_users() -> None:
@@ -243,8 +244,17 @@ async def _auth_middleware(request: Request, call_next) -> Response:  # type: ig
                 else "public, max-age=3600"
             )
         return response
-    # 小程序 API：X-API-Key 或 Basic 管理员
+    # 小程序 API：个人账号登录拿到的 Bearer 凭证；X-API-Key 或 Basic 管理员（脚本用）
+    if path == "/api/login":
+        return await call_next(request)  # the route does its own checks and rate limit
     if path.startswith("/api/"):
+        bearer = request.headers.get("Authorization", "")
+        if bearer.startswith("Bearer "):
+            user = auth.user_from_api_token(bearer[7:].strip())
+            if user is None:
+                return JSONResponse({"error": "登录已失效，请重新登录"}, status_code=401)
+            request.state.user = user
+            return await call_next(request)
         api_key = request.headers.get("X-API-Key", "")
         key_ok = bool(_API_KEY) and secrets.compare_digest(api_key.encode(), _API_KEY.encode())
         if key_ok or _basic_admin_ok(request):

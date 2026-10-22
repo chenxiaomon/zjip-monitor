@@ -184,13 +184,16 @@ def _reset_login_guard():
     """The console login guard keeps process-global counters; a failed-auth
     assertion in one test must not eat another test's lockout budget."""
     from web import login_guard
+    from web.routes import api as api_routes
     from web.routes import login as login_routes
 
     login_guard.reset()
     login_routes.FAILED_LOGIN_DELAY_SECONDS = 0.0
+    api_routes.FAILED_LOGIN_DELAY_SECONDS = 0.0
     yield
     login_guard.reset()
     login_routes.FAILED_LOGIN_DELAY_SECONDS = 0.5
+    api_routes.FAILED_LOGIN_DELAY_SECONDS = 0.5
 
 
 @pytest.fixture

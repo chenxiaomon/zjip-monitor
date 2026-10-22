@@ -1,0 +1,21 @@
+<view class="page">
+  <view class="brand">
+    <text class="brand-name">数智通监控</text>
+    <text class="brand-sub">用控制台的个人账号登录</text>
+  </view>
+
+  <view class="field">
+    <text class="label">用户名</text>
+    <input class="input" value="{{username}}" bindinput="onUsername" placeholder="如 zhangsan" type="text" />
+  </view>
+  <view class="field">
+    <text class="label">口令</text>
+    <input class="input" value="{{password}}" bindinput="onPassword" password placeholder="控制台口令" />
+  </view>
+
+  <view wx:if="{{error}}" class="error">{{error}}</view>
+
+  <button class="submit" type="primary" loading="{{submitting}}" disabled="{{submitting}}" bindtap="onSubmit">登录</button>
+
+  <text class="hint">没有账号或忘了口令，请联系管理员在控制台「用户」页处理。</text>
+</view>

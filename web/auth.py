@@ -153,6 +153,51 @@ def make_cookie(username: str) -> str:
     return f"{payload}|{_sign(payload, _session_key(username))}"
 
 
+# ---------------------------------------------------------------------------
+# Mini program tokens
+# ---------------------------------------------------------------------------
+# Colleagues log in to the mini program with their console account and get a
+# token: "username|expiry|sig", the same shape as the cookie but signed over
+# a different, newline-separated message — a cookie cannot be replayed as a
+# token or the other way round. It carries the user's session_key, so every
+# console revocation (password reset, 强制下线, disable, role change) ends
+# the phone's access too. 30 days: re-typing a password on a phone every
+# day is what makes people save it somewhere worse.
+API_TOKEN_MAX_AGE = int(os.getenv("API_TOKEN_DAYS", "30")) * 86400
+
+
+def _sign_api(username: str, expiry: str, key: str) -> str:
+    message = f"api-token\n{username}\n{expiry}\n{key}"
+    return hmac.new(_SECRET, message.encode(), hashlib.sha256).hexdigest()
+
+
+def make_api_token(username: str) -> tuple[str, int]:
+    """(token, expiry epoch seconds) for a user who just logged in."""
+    expiry = int(time.time()) + API_TOKEN_MAX_AGE
+    return f"{username}|{expiry}|{_sign_api(username, str(expiry), _session_key(username))}", expiry
+
+
+def user_from_api_token(token: str | None) -> dict | None:
+    """Verify a mini program token, like user_from_cookie does a cookie."""
+    if not token:
+        return None
+    try:
+        username, expiry_str, sig = token.rsplit("|", 2)
+        if int(expiry_str) < time.time():
+            return None
+    except (ValueError, TypeError):
+        return None
+    if _is_env_admin(username):
+        ok = secrets.compare_digest(sig, _sign_api(username, expiry_str, ""))
+        return _env_admin("api") if ok else None
+    rec = users.get(username)
+    if rec is None or rec["disabled"]:
+        return None
+    if not secrets.compare_digest(sig, _sign_api(username, expiry_str, rec["session_key"])):
+        return None
+    return _file_user(users.normalize_username(username), rec, "api")
+
+
 def set_session_cookie(response, username: str) -> None:
     """Sign `username` in on `response` (login, and after changing one's own
     password — which rotated the key every older cookie was signed with)."""
