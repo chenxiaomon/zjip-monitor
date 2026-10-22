@@ -16,9 +16,9 @@ from web.routes import accounts as accounts_routes
 def _no_background(monkeypatch):
     """Never launch a real platform login from a route test."""
     monkeypatch.setattr(accounts_routes, "spawn", lambda coro: coro.close())
-    accounts_routes._last_relogin.clear()
+    accounts_routes._web_logins.clear()
     yield
-    accounts_routes._last_relogin.clear()
+    accounts_routes._web_logins.clear()
 
 
 def test_group_user_cannot_trigger_a_scan(web_client, login_as, fake_accounts, isolated_snapshots):

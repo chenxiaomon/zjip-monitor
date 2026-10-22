@@ -1,5 +1,6 @@
 <!-- Modal overlay: add / edit account (mode = "add" | "edit") -->
 {% set is_edit = mode == 'edit' %}
+{% set is_admin = request.state.user and request.state.user.role == 'admin' %}
 <div class="modal-backdrop"
      onclick="if(event.target===this)document.getElementById('modal-container').innerHTML=''">
   <div class="modal" role="dialog" aria-modal="true" onclick="event.stopPropagation()">
@@ -70,6 +71,7 @@
                  placeholder="可选"
                  class="input">
         </div>
+        {% if is_admin %}
         <div class="field">
           <label class="label" for="acc-group">分组</label>
           <select id="acc-group" name="group" class="select">
@@ -80,6 +82,13 @@
             {% endfor %}
           </select>
         </div>
+        {% else %}
+        <div class="field">
+          <span class="label">分组</span>
+          <div class="readonly">{{ account.group | group_label }}</div>
+          <p class="help">分组由管理员调整</p>
+        </div>
+        {% endif %}
 
         <!-- 测试登录 result -->
         <div id="verify-result"></div>

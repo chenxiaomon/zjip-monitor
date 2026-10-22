@@ -6,6 +6,7 @@ import asyncio
 import json
 import threading
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Request
@@ -21,7 +22,9 @@ from src.config_loader import Account, ConfigError, load_accounts, save_accounts
 from src.exceptions import CredentialsRejectedError
 from src.login import _save_token, verify_credentials
 from src.main import run_all, run_single
-from web.auth import is_admin, require_admin, visible_accounts
+from web.auth import (
+    can_edit_accounts, current_user, editable_account, is_admin, require_admin, visible_accounts,
+)
 from web.deps import executor as _executor, get_groups, spawn, templates
 from web.services.run_state import run_state_ctx
 from web.services.session import _SESSIONS_DIR, _safe_name, get_session, token_status
@@ -53,19 +56,41 @@ _ACCOUNTS_WRITE_LOCK = threading.Lock()
 _verify_seq: dict[str, int] = {}
 
 
-# A group user re-triggering a login costs a real platform round-trip and
-# feeds that account's lockout streak, so it is rate limited per account.
-# Admins are not: they are the ones fixing a password and need the retry.
-_RELOGIN_COOLDOWN_SECONDS = 600
-_last_relogin: dict[str, float] = {}
+# Every login the console starts against the platform (重登, 测试登录, the
+# automatic check after a password edit) is a real round-trip, and a wrong
+# password repeated often enough can get the CLIENT's platform account
+# locked. All of them are counted per account over a sliding window; only
+# non-admins are held to the limits — admins are the ones fixing a password
+# and need the retry, but their attempts still use up the window.
+_LOGIN_WINDOW_SECONDS = 600
+_RELOGIN_LIMIT = 1   # 重登: as before, once per window
+_VERIFY_LIMIT = 3    # 测试登录 and the check after a password edit
+_web_logins: dict[str, deque[float]] = {}
+_web_logins_lock = threading.Lock()
+
+
+def _login_wait(username: str, limit: int) -> int:
+    """Seconds until `username` may start another console login under
+    `limit` per window (0 = now)."""
+    now = time.monotonic()
+    with _web_logins_lock:
+        dq = _web_logins.get(username)
+        if dq is None:
+            return 0
+        while dq and now - dq[0] >= _LOGIN_WINDOW_SECONDS:
+            dq.popleft()
+        if len(dq) < limit:
+            return 0
+        return max(1, int(_LOGIN_WINDOW_SECONDS - (now - dq[-limit])))
+
+
+def _note_login(username: str) -> None:
+    with _web_logins_lock:
+        _web_logins.setdefault(username, deque()).append(time.monotonic())
 
 
 def _relogin_cooldown_left(username: str) -> int:
-    last = _last_relogin.get(username)
-    if last is None:
-        return 0
-    remaining = _RELOGIN_COOLDOWN_SECONDS - (time.monotonic() - last)
-    return max(0, int(remaining))
+    return _login_wait(username, _RELOGIN_LIMIT)
 
 
 def _bump_verify_seq(username: str) -> int:
@@ -242,7 +267,7 @@ async def relogin(request: Request, username: str) -> HTMLResponse:
                 })},
             )
 
-    _last_relogin[username] = time.monotonic()
+    _note_login(username)
     _tasks[username] = {"status": "pending", "msg": ""}
     spawn(_verify_async(username, acc.password, acc.company, seq=_bump_verify_seq(username)))
 
@@ -401,6 +426,7 @@ async def add_account(
             return _err(_public_error(exc, "save_accounts failed", username=username))
 
     # Auto-trigger first login for the new account
+    _note_login(username)
     _tasks[username] = {"status": "pending", "msg": ""}
     spawn(_verify_async(username, password, company, seq=_bump_verify_seq(username)))
 
@@ -419,8 +445,15 @@ async def verify_account(
     """测试登录 without saving anything: zero token-cache interaction, no
     failure-streak bookkeeping, no global run lock (the login session's egress
     guard limits it to the single login POST). Empty password = test the
-    password currently stored for that account."""
-    require_admin(request)
+    password currently stored for that account.
+
+    A 经办人 may only test accounts of their own groups — anything else is
+    answered "不存在" without contacting the platform, so the button cannot be
+    used to try passwords against other clients' accounts — and only a few
+    times per window. Testing an account that is not saved yet (the 新增
+    dialog) stays with admins."""
+    if not can_edit_accounts(request):
+        require_admin(request)
     username = username.strip()
     password = password.strip()
 
@@ -431,6 +464,12 @@ async def verify_account(
 
     if not username:
         return _result(False, "请先填写账号")
+    if not is_admin(request):
+        if editable_account(request, username) is None:
+            return _result(False, f"账号 {username} 不存在")
+        wait = _login_wait(username, _VERIFY_LIMIT)
+        if wait:
+            return _result(False, f"测试登录过于频繁，请 {wait // 60 + 1} 分钟后再试")
     if not password:
         try:
             accounts_list = load_accounts()
@@ -441,6 +480,7 @@ async def verify_account(
             return _result(False, f"账号 {username} 尚未保存 — 密码留空时测试的是已保存密码，请先输入密码")
         password = acc.password
 
+    _note_login(username)
     loop = asyncio.get_event_loop()
     try:
         await loop.run_in_executor(
@@ -453,12 +493,16 @@ async def verify_account(
 
 @router.get("/accounts/{username}/edit-form", response_class=HTMLResponse)
 def edit_account_form(request: Request, username: str) -> HTMLResponse:
-    require_admin(request)
-    try:
-        accounts_list = load_accounts()
-    except ConfigError as exc:
-        return HTMLResponse(_public_error(exc, "edit-form: load_accounts failed", username=username), status_code=500)
-    acc = next((a for a in accounts_list if a.username == username), None)
+    if not can_edit_accounts(request):
+        require_admin(request)
+    if is_admin(request):
+        try:
+            accounts_list = load_accounts()
+        except ConfigError as exc:
+            return HTMLResponse(_public_error(exc, "edit-form: load_accounts failed", username=username), status_code=500)
+        acc = next((a for a in accounts_list if a.username == username), None)
+    else:
+        acc = editable_account(request, username)
     if acc is None:
         return HTMLResponse("账号不存在", status_code=404)
     return templates.TemplateResponse(
@@ -480,8 +524,17 @@ async def edit_account(
     company/username are immutable here: snapshots, attachments and events are
     keyed by company name, and username keys the token cache + status store.
     A password change wipes the cached token (it belongs to the old password's
-    session) and fires an automatic verify so the row shows the outcome."""
-    require_admin(request)
+    session) and fires an automatic verify so the row shows the outcome.
+
+    A 经办人 edits password and contact of their own groups' accounts only.
+    The group they submit is ignored, not applied: their form has no group
+    field, and applying the empty value would move the company out of their
+    own sight. Whether the account is theirs is decided again on the list
+    loaded under the write lock, not on the one loaded before it."""
+    if not can_edit_accounts(request):
+        require_admin(request)
+    admin = is_admin(request)
+    my_groups = set((current_user(request) or {}).get("groups") or [])
     password = password.strip()
     contact = contact.strip()
     group = group.strip()
@@ -500,7 +553,7 @@ async def edit_account(
             headers={"HX-Retarget": "#modal-container", "HX-Reswap": "innerHTML"},
         )
 
-    if group and group not in get_groups():
+    if admin and group and group not in get_groups():
         return _err(f"分组 {group} 不存在")
 
     with _ACCOUNTS_WRITE_LOCK:
@@ -509,10 +562,12 @@ async def edit_account(
         except ConfigError as exc:
             return _err(_public_error(exc, "load_accounts failed, refusing to write", username=username))
         acc = next((a for a in accounts_list if a.username == username), None)
-        if acc is None:
+        if acc is None or (not admin and acc.group not in my_groups):
+            acc = None
             return _err(f"账号 {username} 不存在")
         acc.contact = contact
-        acc.group = group
+        if admin:
+            acc.group = group
         if password:
             acc.password = password
         try:
@@ -527,8 +582,18 @@ async def edit_account(
         session_file = _SESSIONS_DIR / f"{_safe_name(username)}.json"
         session_file.unlink(missing_ok=True)
         status_store.record_password_changed(username)
-        _tasks[username] = {"status": "pending", "msg": ""}
-        spawn(_verify_async(username, password, acc.company, seq=_bump_verify_seq(username)))
+        wait = 0 if admin else _login_wait(username, _VERIFY_LIMIT)
+        if wait:
+            # The password is saved either way; only the platform check waits.
+            _bump_verify_seq(username)  # an older in-flight check must not report on it
+            _tasks[username] = {
+                "status": "error",
+                "msg": f"密码已保存；验证过于频繁，请 {wait // 60 + 1} 分钟后点「重登」",
+            }
+        else:
+            _note_login(username)
+            _tasks[username] = {"status": "pending", "msg": ""}
+            spawn(_verify_async(username, password, acc.company, seq=_bump_verify_seq(username)))
 
     response = HTMLResponse("")
     response.headers["HX-Trigger"] = "accountSaved"

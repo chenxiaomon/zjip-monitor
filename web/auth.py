@@ -261,6 +261,21 @@ def require_admin(request: Request) -> None:
         raise HTTPException(status_code=403, detail="仅管理员可操作")
 
 
+def can_edit_accounts(request: Request) -> bool:
+    """Admins and 经办人 may change a visible company's platform password and
+    contact, and run 测试登录 for it. Adding, deleting, regrouping and
+    scanning stay admin-only."""
+    user = current_user(request)
+    return user is not None and user.get("role") in ("admin", "operator")
+
+
+def editable_account(request: Request, username: str) -> Account | None:
+    """The account `username` if the current user may edit it, else None."""
+    if not can_edit_accounts(request):
+        return None
+    return next((a for a in visible_accounts(request) if a.username == username), None)
+
+
 def visible_accounts(request: Request) -> list[Account]:
     """Accounts the current user may see (admin → all, group user → own group)."""
     user = current_user(request)

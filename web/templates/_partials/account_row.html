@@ -21,6 +21,7 @@
   </td>
   <!-- 分组 -->
   {% set is_admin = request.state.user.role == 'admin' if request.state.user else false %}
+  {% set can_edit = request.state.user.role in ('admin', 'operator') if request.state.user else false %}
   <td>
     {% if is_admin %}
     <select name="group"
@@ -113,14 +114,16 @@
       </button>
       {% endif %}
       {% endif %}
-      {% if task.status != 'pending' and is_admin %}
+      {% if task.status != 'pending' and can_edit %}
       <button hx-get="/accounts/{{ u }}/edit-form"
               hx-target="#modal-container"
               hx-swap="innerHTML"
-              title="修改密码 / 联系人 / 分组"
+              title="{% if is_admin %}修改密码 / 联系人 / 分组{% else %}修改密码 / 联系人{% endif %}"
               class="btn btn-xs">
         {{ icon('pencil') }}编辑
       </button>
+      {% endif %}
+      {% if task.status != 'pending' and is_admin %}
       <button hx-post="/accounts/{{ u }}/delete"
               hx-target="#row-{{ u }}"
               hx-swap="delete"
