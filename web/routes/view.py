@@ -1,4 +1,12 @@
-"""Public read-only status page — no authentication required."""
+"""Public read-only status page — no authentication required.
+
+Anyone signed in to the console sees only the companies their role and
+groups allow, exactly as on the dashboard: this page used to list every
+company to every console user, which walked straight past the groups.
+Anonymous visitors (and ?t=<VIEW_TOKEN> holders) still get the full list
+— that is what the operator chose by leaving the page open or sharing
+the token.
+"""
 
 from __future__ import annotations
 
@@ -16,20 +24,21 @@ router = APIRouter(prefix="/view")
 _NOINDEX = {"X-Robots-Tag": "noindex, nofollow", "Cache-Control": "no-store"}
 
 
-def _access(request: Request) -> tuple[bool, bool]:
-    """(allowed, should_set_cookie).
+def _access(request: Request) -> tuple[bool, bool, dict | None]:
+    """(allowed, should_set_cookie, console user or None).
 
     Order: an authenticated console user, then a correct ?t=<token> (which
     mints the cookie), then a previously minted cookie. With no VIEW_TOKEN
     configured the page stays open, exactly as it was.
     """
+    user = auth.user_from_cookie(request.cookies.get(auth.COOKIE_NAME))
+    if user is not None:
+        return True, False, user
     if not auth.VIEW_TOKEN:
-        return True, False
-    if auth.user_from_cookie(request.cookies.get(auth.COOKIE_NAME)):
-        return True, False
+        return True, False, None
     if auth.view_token_ok(request.query_params.get("t")):
-        return True, True
-    return auth.view_cookie_ok(request.cookies.get(auth.VIEW_COOKIE)), False
+        return True, True, None
+    return auth.view_cookie_ok(request.cookies.get(auth.VIEW_COOKIE)), False, None
 
 
 def _denied() -> HTMLResponse:
@@ -37,7 +46,8 @@ def _denied() -> HTMLResponse:
     return HTMLResponse("页面不存在", status_code=404, headers=_NOINDEX)
 
 
-def _build_ctx(year: int | None = None) -> dict:
+def _build_ctx(year: int | None = None, companies: set[str] | None = None) -> dict:
+    """`companies` limits the page to those names; None = every company."""
     # Default to the current application year (was hard-coded 2026, which
     # would have silently zeroed the page on 2027-01-01).
     if year is None:
@@ -49,6 +59,8 @@ def _build_ctx(year: int | None = None) -> dict:
     pending_correction = 0
 
     for snap in get_all_latest_snapshots():
+        if companies is not None and snap.get("company") not in companies:
+            continue
         status_counts: dict[int, int] = {}
         for r in snap.get("records", []):
             if not in_year(r.get("dataRegApplyTime"), year):
@@ -81,11 +93,17 @@ def _build_ctx(year: int | None = None) -> dict:
 
 
 def _render(request: Request, template: str, year: int | None) -> HTMLResponse:
-    allowed, set_cookie = _access(request)
+    allowed, set_cookie, user = _access(request)
     if not allowed:
         return _denied()
+    companies = None
+    if user is not None and user["role"] != "admin":
+        # /view is a public path: the middleware set no user, so do it here
+        # for visible_accounts().
+        request.state.user = user
+        companies = {a.company for a in auth.visible_accounts(request)}
     response = templates.TemplateResponse(
-        request, template, _build_ctx(year), headers=dict(_NOINDEX)
+        request, template, _build_ctx(year, companies), headers=dict(_NOINDEX)
     )
     if set_cookie:
         response.set_cookie(

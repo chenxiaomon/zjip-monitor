@@ -8,7 +8,7 @@ so nobody's existing link breaks on deploy.
 
 import pytest
 
-from tests.conftest import ADMIN
+from tests.conftest import ADMIN, GROUP_A_USER
 from web import auth
 
 
@@ -75,3 +75,25 @@ def test_robots_txt_disallows_everything(web_client):
     resp = web_client.get("/robots.txt")
     assert resp.status_code == 200
     assert "Disallow: /" in resp.text
+
+
+def test_a_signed_in_colleague_sees_only_their_companies(
+        web_client, login_as, isolated_snapshots, fake_accounts):
+    """The page used to list every company to every console user — past the groups."""
+    for company in ("甲 公司", "丙公司"):
+        isolated_snapshots.write(company, [{"dataRegNo": "R1", "dataRegAuditStatus": 7,
+                                            "dataRegName": "n", "id": 1}])
+    login_as(web_client, *GROUP_A_USER)
+    body = web_client.get("/view/").text
+    assert "甲 公司" in body and "丙公司" not in body
+
+
+def test_the_admin_and_anonymous_visitors_still_see_everything(
+        web_client, login_as, isolated_snapshots, fake_accounts):
+    for company in ("甲 公司", "丙公司"):
+        isolated_snapshots.write(company, [{"dataRegNo": "R1", "dataRegAuditStatus": 7,
+                                            "dataRegName": "n", "id": 1}])
+    anonymous = web_client.get("/view/").text
+    assert "甲 公司" in anonymous and "丙公司" in anonymous
+    login_as(web_client, *ADMIN)
+    assert "丙公司" in web_client.get("/view/").text
