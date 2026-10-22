@@ -58,15 +58,20 @@ def mask(identifier: str) -> str:
 def client_ip(request: Request) -> str:
     """Best available client address.
 
-    Production nginx sets X-Real-IP (and not X-Forwarded-For); accept either,
-    and fall back to the socket peer so a direct-to-uvicorn setup still works.
+    Production nginx sets X-Real-IP (and not X-Forwarded-For), so X-Real-IP
+    wins. Whatever X-Forwarded-For a client sends is passed through by that
+    nginx untouched: preferring it let anyone pick their own address — a
+    fresh one per attempt walks straight past the per-IP lockout, and the
+    operation log would record whatever they typed. X-Forwarded-For is still
+    read when X-Real-IP is absent (a different proxy), then the socket peer
+    so a direct-to-uvicorn setup still works.
     """
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
     real = request.headers.get("x-real-ip", "")
     if real:
         return real.strip()
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
     client = getattr(request, "client", None)
     return getattr(client, "host", None) or "unknown"
 

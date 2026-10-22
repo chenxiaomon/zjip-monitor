@@ -1,5 +1,7 @@
 {# Standalone (its own route) it refreshes itself; inside dashboard_body.html the body does. #}
 {% set is_admin = request.state.user and request.state.user.role == 'admin' %}
+{# Which group a company is in only says something to whoever sees more than one. #}
+{% set show_group = is_admin or (request.state.user and request.state.user.groups | length > 1) %}
 <div id="account-grid-section"
      class="acc-grid"
      {% if standalone is not defined or standalone %}
@@ -15,7 +17,10 @@
         <a href="/records?account={{ snap.account.username | urlencode }}" class="acc-name truncate">{{ snap.account.company }}</a>
         <div class="acc-user">
           {{ snap.account.username }}
-          {% if is_admin %}
+          {% if snap.account.owner %}
+          <span class="xs faint">· {{ owner_label(snap.account.owner, snap.account.group) }}</span>
+          {% endif %}
+          {% if show_group %}
           <span class="pill pill-xs {% if snap.account.group %}pill-accent{% else %}pill-neutral{% endif %}">{{ snap.account.group | group_label }}</span>
           {% endif %}
         </div>

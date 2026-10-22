@@ -1,7 +1,8 @@
 {
   "pages": [
     "pages/index/index",
-    "pages/records/records"
+    "pages/records/records",
+    "pages/login/login"
   ],
   "window": {
     "navigationBarTitleText": "数智通监控",

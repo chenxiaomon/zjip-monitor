@@ -21,6 +21,7 @@
   </td>
   <!-- 分组 -->
   {% set is_admin = request.state.user.role == 'admin' if request.state.user else false %}
+  {% set can_edit = request.state.user.role in ('admin', 'operator') if request.state.user else false %}
   <td>
     {% if is_admin %}
     <select name="group"
@@ -36,6 +37,31 @@
     </select>
     {% else %}
     <span class="pill pill-accent">{{ row.account.group | group_label }}</span>
+    {% endif %}
+  </td>
+  <!-- 负责人 -->
+  <td>
+    {% if is_admin %}
+    {% set choices = owner_choices(row.account.group) %}
+    <select name="owner"
+            hx-post="/accounts/{{ u }}/owner"
+            hx-trigger="change"
+            hx-target="#row-{{ u }}"
+            hx-swap="outerHTML"
+            class="select select-sm"
+            aria-label="负责人">
+      <option value="" {% if not row.account.owner %}selected{% endif %}>未指定</option>
+      {% for uname, label in choices %}
+      <option value="{{ uname }}" {% if row.account.owner == uname %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+      {% if row.account.owner and row.account.owner not in choices | map('first') | list %}
+      <option value="{{ row.account.owner }}" selected>{{ owner_label(row.account.owner, row.account.group) }}</option>
+      {% endif %}
+    </select>
+    {% elif row.account.owner %}
+    <span class="sm">{{ owner_label(row.account.owner, row.account.group) }}</span>
+    {% else %}
+    <span class="faint">—</span>
     {% endif %}
   </td>
   <!-- 账号 -->
@@ -113,14 +139,25 @@
       </button>
       {% endif %}
       {% endif %}
-      {% if task.status != 'pending' and is_admin %}
+      {% if can_edit %}
+      <button hx-post="/accounts/{{ u }}/platform-access"
+              hx-target="#modal-container"
+              hx-swap="innerHTML"
+              title="查看这家企业的平台账号口令，去 zjip.org.cn 办理（会记入操作日志）"
+              class="btn btn-xs">
+        {{ icon('key') }}去平台办理
+      </button>
+      {% endif %}
+      {% if task.status != 'pending' and can_edit %}
       <button hx-get="/accounts/{{ u }}/edit-form"
               hx-target="#modal-container"
               hx-swap="innerHTML"
-              title="修改密码 / 联系人 / 分组"
+              title="{% if is_admin %}修改密码 / 联系人 / 分组{% else %}修改密码 / 联系人{% endif %}"
               class="btn btn-xs">
         {{ icon('pencil') }}编辑
       </button>
+      {% endif %}
+      {% if task.status != 'pending' and is_admin %}
       <button hx-post="/accounts/{{ u }}/delete"
               hx-target="#row-{{ u }}"
               hx-swap="delete"

@@ -53,6 +53,7 @@ from web.routes import (  # noqa: E402 — same reason
     accounts,
     api,
     attachments,
+    audit,
     changes,
     dashboard,
     deadlines,
@@ -62,8 +63,10 @@ from web.routes import (  # noqa: E402 — same reason
     records,
     reports,
     settings,
+    users,
     view,
 )
+from web.services import audit_log  # noqa: E402 — same reason
 from web.sse import router as sse_router, start_watcher  # noqa: E402 — same reason
 
 _WEB_USER = os.getenv("WEB_USER", "admin")
@@ -77,11 +80,31 @@ if (not os.getenv("WEB_PASS") or _WEB_PASS == "changeme") and os.getenv("WEB_ALL
     )
 
 if not _API_KEY:
-    logger.warning("API_KEY 未配置，/api/* 仅接受 Basic Auth 访问（小程序将无法直连）")
+    # The mini program logs in with personal accounts now; the key is for scripts.
+    logger.info("API_KEY 未配置：/api/* 接受小程序个人账号登录与 Basic Auth")
+
+
+async def _migrate_users() -> None:
+    """One-time WEB_USERS → config/users.yaml import (one hash per user, so
+    off the event loop). Here and not at import: importing web.app happens
+    in the deploy smoke test and the test suite too. Never fatal — the .env
+    admin can still log in and fix things from the 用户 page."""
+    from web.services import users
+
+    try:
+        await asyncio.to_thread(users.migrate_from_env)
+        if users.get(_WEB_USER) is not None:
+            logger.error(
+                f"config/users.yaml 里有与 WEB_USER 同名的用户 {_WEB_USER!r}，已忽略；"
+                "该名字只代表 .env 备用管理员"
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"导入 WEB_USERS 失败：{exc!r}")
 
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):  # type: ignore[type-arg]
+    await _migrate_users()
     task = asyncio.create_task(start_watcher())
     yield
     # Graceful shutdown: signal in-flight scans to stop at their next
@@ -111,7 +134,7 @@ app = FastAPI(title="数智通监控", lifespan=_lifespan)
 
 
 # 管理员专属页面（分组账号访问返回 403）
-_ADMIN_ONLY_PREFIXES = ("/settings", "/notify", "/reports", "/run-once")
+_ADMIN_ONLY_PREFIXES = ("/settings", "/notify", "/reports", "/run-once", "/users", "/audit")
 
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 # Extra origins allowed to submit state-changing requests, e.g. when the
@@ -179,8 +202,15 @@ def _basic_admin_ok(request: Request) -> bool:
     if user_ok and pass_ok:
         login_guard.record_success(ip, guard_key)
         return True
+    # Successful Basic requests are not logged one by one (a script polls);
+    # failures are, and stop by themselves once the guard locks the caller out.
+    who = username if user_ok else login_guard.mask(username)
+    audit_log.record_request(request, "auth.login_failed", actor=who, ok=False,
+                             detail={"via": "basic"})
     if login_guard.record_failure(ip, guard_key):
         logger.error(f"Basic 认证连续失败已锁定 ip={ip} user={login_guard.mask(username)}")
+        audit_log.record_request(request, "auth.lockout", actor=who, ok=False,
+                                 detail={"via": "basic", "minutes": login_guard.LOCK_SECONDS // 60})
     return False
 
 
@@ -214,8 +244,17 @@ async def _auth_middleware(request: Request, call_next) -> Response:  # type: ig
                 else "public, max-age=3600"
             )
         return response
-    # 小程序 API：X-API-Key 或 Basic 管理员
+    # 小程序 API：个人账号登录拿到的 Bearer 凭证；X-API-Key 或 Basic 管理员（脚本用）
+    if path == "/api/login":
+        return await call_next(request)  # the route does its own checks and rate limit
     if path.startswith("/api/"):
+        bearer = request.headers.get("Authorization", "")
+        if bearer.startswith("Bearer "):
+            user = auth.user_from_api_token(bearer[7:].strip())
+            if user is None:
+                return JSONResponse({"error": "登录已失效，请重新登录"}, status_code=401)
+            request.state.user = user
+            return await call_next(request)
         api_key = request.headers.get("X-API-Key", "")
         key_ok = bool(_API_KEY) and secrets.compare_digest(api_key.encode(), _API_KEY.encode())
         if key_ok or _basic_admin_ok(request):
@@ -223,13 +262,13 @@ async def _auth_middleware(request: Request, call_next) -> Response:  # type: ig
             # lets the /api handlers go through the same visible_accounts()
             # path as the console, so binding keys to groups later is a change
             # to this line, not to every handler.
-            request.state.user = auth.admin_user()
+            request.state.user = auth.admin_user(via="api")
             return await call_next(request)
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     # 控制台：会话 cookie，Basic 管理员兜底
     user = auth.user_from_cookie(request.cookies.get(auth.COOKIE_NAME))
     if user is None and _basic_admin_ok(request):
-        user = auth.admin_user()
+        user = auth.admin_user(via="basic")
     if user is None:
         if request.headers.get("HX-Request"):
             # 会话过期的 HTMX 轮询：让整页跳转登录页
@@ -238,7 +277,19 @@ async def _auth_middleware(request: Request, call_next) -> Response:  # type: ig
     request.state.user = user
     if user["role"] != "admin" and path.startswith(_ADMIN_ONLY_PREFIXES):
         return Response("无权限", status_code=403)
-    return await call_next(request)
+    response = await call_next(request)
+    # Safety net for the operation log: every state-changing route records
+    # what it did (or says nothing changed). One that got through without
+    # either — a route added later and forgotten — still leaves a line.
+    # request.state is the scope's state dict, shared with the route.
+    if (
+        request.method in _UNSAFE_METHODS
+        and response.status_code < 400
+        and not getattr(request.state, "audited", False)
+    ):
+        audit_log.record_request(request, "http.unaudited", target=path,
+                                 detail={"http_method": request.method, "status": response.status_code})
+    return response
 
 
 # Python's table does not know the web-app manifest type on every platform.
@@ -267,6 +318,8 @@ app.include_router(records.router)
 app.include_router(notify.router)
 app.include_router(reports.router)
 app.include_router(settings.router)
+app.include_router(users.router)
+app.include_router(audit.router)
 app.include_router(view.router)
 app.include_router(api.router)
 app.include_router(attachments.router)

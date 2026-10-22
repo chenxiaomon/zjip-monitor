@@ -44,18 +44,22 @@
     {% endfor %}
     {% if not limited %}
     <div class="nav-label">管理</div>
-    {% for href, name, label in [('/notify', 'bell', '通知'), ('/reports', 'report-analytics', '报表'), ('/settings', 'settings', '设置')] %}
+    {% for href, name, label in [('/notify', 'bell', '通知'), ('/reports', 'report-analytics', '报表'), ('/settings', 'settings', '设置'), ('/users', 'id-badge-2', '用户'), ('/audit', 'list-details', '操作日志')] %}
     <a href="{{ href }}" class="nav-item{% if request.url.path == href %} active{% endif %}">{{ icon(name) }}{{ label }}</a>
     {% endfor %}
     {% endif %}
   </nav>
   {% if current_user %}
   <div class="sidebar-foot">
-    <span class="avatar">{{ current_user.username[:1] }}</span>
+    {% set shown_name = current_user.display_name or current_user.username %}
+    <span class="avatar">{{ shown_name[:1] }}</span>
     <div class="grow">
-      <div class="user-name truncate">{{ current_user.username }}</div>
-      <div class="user-role truncate">{% if limited %}{{ current_user.group | group_label }}{% else %}管理员{% endif %}</div>
+      <div class="user-name truncate" title="{{ current_user.username }}">{{ shown_name }}</div>
+      <div class="user-role truncate">{{ current_user.role | role_label }}{% if limited %} · {{ current_user.groups | map('group_label') | join('、') }}{% endif %}</div>
     </div>
+    {% if current_user.source == 'file' %}
+    <a href="/me/password" class="icon-btn" title="修改密码">{{ icon('lock') }}</a>
+    {% endif %}
     <form method="post" action="/logout">
       <button type="submit" class="icon-btn" title="退出登录">{{ icon('logout') }}</button>
     </form>
@@ -68,6 +72,15 @@
     <button type="button" class="icon-btn nav-toggle" onclick="document.body.classList.toggle('nav-open')" aria-label="打开菜单">{{ icon('menu-2') }}</button>
     <h1 class="topbar-title">{% block page_title %}{% endblock %}</h1>
     <div class="topbar-right">
+      {# 我负责的 / 全部 — only on the pages that honour it, only for someone who owns companies #}
+      {% set scope = view_scope(request) if current_user and request.url.path in ('/', '/records', '/calendar', '/changes') else none %}
+      {% if scope and scope.owned %}
+      {% set back = (request.url.path ~ ('?' ~ request.url.query if request.url.query else '')) | urlencode %}
+      <div class="chips scope-toggle" role="group" aria-label="显示范围">
+        <a href="/scope?to=mine&next={{ back }}" class="chip chip-sm{% if scope.mine %} active{% endif %}" title="只看我负责的企业">我负责的 {{ scope.owned }}</a>
+        <a href="/scope?to=all&next={{ back }}" class="chip chip-sm{% if not scope.mine %} active{% endif %}" title="我能看到的全部企业">全部 {{ scope.visible }}</a>
+      </div>
+      {% endif %}
       <form class="topbar-search" action="/records" method="get" role="search">
         {{ icon('search') }}
         <input type="search" name="q" placeholder="搜索登记号 / 数据名称 / 公司" aria-label="搜索登记记录">
@@ -76,6 +89,12 @@
     </div>
   </header>
   <main class="content">
+    {% if current_user and current_user.must_change_password and request.url.path != '/me/password' %}
+    <div class="alert alert-warn">{{ icon('lock') }}<div>
+      <div class="alert-title">请修改初始口令</div>
+      <div class="alert-body">当前口令是管理员设置或从旧配置导入的，<a href="/me/password">现在去改</a>。</div>
+    </div></div>
+    {% endif %}
     {% block content %}{% endblock %}
   </main>
 </div>

@@ -12,12 +12,14 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from src import ops_alerts, status_store, todo
 from src.runtime_settings import ops_alert_settings
 from src.scraper import AUDIT_STATUS
-from web.auth import allowed_usernames, is_admin, visible_accounts
+from web.auth import (
+    SCOPE_COOKIE, allowed_usernames, is_admin, shown_accounts, shown_usernames, visible_accounts,
+)
 from web.deps import STATUS_COLORS, account_dot, in_year, int_or_none, templates
 from web.deps import status_distribution
 from web.services import trends
@@ -47,7 +49,7 @@ def _is_stale(snapshot_time: str | None, stale_hours: float) -> bool:
 def _filtered_events(request: Request, hours: int = 24, limit: int = 20) -> list[dict]:
     """The timeline's events: only ones that carry a change, scoped to the
     viewer's accounts before the cap so quiet scans cannot fill it."""
-    return read_events(hours=hours, limit=limit, accounts=allowed_usernames(request), with_changes=True)
+    return read_events(hours=hours, limit=limit, accounts=shown_usernames(request), with_changes=True)
 
 
 def _apply_year(ms) -> int | None:
@@ -86,8 +88,10 @@ def _dash_url_factory(year: int | None, range_days: int):
 
 
 def _dashboard_ctx(request: Request, year: int | None = None, range_days: int = 30) -> dict:
-    accounts = visible_accounts(request)
-    allowed = allowed_usernames(request)
+    # 我负责的 or everything visible; the ops banner below stays on the
+    # full visible set — a failing scan is everyone's business.
+    accounts = shown_accounts(request)
+    allowed = shown_usernames(request)
     all_status = status_store.get_all()
     # Once per request: get_settings() is mtime-cached, so this is a stat().
     stale_hours = ops_alert_settings().stale_hours
@@ -165,7 +169,7 @@ def _dashboard_ctx(request: Request, year: int | None = None, range_days: int = 
         "login_alerts": login_alerts,
         # Scoped to what this user may see: a group user must never learn from
         # the banner that another group's company is failing.
-        "ops_alerts": ops_alerts.collect_alerts(allowed),
+        "ops_alerts": ops_alerts.collect_alerts(allowed_usernames(request)),
         "todo": todo.build(accounts),
         "events": events,
         "run": _run_ctx(request),
@@ -176,6 +180,23 @@ def _dashboard_ctx(request: Request, year: int | None = None, range_days: int = 
         "STATUS_COLORS": STATUS_COLORS,
         "AUDIT_STATUS": AUDIT_STATUS,
     }
+
+
+def _safe_next(target: str | None) -> str:
+    """Only a path on this site — never //host or a scheme (open redirect)."""
+    if not target or not target.startswith("/") or target.startswith("//") or "\\" in target:
+        return "/"
+    return target
+
+
+@router.get("/scope")
+def set_scope(request: Request, to: str = Query("mine"), next_: str | None = Query(None, alias="next")):
+    """Switch 我负责的 / 全部 and go back to the page the switch was on. A
+    view preference in a cookie, nothing on the server changes."""
+    response = RedirectResponse(url=_safe_next(next_), status_code=303)
+    response.set_cookie(SCOPE_COOKIE, "all" if to == "all" else "mine",
+                        max_age=365 * 86400, httponly=True, samesite="lax", path="/")
+    return response
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -225,7 +246,7 @@ def partial_todo(request: Request) -> HTMLResponse:
     """待办 alone: corrections with deadlines, certificates due for renewal —
     scoped like everything else to the accounts this user may see."""
     return templates.TemplateResponse(
-        request, "_partials/todo.html", {"todo": todo.build(visible_accounts(request))},
+        request, "_partials/todo.html", {"todo": todo.build(shown_accounts(request))},
     )
 
 

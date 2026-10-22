@@ -12,8 +12,9 @@ from fastapi.responses import HTMLResponse, Response
 
 from src import todo
 from src.scraper import AUDIT_STATUS, decode_status
-from web.auth import allowed_usernames, visible_accounts
+from web.auth import allowed_usernames, shown_accounts, visible_accounts
 from web.deps import STATUS_COLORS, int_or_none, templates
+from web.services import audit_log
 from web.services.attachments_svc import archived_attachments, list_attachments
 from web.services.events import read_change_rows
 from web.services.snapshot import get_latest_snapshot
@@ -203,7 +204,8 @@ def _all_rows(request: Request, account: str | None, statuses: frozenset[int] | 
               start_date: str | None, end_date: str | None, q: str | None, sort: str = ""):
     start_ms = _date_to_ms(start_date) if start_date else None
     end_ms = _date_to_ms(end_date, end_of_day=True) if end_date else None
-    accounts_list = visible_accounts(request)
+    # 我负责的 when on; the record drawer below still checks visible_accounts.
+    accounts_list = shown_accounts(request)
     rows, missing_accounts, fetch_warnings = _build_records(
         accounts_list, account, statuses, start_ms, end_ms, q, sort
     )
@@ -405,6 +407,11 @@ def records_csv(
             r["renewal"].valid_to if r["renewal"] else "",
             len(r["attachments"]) + len(r["archived"]),
         ])
+    filters = {"account": account, "statuses": _statuses(request), "start_date": start_date,
+               "end_date": end_date, "q": q}
+    audit_log.record_request(request, "data.records_csv", detail={
+        **{k: v for k, v in filters.items() if v}, "rows": len(rows),
+    })
     filename = f"records-{datetime.now(_SHANGHAI_TZ):%Y%m%d}.csv"
     return Response(
         "﻿" + buf.getvalue(),

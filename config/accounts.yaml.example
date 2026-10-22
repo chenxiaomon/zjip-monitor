@@ -4,6 +4,7 @@ accounts:
     password: "your_password_1"
     contact: "张三"
     group: "group_a"   # 分组 key，对应 settings.yaml 的 groups；留空 = 未分组
+    owner: "zhangsan"  # 负责人：控制台用户名（「用户」页里的）；留空 = 未指定，平时在「账号」页设置
   - company: "公司B示例"
     username: "your_account_2"
     password: "your_password_2"

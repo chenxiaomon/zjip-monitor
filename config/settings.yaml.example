@@ -19,8 +19,8 @@ base_url: "https://www.zjip.org.cn"
 
 # 账号分组：key → 界面上显示的中文名。
 # 账号的 group 字段（控制台账号页可改，加密存在 config/accounts.enc 里；
-# 明文模板见 config/accounts.yaml.example）和 .env 里分组用户
-# WEB_USERS="用户名:密码:分组key" 的分组 key，都应当是这里的某个 key。
+# 明文模板见 config/accounts.yaml.example）和控制台用户所属的分组
+# （「用户」页可改，存在 config/users.yaml 里），都应当是这里的某个 key。
 # 写了这里没有的 key 不会报错，界面直接按原样显示这个 key。
 groups:
   group_a: "来源一"

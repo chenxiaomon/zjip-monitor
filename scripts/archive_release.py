@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,7 +32,7 @@ sys.path.insert(0, str(ROOT))
 
 from loguru import logger  # noqa: E402
 
-from src import archive_policy, control  # noqa: E402
+from src import archive_policy, audit, control  # noqa: E402
 from src.attachments import _MANIFEST_NAME, _safe_name, _sha256  # noqa: E402
 from src.fsutil import atomic_write_text  # noqa: E402
 from src.logging_setup import setup_logging  # noqa: E402
@@ -81,6 +82,18 @@ def _write_manifest(rec_dir: Path, manifest: dict) -> None:
     atomic_write_text(rec_dir / _MANIFEST_NAME, json.dumps(manifest, ensure_ascii=False, indent=2))
 
 
+def _audit(action: str, rec_dir: Path, detail: dict) -> None:
+    """One operation-log line per record. The only thing in this system that
+    deletes notices from the server, so the console's 操作日志 shows it next
+    to everything people did there. The laptop's address comes from sshd."""
+    company_dir, reg_dir = rec_dir.relative_to(_ATTACHMENTS_DIR.resolve()).parts
+    audit.record(
+        "本机归档", action, via="ssh",
+        ip=(os.environ.get("SSH_CLIENT") or "").split(" ")[0],
+        company=company_dir, target=reg_dir, detail=detail,
+    )
+
+
 def release(items: list, *, dry_run: bool, days: int, now: datetime | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
     released: list[str] = []
@@ -127,6 +140,10 @@ def release(items: list, *, dry_run: bool, days: int, now: datetime | None = Non
                 logger.info(
                     f"归档释放 {path.relative_to(_ATTACHMENTS_DIR.resolve())}（{size / 1048576:.2f}MB）"
                 )
+            _audit("archive.release", rec_dir, {
+                "files": len(entries), "bytes": sum(size for _, _, size in entries),
+                "names": [path.name for path, _, _ in entries],
+            })
     return {"released": released, "skipped": skipped, "bytes": total, "dry_run": dry_run}
 
 
@@ -151,6 +168,7 @@ def unarchive(rel_dir: str) -> dict:
             manifest.pop("archived", None)
         _write_manifest(rec_dir, manifest)
         logger.info(f"取消归档标记 {rel_dir}: {', '.join(restored)}")
+        _audit("archive.unarchive", rec_dir, {"files": len(restored), "names": restored})
     return {"restored": restored, "still_archived": sorted(archived)}
 
 

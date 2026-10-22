@@ -19,12 +19,13 @@ def test_plan_is_append_only(tmp_path):
     cfg = _cfg(tmp_path)
     jobs = pull.plan(cfg, stamp="S")
 
-    assert [j[-1] for j in jobs] == [f"{cfg.archive_dir / n}/" for n in ("attachments", "snapshots", "events")]
+    assert [j[-1] for j in jobs] == [f"{cfg.archive_dir / n}/"
+                                     for n in ("attachments", "snapshots", "events", "audit")]
     for argv in jobs:
         assert not any(a.startswith("--delete") for a in argv)
         assert argv[:5] == ["rsync", "-az", "--stats", "-e", "ssh -p 22"]
 
-    attachments, snapshots, events = jobs
+    attachments, snapshots, events, audit_log = jobs
     assert "--exclude=*.part" in attachments
     assert attachments[-2] == "root@h:/opt/z/data/attachments/"
     for argv, name in ((attachments, "attachments"), (snapshots, "snapshots")):
@@ -32,10 +33,12 @@ def test_plan_is_append_only(tmp_path):
         assert f"--backup-dir={cfg.archive_dir / '.overwritten' / 'S' / name}" in argv
     assert "--backup" not in events
     assert events[-2] == "root@h:/opt/z/data/events*.jsonl"
+    assert "--backup" not in audit_log
+    assert audit_log[-2] == "root@h:/opt/z/data/control/audit/"
 
 
 def test_reports_only_on_request(tmp_path):
-    assert len(pull.plan(_cfg(tmp_path), reports=True)) == 4
+    assert len(pull.plan(_cfg(tmp_path), reports=True)) == 5
     assert pull.plan(_cfg(tmp_path), reports=True)[-1][-1].endswith("/reports/")
 
 
@@ -56,9 +59,9 @@ def test_run_logs_what_was_transferred(tmp_path, monkeypatch):
     calls = _fake_rsync(monkeypatch, {})
 
     assert pull.run(cfg) == 0
-    assert len(calls) == 3
+    assert len(calls) == 4
     log = (cfg.archive_dir / "pull.log").read_text(encoding="utf-8")
-    assert "transferred=9\tok" in log
+    assert "transferred=12\tok" in log
 
 
 def test_run_reports_a_failed_rsync(tmp_path, monkeypatch, capsys):

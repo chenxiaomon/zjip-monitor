@@ -14,12 +14,22 @@
         {% if due %}<span class="pill {{ urgency_class(due.urgency) }}">{{ due_label(due.days_left, due.deadline) }}</span>{% endif %}
         <a href="{{ detail_url(reg_no) }}" target="_blank" rel="noopener" class="mono xs link row gap-1" style="display:inline-flex"
            title="在官网打开详情页（需登录平台）">{{ reg_no }}{{ icon('external-link') }}</a>
+        {% if request.state.user and request.state.user.role in ('admin', 'operator') %}
+        <button type="button"
+                hx-post="/accounts/{{ acc.username | urlencode }}/platform-access"
+                hx-vals='{"reg_no": {{ reg_no | tojson }}, "inline": "1"}'
+                hx-target="#platform-access"
+                hx-swap="innerHTML"
+                title="查看这家企业的平台账号口令，去 zjip.org.cn 办理（会记入操作日志）"
+                class="btn btn-xs">{{ icon('key') }}去平台办理</button>
+        {% endif %}
       </div>
     </div>
     <button type="button" class="icon-btn" onclick="closeDrawer()" title="关闭（Esc）">{{ icon('x') }}</button>
   </header>
 
   <div class="drawer-body">
+    <div id="platform-access"></div>
     <section class="drawer-section">
       <h3>概要</h3>
       <dl class="kv-list">

@@ -1,0 +1,59 @@
+<div id="audit-section" class="card">
+  <div class="card-head">
+    <span class="card-sub">共 {{ total }} 条{% if pages > 1 %} · 第 {{ page }}/{{ pages }} 页{% endif %}</span>
+    {% if pages > 1 %}
+    <span class="pager">
+      {% if page > 1 %}
+      <a href="{{ audit_url(page=page-1) }}" hx-get="{{ audit_url(partial=True, page=page-1) }}" hx-target="#audit-section" hx-swap="outerHTML" class="btn btn-xs">{{ icon('chevron-left') }}上一页</a>
+      {% endif %}
+      {% if page < pages %}
+      <a href="{{ audit_url(page=page+1) }}" hx-get="{{ audit_url(partial=True, page=page+1) }}" hx-target="#audit-section" hx-swap="outerHTML" class="btn btn-xs">下一页{{ icon('chevron-right') }}</a>
+      {% endif %}
+    </span>
+    {% endif %}
+  </div>
+  {% if rows %}
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th>时间</th>
+          <th>操作人</th>
+          <th>操作</th>
+          <th>对象</th>
+          <th class="hide-sm">内容</th>
+          <th class="hide-sm">IP</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td class="mono xs faint nowrap">{{ row.ts | fmt_datetime }}</td>
+          <td class="nowrap">
+            <span class="sm">{{ row.actor_name or row.actor or '—' }}</span>
+            {% if row.actor_name %}<div class="xs faint mono">{{ row.actor }}</div>{% endif %}
+            {% if row.role %}<div class="xs faint">{{ row.role | role_label }}{% if row.via == 'basic' %} · Basic{% elif row.via == 'ssh' %} · ssh{% elif row.via == 'api' %} · 小程序{% endif %}</div>{% endif %}
+          </td>
+          <td class="nowrap">
+            {% if row.ok %}
+            <span class="sm">{{ row.label }}</span>
+            {% else %}
+            <span class="pill pill-xs pill-danger">{{ row.label }}{% if '失败' not in row.label %} · 失败{% endif %}</span>
+            {% endif %}
+          </td>
+          <td class="sm text-2">
+            {% if row.company %}<div class="truncate max-w-56" title="{{ row.company }}">{{ row.company }}</div>{% endif %}
+            {% if row.target %}<div class="xs faint mono">{{ row.target }}</div>{% endif %}
+            {% if not row.company and not row.target %}<span class="faint">—</span>{% endif %}
+          </td>
+          <td class="sm text-2 hide-sm"><div class="break max-w-xs">{{ row.summary or '—' }}</div></td>
+          <td class="mono xs faint hide-sm nowrap">{{ row.ip or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty">{{ icon('inbox') }}此范围内没有操作记录</div>
+  {% endif %}
+</div>

@@ -1,0 +1,43 @@
+{% extends "_base.html" %}
+
+{% block title %}操作日志 — 数智通监控{% endblock %}
+{% block page_title %}操作日志{% endblock %}
+
+{% block content %}
+<div class="card mb-4">
+  <div class="card-body filters" style="margin-bottom:0">
+    <!-- A plain GET so the address bar carries the filter -->
+    <form method="get" action="/audit" class="row row-wrap gap-2">
+      <label class="xs muted">时间</label>
+      <input type="date" name="start_date" value="{{ filters.start_date }}" class="input input-sm">
+      <span class="xs faint">至</span>
+      <input type="date" name="end_date" value="{{ filters.end_date }}" class="input input-sm">
+      <select name="actor" class="select select-sm" aria-label="操作人">
+        <option value="">全部操作人</option>
+        {% for name in actors %}
+        <option value="{{ name }}" {% if filters.actor == name %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+        {% if filters.actor and filters.actor not in actors %}
+        <option value="{{ filters.actor }}" selected>{{ filters.actor }}</option>
+        {% endif %}
+      </select>
+      <select name="category" class="select select-sm" aria-label="类别">
+        <option value="">全部类别</option>
+        {% for key, label in categories.items() %}
+        <option value="{{ key }}" {% if filters.category == key %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <input type="search" name="q" value="{{ filters.q }}" placeholder="企业 / 账号 / IP / 内容" class="input input-sm">
+      <label class="check xs"><input type="checkbox" name="failed" value="1" {% if filters.failed %}checked{% endif %}><span>只看失败</span></label>
+      <button type="submit" class="btn btn-sm">{{ icon('filter') }}查询</button>
+      {% if filters.start_date or filters.end_date or filters.actor or filters.category or filters.q or filters.failed %}
+      <a href="/audit" class="btn btn-sm btn-link">清除（最近 {{ default_days }} 天）</a>
+      {% else %}
+      <span class="xs faint">不填时间 = 最近 {{ default_days }} 天</span>
+      {% endif %}
+    </form>
+  </div>
+</div>
+
+{% include "_partials/audit_list.html" %}
+{% endblock %}

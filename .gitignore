@@ -3,6 +3,7 @@
 config/accounts.enc
 config/accounts.yaml
 config/settings.yaml
+config/users.yaml
 !config/settings.yaml.example
 miniprogram/config.js
 miniprogram/project.private.config.json

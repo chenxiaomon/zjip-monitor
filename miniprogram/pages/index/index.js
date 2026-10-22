@@ -5,6 +5,7 @@ const STATUS_ORDER = [1, 12, 2, 4, 3, 17, 7, 13, 6, 14, 5, 8, 9, 10, 11, 15, 16]
 
 Page({
   data: {
+    userLabel: '',
     loading: true,
     totalRecords: 0,
     successCount: 0,
@@ -13,7 +14,22 @@ Page({
   },
 
   onLoad() {
+    const auth = app.globalData.auth
+    if (!auth || !auth.token) {
+      app.toLogin()
+      return
+    }
+    const u = auth.user || {}
+    this.setData({ userLabel: u.display_name || u.username || '' })
     this.fetchStatus()
+  },
+
+  onLogout() {
+    wx.showModal({
+      title: '退出登录',
+      content: '退出后需要重新输入口令',
+      success: (r) => { if (r.confirm) app.logout() },
+    })
   },
 
   onPullDownRefresh() {
@@ -21,9 +37,7 @@ Page({
   },
 
   fetchStatus(done) {
-    wx.request({
-      url: app.globalData.apiBase + '/api/status',
-      header: { 'X-API-Key': app.globalData.apiKey },
+    app.request('/api/status', {
       success: (res) => {
         const d = res.data
         const accounts = (d.accounts || []).map(acc => ({

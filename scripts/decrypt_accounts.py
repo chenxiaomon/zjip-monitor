@@ -47,18 +47,21 @@ def accounts_to_yaml(accounts: list[Account], *, show_passwords: bool) -> str:
     would read back as an int and encrypt_accounts.py would reject the file,
     so a --out dump could not be fed back in.
     """
-    data = {
-        "accounts": [
-            {
-                "company": a.company,
-                "username": a.username,
-                "password": a.password if show_passwords else mask_password(a.password),
-                "contact": a.contact,
-                "group": a.group,
-            }
-            for a in accounts
-        ]
-    }
+    def entry(a: Account) -> dict:
+        out = {
+            "company": a.company,
+            "username": a.username,
+            "password": a.password if show_passwords else mask_password(a.password),
+            "contact": a.contact,
+            "group": a.group,
+        }
+        # The console sets it; an export → edit → re-encrypt round trip must
+        # not drop who is responsible for each company. Left out when unset.
+        if a.owner:
+            out["owner"] = a.owner
+        return out
+
+    data = {"accounts": [entry(a) for a in accounts]}
     return yaml.dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
 

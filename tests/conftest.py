@@ -12,7 +12,9 @@ import os
 
 os.environ.setdefault("WEB_USER", "admin")
 os.environ.setdefault("WEB_PASS", "test-admin-pass")
-os.environ.setdefault("WEB_USERS", "ga:test-ga-pass:group_a,gb:test-gb-pass:group_b")
+# Console users come from config/users.yaml (seeded by _isolated_users); an
+# empty WEB_USERS keeps a developer's .env from feeding the one-time import.
+os.environ.setdefault("WEB_USERS", "")
 os.environ.setdefault("SESSION_SECRET", "test-session-secret")
 os.environ.setdefault("API_KEY", "test-api-key-0123456789")
 os.environ.setdefault("ZJIP_LOG_TO_FILE", "0")
@@ -25,10 +27,12 @@ import yaml  # noqa: E402
 from src import control, settings_cache, status_store  # noqa: E402
 from src.config_loader import Account  # noqa: E402
 
-# Credentials the web fixtures log in with — keep in sync with the setdefaults.
+# Credentials the web fixtures log in with — ADMIN is the .env admin (keep in
+# sync with the setdefaults), the rest are seeded by _isolated_users.
 ADMIN = ("admin", "test-admin-pass")
 GROUP_A_USER = ("ga", "test-ga-pass")
 GROUP_B_USER = ("gb", "test-gb-pass")
+OPERATOR_A = ("opa", "test-opa-pass")
 API_KEY = "test-api-key-0123456789"
 
 
@@ -129,17 +133,67 @@ def _isolated_settings_file(tmp_path_factory, _own_patcher):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_users(tmp_path_factory, _own_patcher):
+    """A temp config/users.yaml holding the console users the web tests log
+    in with — never the developer's real file.
+
+    PBKDF2 drops to 1000 iterations: at the production 600k every login in
+    the suite would cost a few hundred ms. Hashes carry their own count, so
+    nothing else changes.
+    """
+    from web.services import users
+
+    path = tmp_path_factory.mktemp("users") / "users.yaml"
+    _own_patcher.setattr(users, "_USERS_FILE", path)
+    _own_patcher.setattr(users, "PBKDF2_ITERATIONS", 1000)
+    users.invalidate()
+    seed = {}
+    for (name, password), role, groups in (
+        (GROUP_A_USER, "viewer", ["group_a"]),
+        (GROUP_B_USER, "viewer", ["group_b"]),
+        (OPERATOR_A, "operator", ["group_a"]),
+    ):
+        seed[name] = {
+            "display_name": "",
+            "role": role,
+            "groups": groups,
+            "password_hash": users.hash_password(password),
+            "disabled": False,
+            "session_key": "",
+        }
+    path.write_text(yaml.safe_dump({"version": 1, "users": seed}), encoding="utf-8")
+    users.invalidate()
+    yield path
+    users.invalidate()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_audit(tmp_path_factory, _own_patcher):
+    """Every route and the archive-release script append to the operation
+    log as a side effect; no test may write the real data/control/audit/.
+    Yields the temp directory so tests can read what was recorded."""
+    from src import audit
+
+    d = tmp_path_factory.mktemp("audit") / "audit"
+    _own_patcher.setattr(audit, "_AUDIT_DIR", d)
+    yield d
+
+
+@pytest.fixture(autouse=True)
 def _reset_login_guard():
     """The console login guard keeps process-global counters; a failed-auth
     assertion in one test must not eat another test's lockout budget."""
     from web import login_guard
+    from web.routes import api as api_routes
     from web.routes import login as login_routes
 
     login_guard.reset()
     login_routes.FAILED_LOGIN_DELAY_SECONDS = 0.0
+    api_routes.FAILED_LOGIN_DELAY_SECONDS = 0.0
     yield
     login_guard.reset()
     login_routes.FAILED_LOGIN_DELAY_SECONDS = 0.5
+    api_routes.FAILED_LOGIN_DELAY_SECONDS = 0.5
 
 
 @pytest.fixture

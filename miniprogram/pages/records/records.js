@@ -40,11 +40,8 @@ Page({
   },
 
   fetchRecords(company, done) {
-    const url = app.globalData.apiBase + '/api/records'
-      + (company ? '?company=' + encodeURIComponent(company) : '')
-    wx.request({
-      url,
-      header: { 'X-API-Key': app.globalData.apiKey },
+    const path = '/api/records' + (company ? '?company=' + encodeURIComponent(company) : '')
+    app.request(path, {
       success: (res) => {
         const records = (res.data.records || []).map(r => ({
           ...r,
