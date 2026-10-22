@@ -25,21 +25,22 @@ def record_request(
     target: str = "",
     ok: bool = True,
     detail: dict | None = None,
+    as_user: dict | None = None,
     actor: str | None = None,
-    role: str = "",
 ) -> None:
     """Log `action` as done by whoever is signed in on `request`.
 
-    `actor` / `role` override the signed-in user — for the login routes,
-    where nobody is signed in yet.
+    The login routes run before anyone is signed in: `as_user` names the
+    user who just logged in or out, `actor` a bare login name (already
+    masked when it belongs to nobody).
     """
-    user = getattr(request.state, "user", None) or {}
+    user = as_user or getattr(request.state, "user", None) or {}
     audit.record(
         actor if actor is not None else user.get("username", ""),
         action,
-        actor_name=user.get("display_name", "") if actor is None else "",
-        role=role or user.get("role", ""),
-        via=user.get("via", "") if actor is None else "",
+        actor_name=user.get("display_name", ""),
+        role=user.get("role", ""),
+        via=user.get("via", ""),
         ip=login_guard.client_ip(request),
         company=company,
         target=target,

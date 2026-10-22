@@ -65,6 +65,7 @@ from web.routes import (  # noqa: E402 — same reason
     users,
     view,
 )
+from web.services import audit_log  # noqa: E402 — same reason
 from web.sse import router as sse_router, start_watcher  # noqa: E402 — same reason
 
 _WEB_USER = os.getenv("WEB_USER", "admin")
@@ -199,8 +200,15 @@ def _basic_admin_ok(request: Request) -> bool:
     if user_ok and pass_ok:
         login_guard.record_success(ip, guard_key)
         return True
+    # Successful Basic requests are not logged one by one (a script polls);
+    # failures are, and stop by themselves once the guard locks the caller out.
+    who = username if user_ok else login_guard.mask(username)
+    audit_log.record_request(request, "auth.login_failed", actor=who, ok=False,
+                             detail={"via": "basic"})
     if login_guard.record_failure(ip, guard_key):
         logger.error(f"Basic 认证连续失败已锁定 ip={ip} user={login_guard.mask(username)}")
+        audit_log.record_request(request, "auth.lockout", actor=who, ok=False,
+                                 detail={"via": "basic", "minutes": login_guard.LOCK_SECONDS // 60})
     return False
 
 
@@ -258,7 +266,19 @@ async def _auth_middleware(request: Request, call_next) -> Response:  # type: ig
     request.state.user = user
     if user["role"] != "admin" and path.startswith(_ADMIN_ONLY_PREFIXES):
         return Response("无权限", status_code=403)
-    return await call_next(request)
+    response = await call_next(request)
+    # Safety net for the operation log: every state-changing route records
+    # what it did (or says nothing changed). One that got through without
+    # either — a route added later and forgotten — still leaves a line.
+    # request.state is the scope's state dict, shared with the route.
+    if (
+        request.method in _UNSAFE_METHODS
+        and response.status_code < 400
+        and not getattr(request.state, "audited", False)
+    ):
+        audit_log.record_request(request, "http.unaudited", target=path,
+                                 detail={"method": request.method, "status": response.status_code})
+    return response
 
 
 # Python's table does not know the web-app manifest type on every platform.

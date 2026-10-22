@@ -15,11 +15,11 @@ def _no_platform(monkeypatch):
     monkeypatch.setattr(accounts_routes, "spawn", lambda coro: spawned.append(coro) or coro.close())
     monkeypatch.setattr(accounts_routes, "verify_credentials",
                         lambda u, p: verified.append(u) or "token")
-    accounts_routes._web_logins.clear()
-    accounts_routes._tasks.clear()
+    for state in (accounts_routes._web_logins, accounts_routes._tasks, accounts_routes._scan_tasks):
+        state.clear()
     yield {"spawned": spawned, "verified": verified}
-    accounts_routes._web_logins.clear()
-    accounts_routes._tasks.clear()
+    for state in (accounts_routes._web_logins, accounts_routes._tasks, accounts_routes._scan_tasks):
+        state.clear()
 
 
 @pytest.fixture

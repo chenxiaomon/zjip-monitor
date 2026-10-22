@@ -17,7 +17,7 @@ from src.runtime_settings import attachment_settings, disk_settings, ops_alert_s
 from src.scraper import AUDIT_STATUS
 from src.status_store import _max_failures
 from web.deps import STATUS_COLORS, templates
-from web.services import settings_svc
+from web.services import audit_log, settings_svc
 from web.services.settings_svc import REFUSED_HINT, SettingsUnreadable, load_settings, save_settings
 
 router = APIRouter()
@@ -26,6 +26,16 @@ _TIMEZONE = "Asia/Shanghai"
 _SHANGHAI = timezone(timedelta(hours=8))
 _WEEKDAYS = "一二三四五六日"
 _DEFAULT_CRONS = ["0 9 * * *", "0 18 * * *"]  # run_daemon.py's fallback, shown when none is saved
+
+
+def _changes(before: dict, after: dict) -> dict[str, list]:
+    """{key: [old, new]} for what a save actually changed — the operation
+    log's detail. Only for sections without secrets."""
+    return {
+        k: [before.get(k), after.get(k)]
+        for k in sorted(set(before) | set(after))
+        if before.get(k) != after.get(k)
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +202,7 @@ def toggle_pause(request: Request) -> HTMLResponse:
         control.resume_daemon()
     else:
         control.pause_daemon()
+    audit_log.record_request(request, "settings.pause", detail={"paused": control.is_daemon_paused()})
     return templates.TemplateResponse(
         request,
         "_partials/settings_pause.html",
@@ -211,6 +222,8 @@ def save_schedule(
             cleaned.append(c)
 
     def page(**kw) -> HTMLResponse:
+        if kw.get("error"):
+            audit_log.nothing_changed(request)
         return templates.TemplateResponse(request, "_partials/settings_schedule.html", _schedule_ctx(cleaned, **kw))
 
     if not cleaned:
@@ -227,10 +240,14 @@ def save_schedule(
 
     try:
         with settings_svc.editing() as data:
-            settings_svc.section(data, "schedule")["crons"] = cleaned
+            schedule = settings_svc.section(data, "schedule")
+            old_crons = _saved_crons(data)
+            schedule["crons"] = cleaned
             save_settings(data)
     except SettingsUnreadable as exc:
+        audit_log.record_request(request, "settings.schedule", ok=False, detail={"error": str(exc)})
         return page(error=f"{exc}。{REFUSED_HINT}")
+    audit_log.record_request(request, "settings.schedule", detail={"crons": [old_crons, cleaned]})
     return templates.TemplateResponse(
         request, "_partials/settings_schedule.html", _schedule_ctx(_saved_crons(load_settings()), saved=True),
     )
@@ -249,19 +266,23 @@ def save_login(
     token_max_age_hours = min(72, max(1, token_max_age_hours))
     try:
         with settings_svc.editing() as data:
-            settings_svc.section(data, "login").update({
+            login = settings_svc.section(data, "login")
+            before = dict(login)
+            login.update({
                 "method": method,
                 "token_max_age_hours": token_max_age_hours,
                 "headless": headless == "on",
             })
             save_settings(data)
     except SettingsUnreadable as exc:
+        audit_log.record_request(request, "settings.login", ok=False, detail={"error": str(exc)})
         cfg = load_settings()
         login = cfg.get("login") if isinstance(cfg.get("login"), dict) else {}
         return templates.TemplateResponse(
             request, "_partials/settings_login.html",
             {"login": login, "saved": False, "error": f"{exc}。{REFUSED_HINT}"},
         )
+    audit_log.record_request(request, "settings.login", detail=_changes(before, login))
     cfg = load_settings()
     return templates.TemplateResponse(
         request,
@@ -286,12 +307,19 @@ async def save_thresholds(request: Request) -> HTMLResponse:
         return templates.TemplateResponse(request, "_partials/settings_thresholds.html", {"thresholds": _thresholds_ctx(**kw)})
 
     if errors:
+        audit_log.nothing_changed(request)
         return page(values=submitted, errors=errors, error="有 %d 项需要修改，本次没有保存" % len(errors))
+    changed: dict[str, list] = {}
     try:
         with settings_svc.editing() as data:
             for (section, key), value in values.items():
-                settings_svc.section(data, section)[key] = value
+                target = settings_svc.section(data, section)
+                if target.get(key) != value:
+                    changed[f"{section}.{key}"] = [target.get(key), value]
+                target[key] = value
             save_settings(data)
     except SettingsUnreadable as exc:
+        audit_log.record_request(request, "settings.thresholds", ok=False, detail={"error": str(exc)})
         return page(values=submitted, error=f"{exc}。{REFUSED_HINT}")
+    audit_log.record_request(request, "settings.thresholds", detail=changed)
     return page(saved=True)

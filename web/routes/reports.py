@@ -12,6 +12,7 @@ from loguru import logger
 
 from src.reporter import generate_report_from_snapshots
 from web.deps import executor as _executor, spawn, templates
+from web.services import audit_log
 
 router = APIRouter()
 
@@ -106,8 +107,11 @@ def view_report(filename: str):
 
 @router.post("/reports/generate", response_class=HTMLResponse)
 async def generate_report(request: Request) -> HTMLResponse:
-    if _gen_status.get("status") != "running":
+    already = _gen_status.get("status") == "running"
+    if not already:
         spawn(_generate_report_async())
+    audit_log.record_request(request, "report.generate",
+                             detail={"already_running": True} if already else None)
     return templates.TemplateResponse(
         request, "_partials/report_gen_status.html", {"gen_status": {"status": "running", "msg": ""}},
     )
@@ -131,4 +135,5 @@ def delete_report(request: Request, filename: str, page: str | None = Query(None
         return HTMLResponse("报表不存在", status_code=404)
     path.unlink(missing_ok=True)
     logger.info(f"报表已删除：{path.name}")
+    audit_log.record_request(request, "report.delete", target=path.name)
     return templates.TemplateResponse(request, "_partials/reports_list.html", _list_ctx(_page(page)))

@@ -119,6 +119,14 @@ def authenticate(username: str, password: str) -> tuple[str | None, str]:
     return name, "ok"
 
 
+def lookup(username: str, via: str = "cookie") -> dict | None:
+    """The user dict for a login name, as user_from_cookie would build it."""
+    if _is_env_admin(username):
+        return _env_admin(via)
+    rec = users.get(username)
+    return _file_user(users.normalize_username(username), rec, via) if rec else None
+
+
 def is_known_user(username: str) -> bool:
     """Whether a login name belongs to someone — the operation log stores
     an unknown one masked (it is often a password typed in the wrong box)."""

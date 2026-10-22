@@ -19,7 +19,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 
 from web.deps import int_or_none, templates
-from web.services import settings_svc
+from web.services import audit_log, settings_svc
 from web.services.events import read_events
 from web.services.settings_svc import REFUSED_HINT, SettingsUnreadable, load_settings, save_settings
 
@@ -91,7 +91,29 @@ def _channel_response(
     )
 
 
+def _audit_saved(request: Request, channel: str, before: dict, after: dict) -> None:
+    """Which fields a save changed — names only, never values: three of
+    them are credentials, and the rest are not worth the exception."""
+    detail: dict = {}
+    if bool(before.get("enabled")) != bool(after.get("enabled")):
+        detail["enabled"] = [bool(before.get("enabled")), bool(after.get("enabled"))]
+    changed = sorted(
+        k for k in set(before) | set(after)
+        if k != "enabled" and before.get(k) != after.get(k)
+    )
+    if changed:
+        detail["changed"] = changed
+    audit_log.record_request(request, f"notify.{channel}", detail=detail)
+
+
+def _refused(request: Request, channel: str, merged: dict, stored: dict, error: str) -> HTMLResponse:
+    """A save turned down before anything was written."""
+    audit_log.nothing_changed(request)
+    return _channel_response(request, channel, merged, stored=stored, error=error)
+
+
 def _unreadable(request: Request, channel: str, exc: SettingsUnreadable) -> HTMLResponse:
+    audit_log.record_request(request, f"notify.{channel}", ok=False, detail={"error": str(exc)})
     stored = (load_settings().get("notify") or {}).get(channel) or {}
     return _channel_response(request, channel, stored, error=f"{exc}。{REFUSED_HINT}")
 
@@ -119,15 +141,15 @@ def save_dingtalk(
             merged["enabled"] = enabled == "on"
 
             if merged["enabled"] and not str(merged.get("webhook", "")).strip():
-                return _channel_response(
-                    request, "dingtalk", merged, stored=ch,
-                    error="启用前必须填写 Webhook URL，否则推送会静默失败",
-                )
+                return _refused(request, "dingtalk", merged, ch,
+                                "启用前必须填写 Webhook URL，否则推送会静默失败")
 
+            before = dict(ch)
             ch.update(merged)
             save_settings(data)
     except SettingsUnreadable as exc:
         return _unreadable(request, "dingtalk", exc)
+    _audit_saved(request, "dingtalk", before, ch)
     return _channel_response(request, "dingtalk", ch, saved=True)
 
 
@@ -146,15 +168,15 @@ def save_wechat(
             merged["enabled"] = enabled == "on"
 
             if merged["enabled"] and not str(merged.get("webhook", "")).strip():
-                return _channel_response(
-                    request, "wechat", merged, stored=ch,
-                    error="启用前必须填写 Webhook URL，否则推送会静默失败",
-                )
+                return _refused(request, "wechat", merged, ch,
+                                "启用前必须填写 Webhook URL，否则推送会静默失败")
 
+            before = dict(ch)
             ch.update(merged)
             save_settings(data)
     except SettingsUnreadable as exc:
         return _unreadable(request, "wechat", exc)
+    _audit_saved(request, "wechat", before, ch)
     return _channel_response(request, "wechat", ch, saved=True)
 
 
@@ -203,10 +225,12 @@ def save_email(
                     error = f"启用前必须填写：{'、'.join(missing)}，否则推送会静默失败"
                     if smtp_password.strip():
                         error += "（密码出于安全不回显，请重新填写）"
-                    return _channel_response(request, "email", merged, stored=ch, error=error)
+                    return _refused(request, "email", merged, ch, error)
 
+            before = dict(ch)
             ch.update(merged)
             save_settings(data)
     except SettingsUnreadable as exc:
         return _unreadable(request, "email", exc)
+    _audit_saved(request, "email", before, ch)
     return _channel_response(request, "email", ch, saved=True)

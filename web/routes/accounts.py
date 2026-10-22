@@ -26,6 +26,7 @@ from web.auth import (
     can_edit_accounts, current_user, editable_account, is_admin, require_admin, visible_accounts,
 )
 from web.deps import executor as _executor, get_groups, spawn, templates
+from web.services import audit_log
 from web.services.run_state import run_state_ctx
 from web.services.session import _SESSIONS_DIR, _safe_name, get_session, token_status
 from web.services.snapshot import get_latest_snapshot
@@ -137,6 +138,12 @@ def _row_error(username: str, msg: str = "账号不存在") -> HTMLResponse:
     u = _html.escape(username, quote=True)
     cell = f'<td colspan="7" class="px-4 py-2 text-red-500 text-sm">{_html.escape(msg)}</td>'
     return HTMLResponse(f'<tr id="row-{u}">{cell}</tr>')
+
+
+def _row_error_on(request: Request, username: str, msg: str = "账号不存在") -> HTMLResponse:
+    """_row_error from a state-changing route: nothing changed, nothing to log."""
+    audit_log.nothing_changed(request)
+    return _row_error(username, msg)
 
 
 def _row_empty(username: str) -> HTMLResponse:
@@ -253,11 +260,13 @@ async def relogin(request: Request, username: str) -> HTMLResponse:
     accounts_list = visible_accounts(request)
     acc = next((a for a in accounts_list if a.username == username), None)
     if acc is None:
-        return _row_error(username)
+        return _row_error_on(request, username)
 
     if not is_admin(request):
         left = _relogin_cooldown_left(username)
         if left:
+            audit_log.record_request(request, "account.relogin", company=acc.company, target=username,
+                                     ok=False, detail={"error": "过于频繁"})
             return templates.TemplateResponse(
                 request,
                 "_partials/account_row.html",
@@ -270,6 +279,7 @@ async def relogin(request: Request, username: str) -> HTMLResponse:
     _note_login(username)
     _tasks[username] = {"status": "pending", "msg": ""}
     spawn(_verify_async(username, acc.password, acc.company, seq=_bump_verify_seq(username)))
+    audit_log.record_request(request, "account.relogin", company=acc.company, target=username)
 
     return templates.TemplateResponse(
         request,
@@ -301,11 +311,14 @@ async def scan_account(request: Request, username: str) -> HTMLResponse:
     accounts_list = visible_accounts(request)
     acc = next((a for a in accounts_list if a.username == username), None)
     if acc is None:
-        return _row_error(username)
+        return _row_error_on(request, username)
 
-    if _scan_tasks.get(username) != "running":
+    already = _scan_tasks.get(username) == "running"
+    if not already:
         _scan_tasks[username] = "running"
         spawn(_scan_one_async(username, acc))
+    audit_log.record_request(request, "account.scan", company=acc.company, target=username,
+                             detail={"already_running": True} if already else None)
 
     return templates.TemplateResponse(
         request, "_partials/account_row.html", {"row": _row(acc, scan_task="running")}
@@ -328,6 +341,7 @@ def scan_status_poll(request: Request, username: str) -> HTMLResponse:
 async def run_once_trigger(request: Request) -> HTMLResponse:
     # Always spawn; run_all's global file lock rejects duplicates race-free.
     spawn(_scan_cycle_async())
+    audit_log.record_request(request, "scan.start")
     return templates.TemplateResponse(
         request,
         "_partials/run_once_status.html",
@@ -338,6 +352,7 @@ async def run_once_trigger(request: Request) -> HTMLResponse:
 @router.post("/run-once/stop", response_class=HTMLResponse)
 async def run_once_stop(request: Request) -> HTMLResponse:
     control.request_stop()
+    audit_log.record_request(request, "scan.stop")
     ctx = run_state_ctx()
     if ctx["status"] == "running":
         ctx["status"] = "stopping"
@@ -386,6 +401,7 @@ async def add_account(
     group = group.strip()
 
     def _err(error: str) -> HTMLResponse:
+        audit_log.nothing_changed(request)
         return templates.TemplateResponse(
             request,
             "_partials/account_form.html",
@@ -425,6 +441,9 @@ async def add_account(
         except ConfigError as exc:
             return _err(_public_error(exc, "save_accounts failed", username=username))
 
+    audit_log.record_request(request, "account.add", company=company, target=username,
+                             detail={"group": group})
+
     # Auto-trigger first login for the new account
     _note_login(username)
     _tasks[username] = {"status": "pending", "msg": ""}
@@ -457,16 +476,30 @@ async def verify_account(
     username = username.strip()
     password = password.strip()
 
-    def _result(ok: bool, msg: str) -> HTMLResponse:
+    stored_password = not password
+    company = ""
+
+    def _result(ok: bool, msg: str, *, attempted: bool = True) -> HTMLResponse:
+        if attempted:
+            # Every attempt, refused ones included: trying accounts outside
+            # one's groups is exactly what the log is for.
+            audit_log.record_request(
+                request, "account.verify", company=company, target=username, ok=ok,
+                detail={"stored_password": stored_password, **({} if ok else {"error": msg[:120]})},
+            )
+        else:
+            audit_log.nothing_changed(request)
         return templates.TemplateResponse(
             request, "_partials/verify_result.html", {"ok": ok, "msg": msg}
         )
 
     if not username:
-        return _result(False, "请先填写账号")
+        return _result(False, "请先填写账号", attempted=False)
     if not is_admin(request):
-        if editable_account(request, username) is None:
+        mine = editable_account(request, username)
+        if mine is None:
             return _result(False, f"账号 {username} 不存在")
+        company = mine.company
         wait = _login_wait(username, _VERIFY_LIMIT)
         if wait:
             return _result(False, f"测试登录过于频繁，请 {wait // 60 + 1} 分钟后再试")
@@ -474,11 +507,14 @@ async def verify_account(
         try:
             accounts_list = load_accounts()
         except ConfigError as exc:
-            return _result(False, _public_error(exc, "verify: load_accounts failed", username=username))
+            return _result(False, _public_error(exc, "verify: load_accounts failed", username=username),
+                           attempted=False)
         acc = next((a for a in accounts_list if a.username == username), None)
         if acc is None:
-            return _result(False, f"账号 {username} 尚未保存 — 密码留空时测试的是已保存密码，请先输入密码")
+            return _result(False, f"账号 {username} 尚未保存 — 密码留空时测试的是已保存密码，请先输入密码",
+                           attempted=False)
         password = acc.password
+        company = acc.company
 
     _note_login(username)
     loop = asyncio.get_event_loop()
@@ -542,6 +578,7 @@ async def edit_account(
     acc: Account | None = None
 
     def _err(error: str) -> HTMLResponse:
+        audit_log.nothing_changed(request)
         ctx = {"error": error, "mode": "edit", "account": acc}
         if acc is None:  # nothing to re-render the form with
             return HTMLResponse(
@@ -565,6 +602,7 @@ async def edit_account(
         if acc is None or (not admin and acc.group not in my_groups):
             acc = None
             return _err(f"账号 {username} 不存在")
+        before = {"contact": acc.contact, "group": acc.group}
         acc.contact = contact
         if admin:
             acc.group = group
@@ -583,6 +621,7 @@ async def edit_account(
         session_file.unlink(missing_ok=True)
         status_store.record_password_changed(username)
         wait = 0 if admin else _login_wait(username, _VERIFY_LIMIT)
+        verify_skipped = bool(wait)
         if wait:
             # The password is saved either way; only the platform check waits.
             _bump_verify_seq(username)  # an older in-flight check must not report on it
@@ -594,6 +633,15 @@ async def edit_account(
             _note_login(username)
             _tasks[username] = {"status": "pending", "msg": ""}
             spawn(_verify_async(username, password, acc.company, seq=_bump_verify_seq(username)))
+
+    detail: dict = {"password_changed": bool(password)}
+    for field, old in before.items():
+        new = getattr(acc, field)
+        if old != new:
+            detail[field] = [old, new]
+    if password and verify_skipped:
+        detail["verify_skipped"] = True
+    audit_log.record_request(request, "account.edit", company=acc.company, target=username, detail=detail)
 
     response = HTMLResponse("")
     response.headers["HX-Trigger"] = "accountSaved"
@@ -621,12 +669,15 @@ def set_account_group(request: Request, username: str, group: str = Form("")) ->
             return HTMLResponse(_public_error(exc, "load_accounts failed, refusing to write", username=username), status_code=500)
         acc = next((a for a in accounts_list if a.username == username), None)
         if acc is None:
-            return _row_error(username)
+            return _row_error_on(request, username)
+        old_group = acc.group
         acc.group = group
         try:
             save_accounts(accounts_list)
         except ConfigError as exc:
             return HTMLResponse(_public_error(exc, "save_accounts failed", username=username), status_code=500)
+    audit_log.record_request(request, "account.group", company=acc.company, target=username,
+                             detail={"group": [old_group, group]})
 
     return templates.TemplateResponse(request, "_partials/account_row.html", {"row": _row(acc)})
 
@@ -639,13 +690,16 @@ def delete_account(request: Request, username: str) -> HTMLResponse:
             accounts_list = load_accounts()
         except ConfigError as exc:
             return HTMLResponse(_public_error(exc, "load_accounts failed, refusing to write", username=username), status_code=500)
-        new_list = [a for a in accounts_list if a.username != username]
-        if len(new_list) == len(accounts_list):
+        gone = next((a for a in accounts_list if a.username == username), None)
+        if gone is None:
             return HTMLResponse(status_code=404)
+        new_list = [a for a in accounts_list if a.username != username]
         try:
             save_accounts(new_list)
         except ConfigError as exc:
             return HTMLResponse(_public_error(exc, "save_accounts failed", username=username), status_code=500)
+    audit_log.record_request(request, "account.delete", company=gone.company, target=username,
+                             detail={"group": gone.group})
     _tasks.pop(username, None)
     status_store.forget_account(username)
     _bump_verify_seq(username)  # an in-flight verify must not recreate the token below

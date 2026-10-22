@@ -14,6 +14,7 @@ from src import todo
 from src.scraper import AUDIT_STATUS, decode_status
 from web.auth import allowed_usernames, visible_accounts
 from web.deps import STATUS_COLORS, int_or_none, templates
+from web.services import audit_log
 from web.services.attachments_svc import archived_attachments, list_attachments
 from web.services.events import read_change_rows
 from web.services.snapshot import get_latest_snapshot
@@ -405,6 +406,11 @@ def records_csv(
             r["renewal"].valid_to if r["renewal"] else "",
             len(r["attachments"]) + len(r["archived"]),
         ])
+    filters = {"account": account, "statuses": _statuses(request), "start_date": start_date,
+               "end_date": end_date, "q": q}
+    audit_log.record_request(request, "data.records_csv", detail={
+        **{k: v for k, v in filters.items() if v}, "rows": len(rows),
+    })
     filename = f"records-{datetime.now(_SHANGHAI_TZ):%Y%m%d}.csv"
     return Response(
         "﻿" + buf.getvalue(),

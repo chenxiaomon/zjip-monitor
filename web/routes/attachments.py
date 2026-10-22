@@ -7,7 +7,8 @@ from urllib.parse import quote
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
-from web.auth import allowed_company_keys
+from web.auth import allowed_company_keys, current_user
+from web.services import audit_log
 from web.services.attachments_svc import _safe_name, attachment_path, download_name
 
 router = APIRouter()
@@ -25,6 +26,12 @@ def get_attachment(request: Request, company: str, reg_no: str, filename: str):
     if path is None:
         return HTMLResponse("附件不存在", status_code=404)
     name = download_name(company, reg_no, path.name)
+    # One line per person per file per 10 minutes: a phone's PDF viewer or a
+    # download manager fetches one file as several Range requests.
+    who = (current_user(request) or {}).get("username", "")
+    if audit_log.should_record_download(who, f"{_safe_name(company)}/{reg_no}/{path.name}"):
+        audit_log.record_request(request, "data.attachment", company=company,
+                                 target=f"{reg_no}/{path.name}")
     # 双格式 Content-Disposition:filename= 放原始 UTF-8 字节(经 latin-1 转义通过
     # 头部编码校验,线上字节仍是 UTF-8)供不认 filename* 的浏览器/WebView 兜底——
     # 否则它们退回用 URL 最后一段,即磁盘上的旧类型名;现代浏览器优先取 filename*
