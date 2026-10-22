@@ -77,6 +77,18 @@ def test_client_ip_prefers_proxy_headers():
     assert login_guard.client_ip(SimpleNamespace(headers={}, client=None)) == "unknown"
 
 
+def test_client_supplied_forwarded_for_cannot_override_nginx_real_ip():
+    # Production nginx sets X-Real-IP and passes a client's X-Forwarded-For
+    # through untouched — a forged XFF must not choose the counted address.
+    from types import SimpleNamespace
+
+    forged = SimpleNamespace(
+        headers={"x-forwarded-for": "198.51.100.1", "x-real-ip": "203.0.113.9"},
+        client=SimpleNamespace(host="127.0.0.1"),
+    )
+    assert login_guard.client_ip(forged) == "203.0.113.9"
+
+
 def test_masking_never_prints_the_whole_username(caplog):
     assert login_guard.mask("hwtxqc123") == "hw******3"
     assert "hwtxqc123" not in login_guard.mask("hwtxqc123")
