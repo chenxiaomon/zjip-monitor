@@ -62,6 +62,7 @@ from web.routes import (  # noqa: E402 — same reason
     records,
     reports,
     settings,
+    users,
     view,
 )
 from web.sse import router as sse_router, start_watcher  # noqa: E402 — same reason
@@ -130,7 +131,7 @@ app = FastAPI(title="数智通监控", lifespan=_lifespan)
 
 
 # 管理员专属页面（分组账号访问返回 403）
-_ADMIN_ONLY_PREFIXES = ("/settings", "/notify", "/reports", "/run-once")
+_ADMIN_ONLY_PREFIXES = ("/settings", "/notify", "/reports", "/run-once", "/users", "/audit")
 
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 # Extra origins allowed to submit state-changing requests, e.g. when the
@@ -286,6 +287,7 @@ app.include_router(records.router)
 app.include_router(notify.router)
 app.include_router(reports.router)
 app.include_router(settings.router)
+app.include_router(users.router)
 app.include_router(view.router)
 app.include_router(api.router)
 app.include_router(attachments.router)

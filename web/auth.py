@@ -145,6 +145,19 @@ def make_cookie(username: str) -> str:
     return f"{payload}|{_sign(payload, _session_key(username))}"
 
 
+def set_session_cookie(response, username: str) -> None:
+    """Sign `username` in on `response` (login, and after changing one's own
+    password — which rotated the key every older cookie was signed with)."""
+    response.set_cookie(
+        COOKIE_NAME,
+        make_cookie(username),
+        max_age=SESSION_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
+
+
 def user_from_cookie(cookie: str | None) -> dict | None:
     """Verify the session cookie and return the user dict, else None.
 

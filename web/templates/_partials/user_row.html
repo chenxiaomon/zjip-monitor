@@ -1,0 +1,55 @@
+{% set u = row.username %}
+<tr id="user-{{ u }}">
+  <td>
+    <span class="medium">{{ row.display_name or u }}</span>
+    <div class="xs faint mono">{{ u }}</div>
+  </td>
+  <td><span class="pill {% if row.role == 'admin' %}pill-accent{% else %}pill-neutral{% endif %}">{{ row.role | role_label }}</span></td>
+  <td>
+    {% if row.role == 'admin' %}
+    <span class="xs faint">全部</span>
+    {% else %}
+    {% for g in row.groups %}<span class="pill pill-accent">{{ g | group_label }}</span> {% endfor %}
+    {% endif %}
+  </td>
+  <td>
+    {% if row.disabled %}
+    <span class="pill pill-danger">已停用</span>
+    {% else %}
+    <span class="pill pill-good">正常</span>
+    {% endif %}
+    {% if row.must_change_password %}
+    <div class="mt-1"><span class="pill pill-xs pill-warn">待改初始口令</span></div>
+    {% endif %}
+  </td>
+  <td class="mono xs faint nowrap">{% if row.last_login %}{{ row.last_login | fmt_time }}{% else %}—{% endif %}</td>
+  <td>
+    <div class="cell-actions">
+      {% if row.is_me %}
+      <span class="xs faint">当前登录</span>
+      <a href="/me/password" class="btn btn-xs">{{ icon('lock') }}修改密码</a>
+      <button hx-get="/users/{{ u }}/edit-form" hx-target="#modal-container" hx-swap="innerHTML"
+              class="btn btn-xs">{{ icon('pencil') }}编辑</button>
+      {% else %}
+      <button hx-get="/users/{{ u }}/edit-form" hx-target="#modal-container" hx-swap="innerHTML"
+              title="显示名 / 角色 / 分组" class="btn btn-xs">{{ icon('pencil') }}编辑</button>
+      <button hx-get="/users/{{ u }}/password-form" hx-target="#modal-container" hx-swap="innerHTML"
+              class="btn btn-xs">{{ icon('lock') }}重置口令</button>
+      {% if row.disabled %}
+      <button hx-post="/users/{{ u }}/enable" hx-target="#user-{{ u }}" hx-swap="outerHTML"
+              class="btn btn-xs btn-accent">启用</button>
+      {% else %}
+      <button hx-post="/users/{{ u }}/disable" hx-target="#user-{{ u }}" hx-swap="outerHTML"
+              hx-confirm="停用 {{ u }}？该用户会被立即踢出且无法再登录，可随时重新启用。"
+              class="btn btn-xs">{{ icon('player-pause') }}停用</button>
+      <button hx-post="/users/{{ u }}/revoke" hx-target="#user-{{ u }}" hx-swap="outerHTML"
+              hx-confirm="让 {{ u }} 在所有设备上退出登录？"
+              title="所有已登录的设备立即退出" class="btn btn-xs">{{ icon('logout') }}强制下线</button>
+      {% endif %}
+      <button hx-post="/users/{{ u }}/delete" hx-target="#user-{{ u }}" hx-swap="outerHTML"
+              hx-confirm="确认删除用户 {{ u }}？操作日志里的历史记录会保留。"
+              class="btn btn-xs btn-danger">{{ icon('trash') }}删除</button>
+      {% endif %}
+    </div>
+  </td>
+</tr>

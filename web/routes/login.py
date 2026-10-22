@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from loguru import logger
 
 from web import auth, login_guard
-from web.auth import COOKIE_NAME, SESSION_MAX_AGE, make_cookie
+from web.auth import COOKIE_NAME
 from web.deps import templates
 
 router = APIRouter()
@@ -76,14 +76,7 @@ async def login_submit(
         )
     login_guard.record_success(ip, username)
     response = RedirectResponse(url="/", status_code=303)
-    response.set_cookie(
-        COOKIE_NAME,
-        make_cookie(matched),
-        max_age=SESSION_MAX_AGE,
-        httponly=True,
-        samesite="lax",
-        path="/",
-    )
+    auth.set_session_cookie(response, matched)
     return response
 
 

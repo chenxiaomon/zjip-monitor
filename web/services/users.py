@@ -280,8 +280,10 @@ def _existing(doc: dict, username: str) -> dict:
 
 def create_user(
     username: str, *, display_name: str, role: str, groups: list[str], password: str, by: str,
+    must_change: bool = True,
 ) -> str:
-    """Returns the normalized username."""
+    """Returns the normalized username. The administrator picked the first
+    password and handed it over, so by default its owner is asked to change it."""
     name = validate_username(username)
     role = _clean_role(role)
     groups = _clean_groups(role, groups)
@@ -299,7 +301,7 @@ def create_user(
             "password_hash": password_hash,
             "disabled": False,
             "session_key": secrets.token_hex(16),
-            "must_change_password": False,
+            "must_change_password": bool(must_change),
             "created_at": now,
             "created_by": by,
             "updated_at": now,

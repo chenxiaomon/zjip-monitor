@@ -1,0 +1,64 @@
+{% extends "_base.html" %}
+
+{% block title %}用户 — 数智通监控{% endblock %}
+{% block page_title %}用户{% endblock %}
+
+{% block content %}
+{% if load_error %}
+<div class="alert alert-danger">{{ icon('alert-circle') }}<div>
+  <div class="alert-title">用户文件无法读取</div>
+  <div class="alert-body">{{ load_error }}。现在只有 .env 备用管理员能登录；修好服务器上的 config/users.yaml 之前，这里的修改都不会保存。</div>
+</div></div>
+{% endif %}
+
+<div class="toolbar">
+  <p class="help">每位同事一个账号。经办人和只读用户只看得到所在分组的企业；所有操作记在「操作日志」里。</p>
+  <button hx-get="/users/new-form"
+          hx-target="#modal-container"
+          hx-swap="innerHTML"
+          class="btn btn-success">
+    {{ icon('plus') }}新增用户
+  </button>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th>用户</th>
+          <th>角色</th>
+          <th>分组</th>
+          <th>状态</th>
+          <th>最近登录</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="user-tbody"
+             hx-get="/users/rows"
+             hx-trigger="userSaved from:body"
+             hx-swap="innerHTML">
+        {% include "_partials/users_rows.html" %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card mt-4">
+  <div class="card-head"><span class="card-title">{{ icon('shield-check') }}角色能做什么</span></div>
+  <div class="table-wrap">
+    <table class="tbl tbl-compact">
+      <tbody>
+        <tr><td class="nowrap"><span class="pill pill-accent">管理员</span></td>
+            <td class="sm">全部功能：新增 / 删除企业、改分组、巡检、设置、通知、报表、用户、操作日志</td></tr>
+        <tr><td class="nowrap"><span class="pill pill-neutral">经办人</span></td>
+            <td class="sm">所在分组的企业：查看，修改平台密码和联系人，测试登录，重登</td></tr>
+        <tr><td class="nowrap"><span class="pill pill-neutral">只读</span></td>
+            <td class="sm">所在分组的企业：查看，重登</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div id="modal-container"></div>
+{% endblock %}

@@ -65,6 +65,7 @@ function showToast(msg, kind) {
   });
   document.addEventListener('htmx:sendError', function () { showToast('网络错误，请稍后重试', 'danger'); });
   document.addEventListener('accountSaved', function () { showToast('账号已保存', 'success'); });
+  document.addEventListener('userSaved', function () { showToast('用户已保存', 'success'); });
 
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Escape') return;

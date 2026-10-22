@@ -1,0 +1,94 @@
+<!-- Modal: add / edit a console user (mode = "add" | "edit") -->
+{% set is_edit = mode == 'edit' %}
+{% set chosen_role = form.role or (user.role if is_edit else 'viewer') %}
+{% set chosen_groups = form.groups if form.groups is defined and form.groups else (user.groups if is_edit else []) %}
+<div class="modal-backdrop"
+     onclick="if(event.target===this)document.getElementById('modal-container').innerHTML=''">
+  <div class="modal" role="dialog" aria-modal="true" onclick="event.stopPropagation()">
+    <div class="modal-head">
+      <h2 class="modal-title">{% if is_edit %}编辑用户 · {{ user.username }}{% else %}新增用户{% endif %}</h2>
+      <button type="button" class="icon-btn" title="关闭" onclick="document.getElementById('modal-container').innerHTML=''">{{ icon('x') }}</button>
+    </div>
+
+    <form hx-post="{% if is_edit %}/users/{{ user.username }}/edit{% else %}/users{% endif %}"
+          hx-target="#modal-container"
+          hx-swap="innerHTML">
+      <div class="modal-body">
+        {% if error %}
+        <div class="alert alert-danger alert-inline break">{{ icon('alert-circle') }}<div>{{ error }}</div></div>
+        {% endif %}
+
+        {% if is_edit %}
+        <div class="field">
+          <span class="label">用户名</span>
+          <div class="readonly mono">{{ user.username }}</div>
+          <p class="help">用户名是登录名，也是操作日志里的身份，不可修改</p>
+        </div>
+        {% else %}
+        <div class="field">
+          <label class="label" for="user-name">用户名 <span class="req">*</span></label>
+          <input id="user-name" type="text" name="username" required autocomplete="off"
+                 value="{{ form.username or '' }}" placeholder="如 zhangsan" class="input mono">
+          <p class="help">登录用，2–32 位小写字母、数字或 . _ -</p>
+        </div>
+        {% endif %}
+
+        <div class="field">
+          <label class="label" for="user-display">显示名</label>
+          <input id="user-display" type="text" name="display_name" maxlength="32"
+                 value="{{ form.display_name if form.display_name is defined else (user.display_name if is_edit else '') }}"
+                 placeholder="如 张三（可选）" class="input">
+        </div>
+
+        <div class="field">
+          <label class="label" for="user-role">角色</label>
+          <select id="user-role" name="role" class="select"{% if is_edit and user.is_me %} disabled{% endif %}>
+            {% for key, label in role_labels.items() %}
+            <option value="{{ key }}" {% if chosen_role == key %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+          {% if is_edit and user.is_me %}
+          <input type="hidden" name="role" value="{{ user.role }}">
+          <p class="help">不能修改自己的角色</p>
+          {% else %}
+          <p class="help">管理员可做一切；经办人可改所在分组企业的平台密码；只读只能查看。改角色会让该用户重新登录。</p>
+          {% endif %}
+        </div>
+
+        <div class="field">
+          <span class="label">分组</span>
+          {% if group_choices %}
+          <div class="row gap-2" style="flex-wrap:wrap">
+            {% for gkey, gname in group_choices.items() %}
+            <label class="check">
+              <input type="checkbox" name="groups" value="{{ gkey }}" {% if gkey in chosen_groups %}checked{% endif %}>
+              <span>{{ gname }}</span>
+            </label>
+            {% endfor %}
+          </div>
+          <p class="help">经办人和只读用户只看得到勾选分组里的企业，至少选一个；管理员不受分组限制</p>
+          {% else %}
+          <p class="help">设置里还没有分组（settings.yaml → groups），只能先建管理员</p>
+          {% endif %}
+        </div>
+
+        {% if not is_edit %}
+        <div class="field">
+          <label class="label" for="user-password">初始口令 <span class="req">*</span></label>
+          <input id="user-password" type="password" name="password" required
+                 autocomplete="new-password" class="input">
+          <p class="help">至少 10 位。交给同事后，对方首次登录会被提示修改</p>
+        </div>
+        {% endif %}
+      </div>
+
+      <div class="modal-foot">
+        <span></span>
+        <div class="row gap-2">
+          <button type="button" class="btn" onclick="document.getElementById('modal-container').innerHTML=''">取消</button>
+          <button type="submit" class="btn btn-primary">{% if is_edit %}保存修改{% else %}创建用户{% endif %}</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
