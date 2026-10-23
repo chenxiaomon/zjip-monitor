@@ -22,6 +22,7 @@
         <text class="reg-no">{{r.reg_no}}</text>
         <text class="link" bindtap="onCopyLink">复制官网链接</text>
       </view>
+      <platform-access wx:if="{{r.can.reveal}}" company="{{r.company}}" reg-no="{{r.reg_no}}" />
     </view>
 
     <!-- 概要 -->

@@ -1,0 +1,23 @@
+<view class="pa">
+  <button wx:if="{{!access}}" class="pa-btn" size="mini" loading="{{loading}}" disabled="{{loading}}" bindtap="onOpen">去平台办理</button>
+
+  <view wx:else class="pa-panel">
+    <view class="pa-row">
+      <text class="pa-k">平台账号</text>
+      <text class="pa-v">{{access.username}}</text>
+      <text class="link" data-field="username" bindtap="onCopy">复制</text>
+    </view>
+    <view class="pa-row">
+      <text class="pa-k">口令</text>
+      <text class="pa-v">{{shown ? access.password : '••••••••'}}</text>
+      <text class="link pa-gap" bindtap="onToggle">{{shown ? '隐藏' : '显示'}}</text>
+      <text class="link" data-field="password" bindtap="onCopy">复制</text>
+    </view>
+    <view class="pa-actions">
+      <text class="link" data-field="login_url" bindtap="onCopy">复制平台登录页链接</text>
+      <text wx:if="{{access.detail_url}}" class="link" data-field="detail_url" bindtap="onCopy">复制这条记录的链接</text>
+      <text class="pa-close" bindtap="onClose">收起</text>
+    </view>
+    <text class="pa-hint">小程序打不开外部网页：复制链接到手机浏览器打开，用上面的账号口令登录平台办理。</text>
+  </view>
+</view>

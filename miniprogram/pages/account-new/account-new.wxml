@@ -1,0 +1,51 @@
+<view class="page">
+
+  <view wx:if="{{loading}}" class="loading">
+    <text>加载中...</text>
+  </view>
+
+  <block wx:else>
+    <view class="field">
+      <text class="label">公司名称</text>
+      <input class="input" value="{{company}}" data-field="company" bindinput="onInput" placeholder="与平台上的企业名称一致" />
+    </view>
+    <view class="field">
+      <text class="label">平台账号</text>
+      <input class="input" value="{{username}}" data-field="username" bindinput="onInput" placeholder="zjip.org.cn 的登录账号" />
+    </view>
+    <view class="field">
+      <text class="label">平台口令</text>
+      <input class="input" value="{{password}}" data-field="password" bindinput="onInput" password placeholder="zjip.org.cn 的登录口令" />
+    </view>
+    <view class="field">
+      <text class="label">联系人（选填）</text>
+      <input class="input" value="{{contact}}" data-field="contact" bindinput="onInput" placeholder="企业那边的联系人" />
+    </view>
+    <view class="field">
+      <text class="label">分组</text>
+      <picker wx:if="{{groups.length > 0}}" range="{{groups}}" range-key="label" value="{{groupIndex}}" bindchange="onGroup">
+        <view class="picker">{{groups[groupIndex].label}} ▾</view>
+      </picker>
+      <text wx:else class="muted">你还没有分组，请联系管理员在控制台「用户」页添加</text>
+    </view>
+    <view class="field">
+      <text class="label">负责人</text>
+      <picker range="{{owners}}" range-key="label" value="{{ownerIndex}}" bindchange="onOwner">
+        <view class="picker">{{owners[ownerIndex].label}} ▾</view>
+      </picker>
+    </view>
+
+    <view wx:if="{{error}}" class="error">{{error}}</view>
+
+    <button
+      class="submit"
+      type="primary"
+      loading="{{submitting || verifying}}"
+      disabled="{{submitting || verifying}}"
+      bindtap="onSubmit"
+    >{{verifying ? '正在首次登录平台…' : '保存'}}</button>
+
+    <text class="hint">保存后会用这个口令登录一次平台核对。平台账号和口令加密保存在服务器上，只有管理员和本组经办人能查看，每次查看都记入操作日志。</text>
+  </block>
+
+</view>

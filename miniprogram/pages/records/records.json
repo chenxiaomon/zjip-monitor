@@ -3,6 +3,7 @@
   "enablePullDownRefresh": true,
   "backgroundColor": "#f5f5f5",
   "usingComponents": {
-    "scope-bar": "/components/scope-bar/scope-bar"
+    "scope-bar": "/components/scope-bar/scope-bar",
+    "platform-access": "/components/platform-access/platform-access"
   }
 }

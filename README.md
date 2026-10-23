@@ -78,13 +78,15 @@
 - **待办**：「待办」是仪表盘的待补正（按截止日期）和可续展；「日程」是期限日历：已逾期、按月按天的每个截止日期和证书到期、截止日期未知的补正。标签上的数字是已逾期和 3 天内到期的补正。
 - **变更**：最近 30 天的状态变化，跟随「我负责的 / 全部」。
 - **登记记录**：搜索、状态筛选、每页 50 条往下滑加载；点一条进**记录详情**——和控制台的详情抽屉同一份数据（补正截止和要点、证书有效期、通知书、附件、状态历史），附件在小程序里直接打开（可转发、保存到手机，每次打开记入操作日志）。
-- 用户、设置、通知、操作日志、报表等管理功能只在控制台。
+- **企业操作**（管理员和本组经办人）：从企业卡片进去，页头显示平台登录和巡检状态，可以「立即巡检」（经办人每家企业 10 分钟一次，巡检中每 3 秒刷新进度）和「去平台办理」（确认后显示平台账号和打码的口令，可复制；每次查看记入操作日志，页面一隐藏就清掉）。记录详情里也有「去平台办理」，多给一个这条记录的链接。
+- **新增企业**（管理员和经办人）：概览的「+ 新增企业」，规则与控制台一样（经办人只能放进自己的分组、负责人默认自己）；保存后自动登录一次平台核对口令，页面等结果（约 2 分钟内）。新增的表单要收集客户的平台口令，**正式版提交审核时可能被拦**，目前按体验版使用。
+- 用户、设置、通知、操作日志、报表、编辑和删除企业等管理功能只在控制台。
 
 接口：
 
-- 小程序接口和控制台页面**共用同一份逻辑**（`records.record_matches` / `record_detail_data`、`attachments.attachment_response`、`src/todo`），手机上搜到的就是登记记录页搜到的。
-- `/api/status`、`/api/records`、`/api/changes`、`/api/me` 只加不改：都接受 `?scope=mine|all`，不带时是「全部」，旧版小程序拿到的和以前一样；`/api/records` 另有 `?q=`、多选 `?status=2,7`、`?page=`（每页 50 条，不带时一次给全部）。新增 `/api/deadlines`、`/api/record`、`/api/attachment`。
-- 企业用公司名定位，平台登录名不发到手机上。
+- 小程序接口和控制台页面**共用同一份逻辑**（`records.record_matches` / `record_detail_data`、`attachments.attachment_response`、`src/todo`；企业操作是 `web/routes/accounts.py` 的 `start_scan` / `reveal_account` / `add_account_core` / `add_form_options`，控制台路由和 `web/routes/api_accounts.py` 都只是外壳），手机上搜到的就是登记记录页搜到的，权限、冷却、操作日志也完全一样。
+- `/api/status`、`/api/records`、`/api/changes`、`/api/me` 只加不改：都接受 `?scope=mine|all`，不带时是「全部」，旧版小程序拿到的和以前一样；`/api/records` 另有 `?q=`、多选 `?status=2,7`、`?page=`（每页 50 条，不带时一次给全部）。新增 `/api/deadlines`、`/api/record`、`/api/attachment`、`/api/company`、`/api/accounts/new-form`，以及写接口 `POST /api/accounts`、`/api/accounts/scan`、`/api/accounts/platform-access`（请求体必须是 JSON 对象）。
+- 企业用公司名定位，平台登录名不发到手机上（「去平台办理」除外；错误信息里出现时也替换掉）。别组的企业和不存在的企业回答完全一样。
 - 新增的接口**只认个人账号登录的凭证**，`X-API-Key` 和 Basic 一律 403：旧版小程序包里打包过管理员 `API_KEY`。
 - `/api` 的写操作同样有「没记日志就补一条 `http.unaudited`」的兜底。
 - 打开附件用 `wx.downloadFile`，所以 `https://monitor.chenranorchenfei.asia` 还要登记为 **downloadFile 合法域名**（和 request 合法域名在同一页）。凭证只放在请求头里，不放进网址（网址会写进访问日志）。

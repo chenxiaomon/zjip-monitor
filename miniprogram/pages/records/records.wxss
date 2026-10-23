@@ -8,6 +8,46 @@
   color: #999;
 }
 
+/* One company's login and scan state */
+.company-card {
+  background: #fff;
+  border-radius: 16rpx;
+  padding: 24rpx 28rpx;
+  margin-bottom: 20rpx;
+}
+
+.state-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 24rpx;
+  padding: 4rpx 0;
+}
+
+.state-k {
+  width: 120rpx;
+  flex-shrink: 0;
+  color: #888;
+}
+
+.state-v {
+  color: #555;
+  margin-right: 12rpx;
+}
+
+.state-error {
+  display: block;
+  font-size: 22rpx;
+  color: #b91c1c;
+  margin: 4rpx 0 8rpx 120rpx;
+  word-break: break-all;
+}
+
+.act {
+  margin: 16rpx 0 0;
+  font-size: 24rpx;
+}
+
 .search {
   background: #fff;
   border-radius: 100rpx;

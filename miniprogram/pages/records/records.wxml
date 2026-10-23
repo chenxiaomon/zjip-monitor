@@ -3,6 +3,34 @@
   <!-- 我负责的 / 全部: only when searching across companies -->
   <scope-bar wx:if="{{!company}}" scope="{{scope}}" bind:change="onScopeChange" />
 
+  <!-- One company: its login and scan state, 立即巡检 and 去平台办理 -->
+  <view wx:if="{{company && state}}" class="company-card">
+    <view class="state-line">
+      <text class="state-k">平台登录</text>
+      <text wx:if="{{state.login.state === 'pending'}}" class="tag tag-muted">登录中…</text>
+      <text wx:elif="{{state.login.state === 'error'}}" class="tag tag-danger">登录失败</text>
+      <text wx:else class="state-v">{{state.login.label}}</text>
+      <text wx:if="{{state.login.paused}}" class="tag tag-warn">已暂停 · 需在控制台更新密码</text>
+    </view>
+    <text wx:if="{{state.login.error}}" class="state-error">{{state.login.error}}</text>
+    <view class="state-line">
+      <text class="state-k">巡检</text>
+      <text wx:if="{{state.scan.state === 'running'}}" class="tag tag-muted">巡检中…</text>
+      <text wx:elif="{{state.scan.failed}}" class="tag tag-danger">上次巡检失败 · {{state.scan.label}}</text>
+      <text wx:elif="{{state.scan.partial}}" class="tag tag-warn">{{state.scan.label}}</text>
+      <text class="state-v">最后巡检 {{state.last_check}}</text>
+    </view>
+    <text wx:if="{{state.scan.error}}" class="state-error">{{state.scan.error}}</text>
+    <button
+      wx:if="{{state.can.scan}}"
+      class="act"
+      size="mini"
+      disabled="{{state.scan.state === 'running' || state.scan_wait > 0}}"
+      bindtap="onScan"
+    >{{state.scan.state === 'running' ? '巡检中…' : (state.scan_wait > 0 ? state.waitMinutes + ' 分钟后可再巡检' : '立即巡检')}}</button>
+    <platform-access wx:if="{{state.can.reveal}}" company="{{company}}" />
+  </view>
+
   <input
     class="search"
     value="{{q}}"
