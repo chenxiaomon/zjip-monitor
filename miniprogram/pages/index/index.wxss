@@ -71,6 +71,23 @@
   margin-bottom: 16rpx;
 }
 
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16rpx;
+}
+
+.section-head .section-title {
+  margin-bottom: 0;
+}
+
+.changes-link {
+  font-size: 24rpx;
+  color: #2563eb;
+  padding: 8rpx 0 8rpx 24rpx;
+}
+
 /* Account card */
 .account-card {
   background: #fff;

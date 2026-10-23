@@ -1,0 +1,97 @@
+.page {
+  padding: 24rpx;
+}
+
+.loading {
+  text-align: center;
+  padding: 80rpx 0;
+  color: #999;
+}
+
+.summary {
+  font-size: 24rpx;
+  color: #888;
+  margin-bottom: 20rpx;
+}
+
+.change-card {
+  background: #fff;
+  border-radius: 16rpx;
+  padding: 28rpx;
+  margin-bottom: 16rpx;
+}
+
+.change-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12rpx;
+}
+
+.company {
+  font-size: 24rpx;
+  color: #888;
+}
+
+.mine-tag {
+  font-size: 20rpx;
+  color: #1d4ed8;
+  background: #e6f1fb;
+  border-radius: 100rpx;
+  padding: 2rpx 14rpx;
+  margin-left: 12rpx;
+}
+
+.time {
+  margin-left: auto;
+  font-size: 22rpx;
+  color: #bbb;
+}
+
+.record-name {
+  font-size: 28rpx;
+  font-weight: 500;
+  color: #222;
+  display: block;
+  margin-bottom: 12rpx;
+}
+
+.change-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 8rpx;
+}
+
+.to {
+  color: #999;
+  margin-right: 6rpx;
+}
+
+.kind {
+  font-size: 24rpx;
+  color: #555;
+  margin-right: 8rpx;
+}
+
+.kind.warn {
+  color: #b91c1c;
+}
+
+/* 平台没给状态码时的底色（pill-1…17 在 app.wxss） */
+.pill-none {
+  background: #f0f0f0;
+  color: #666;
+}
+
+.reg-no {
+  font-family: monospace;
+  font-size: 22rpx;
+  color: #bbb;
+  display: block;
+}
+
+.empty {
+  text-align: center;
+  color: #bbb;
+  padding: 80rpx 0;
+}

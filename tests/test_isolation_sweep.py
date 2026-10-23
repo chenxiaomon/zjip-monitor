@@ -151,7 +151,10 @@ def test_the_mini_program_api_shows_nothing_of_the_owner(world, web_client):
     token = web_client.post("/api/login", json={"username": OPERATOR_A[0],
                                                 "password": OPERATOR_A[1]}).json()["token"]
     headers = {"Authorization": f"Bearer {token}"}
-    for path in ("/api/status", "/api/records", f"/api/records?company={OWNER_COMPANY}", "/api/me"):
+    for path in ("/api/status", "/api/records", f"/api/records?company={OWNER_COMPANY}", "/api/changes",
+                 "/api/me"):
         resp = web_client.get(path, headers=headers)
         text = resp.text.replace(f"company={OWNER_COMPANY}", "")
         assert _leaks(text) == [], path
+    rows = web_client.get("/api/changes", headers=headers).json()["rows"]
+    assert [r["reg_no"] for r in rows] == ["RCOL1"]  # not empty for an unrelated reason

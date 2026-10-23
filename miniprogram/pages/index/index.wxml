@@ -29,7 +29,10 @@
     </view>
 
     <!-- Account list -->
-    <view class="section-title">账号状态</view>
+    <view class="section-head">
+      <view class="section-title">账号状态</view>
+      <text class="changes-link" bindtap="onTapChanges">最近变化 ›</text>
+    </view>
     <view
       wx:for="{{accounts}}"
       wx:key="company"
