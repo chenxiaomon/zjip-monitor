@@ -197,6 +197,26 @@ def test_the_safety_net_catches_a_route_that_forgot(world, login_as, _isolated_a
     assert entry["target"] == "/accounts/forgotten-write" and entry["actor"] == "boss"
 
 
+def test_the_safety_net_covers_the_mini_program_too(world, _isolated_audit):
+    """/api skips the console's checks, so its writes audit themselves; one
+    that forgot still leaves a line, under the colleague's name."""
+    from web.app import app
+
+    async def forgotten():
+        return PlainTextResponse("changed something")
+
+    app.add_api_route("/api/forgotten-write", forgotten, methods=["POST"])
+    try:
+        client = _client()
+        token = client.post("/api/login", json={"username": BOSS[0], "password": BOSS[1]}).json()["token"]
+        client.post("/api/forgotten-write", headers={"Authorization": f"Bearer {token}"})
+    finally:
+        app.router.routes[:] = [r for r in app.router.routes
+                                if getattr(r, "path", None) != "/api/forgotten-write"]
+    (entry,) = [e for e in _audit(_isolated_audit) if e["action"] == "http.unaudited"]
+    assert (entry["target"], entry["actor"], entry["via"]) == ("/api/forgotten-write", "boss", "api")
+
+
 # --- logins ----------------------------------------------------------------------
 
 def test_login_and_logout(web_client, login_as, _isolated_audit):

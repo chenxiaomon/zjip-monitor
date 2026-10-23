@@ -3,7 +3,15 @@
 Colleagues sign in with their console account (POST /api/login) and send
 the token they get back as `Authorization: Bearer …`; they then see exactly
 the companies the console shows them. The X-API-Key header and Basic Auth
-still work for scripts and carry the .env admin's scope.
+still work for scripts and carry the .env admin's scope — on the endpoints
+that were there before the mini program's own pages. Everything newer opens
+a client's notices, reveals or changes something, and answers a colleague's
+own sign-in only (_personal_only): old mini program builds shipped that key.
+
+?scope=mine|all is the console's 我负责的 / 全部 (web.auth.use_query_scope).
+Without it every endpoint answers for everything the caller may see, as it
+always did. A company is named by its name; its platform login never goes
+to the phone.
 """
 
 from __future__ import annotations
@@ -11,19 +19,29 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import JSONResponse, Response
 from loguru import logger
 
+from src import status_store, todo
+from src.runtime_settings import ops_alert_settings
 from src.scraper import AUDIT_STATUS, decode_status
 from web import auth, login_guard
-from web.auth import current_user, visible_accounts
-from web.deps import _fmt_time, account_dot, detail_url, in_year, int_or_none, owner_label
+from web.auth import can_edit_accounts, current_user, shown_accounts, use_query_scope, view_scope
+from web.deps import (
+    NOTICE_KIND_LABELS, _fmt_datetime, _fmt_time, account_dot, cert_label, detail_url, due_label,
+    in_year, int_or_none, owner_label, scan_kind_label,
+)
+from web.routes.attachments import attachment_response
+from web.routes.dashboard import _apply_year, _is_stale, scan_health
+from web.routes.records import (
+    PAGE_SIZE, _page_number, _statuses, find_visible_record, record_detail_data, record_matches,
+)
 from web.services import audit_log
 from web.services.events import read_change_rows
 from web.services.snapshot import get_latest_snapshot
 
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/api", dependencies=[Depends(use_query_scope)])
 
 # Same damping as the console login form (web/routes/login.py).
 FAILED_LOGIN_DELAY_SECONDS = 0.5
@@ -31,6 +49,60 @@ FAILED_LOGIN_DELAY_SECONDS = 0.5
 
 def _public_user(user: dict) -> dict:
     return {k: user.get(k) for k in ("username", "display_name", "role", "groups")}
+
+
+def _personal_only(request: Request) -> JSONResponse | None:
+    """A 403 unless the caller signed in with their own console account.
+    The API_KEY lane carries the .env admin's scope, and old mini program
+    builds shipped that key — it must not open a client's notices, let alone
+    reveal their platform password."""
+    if getattr(request.state, "api_token", False):
+        return None
+    return JSONResponse({"error": "请用小程序个人账号登录"}, status_code=403)
+
+
+def _not_found() -> JSONResponse:
+    """Missing and not-yours read the same, and never echo the input."""
+    return JSONResponse({"error": "记录不存在或无权查看"}, status_code=404)
+
+
+def _can(request: Request) -> dict:
+    """What the phone may offer: the console's own rule (web.auth), and only
+    on a personal sign-in, since the action endpoints refuse anything else."""
+    edit = can_edit_accounts(request) and bool(getattr(request.state, "api_token", False))
+    return {"add": edit, "scan": edit, "reveal": edit}
+
+
+def _me(request: Request) -> str | None:
+    return (current_user(request) or {}).get("username")
+
+
+def _due_json(c, *, reasons: bool = False) -> dict | None:
+    """A todo.Correction (or its asdict) for the phone: the deadline pill,
+    and the notice's full text only where one record is shown."""
+    if c is None:
+        return None
+    c = c if isinstance(c, dict) else c.__dict__
+    out = {
+        "deadline": c["deadline"], "days_left": c["days_left"], "urgency": c["urgency"],
+        "label": due_label(c["days_left"], c["deadline"]),
+        "issued_on": c["issued_on"], "summary": c["summary"],
+    }
+    if reasons:
+        out["reasons"] = c["reasons"]
+    return out
+
+
+def _cert_json(rn, valid_from: str | None = None) -> dict | None:
+    """A todo.Renewal (or its asdict) for the phone: the certificate pill."""
+    if rn is None:
+        return None
+    rn = rn if isinstance(rn, dict) else rn.__dict__
+    return {
+        "valid_from": valid_from, "valid_to": rn["valid_to"], "days_left": rn["days_left"],
+        "expired": rn["expired"], "urgency": todo.certificate_urgency(rn["days_left"]),
+        "label": cert_label(rn["days_left"], rn["valid_to"]),
+    }
 
 
 @router.post("/login")
@@ -102,7 +174,16 @@ def api_logout(request: Request) -> JSONResponse:
 
 @router.get("/me")
 def api_me(request: Request) -> JSONResponse:
-    return JSONResponse({"user": _public_user(current_user(request) or {})})
+    """Who is signed in, what they may do, and the 我负责的 / 全部 counts.
+    Role and groups are read on every request, so the phone asks again on
+    launch instead of trusting what the login answered weeks ago."""
+    scope = view_scope(request)
+    return JSONResponse({
+        "user": _public_user(current_user(request) or {}),
+        "can": _can(request),
+        "scope": {"mine": scope["mine"], "owned": scope["owned"], "visible": scope["visible"]},
+    })
+
 
 _SHANGHAI_TZ = timezone(timedelta(hours=8))
 
@@ -119,36 +200,46 @@ def _ms_to_date(ms: int | None) -> str:
         return ""
 
 
-def _visible_pairs(request: Request) -> list[tuple]:
-    """(account, latest snapshot) for every account the caller may see — the
-    caller's own companies (负责人) first.
+def _shown_pairs(request: Request) -> list[tuple]:
+    """(account, latest snapshot or None) for every company shown — 我负责的
+    or everything the caller may see (?scope=) — their own companies first.
 
     This used to read every snapshot on disk regardless of the caller, so the
     console's group isolation stopped at the API boundary; going through
-    visible_accounts() also drops orphan snapshots of deleted accounts.
+    shown_accounts() also drops orphan snapshots of deleted accounts.
     """
-    me = (current_user(request) or {}).get("username")
-    pairs = []
-    for acc in visible_accounts(request):
-        snap = get_latest_snapshot(acc.company)
-        if snap is not None:
-            pairs.append((acc, snap))
+    me = _me(request)
+    pairs = [(acc, get_latest_snapshot(acc.company)) for acc in shown_accounts(request)]
     pairs.sort(key=lambda p: not (me and p[0].owner == me))  # stable: mine first
     return pairs
 
 
 @router.get("/status")
 def api_status(request: Request, year: int | None = Query(None)) -> JSONResponse:
-    """All accounts' latest status (optionally limited to one application year)."""
+    """Every shown company's latest status (optionally one application year),
+    and around it what the phone's overview needs: the scan health of each
+    company, the year picker, the 待办 counts, the 我负责的 / 全部 switch,
+    and the companies not scanned yet (apart, so `accounts` stays as old
+    builds know it)."""
     accounts = []
+    unscanned = []
     total_records = 0
     success_count = 0
     pending_correction = 0
+    years: set[int] = set()
 
-    me = (current_user(request) or {}).get("username")
-    for acc, snap in _visible_pairs(request):
+    me = _me(request)
+    all_status = status_store.get_all()
+    stale_hours = ops_alert_settings().stale_hours
+    for acc, snap in _shown_pairs(request):
+        mine = bool(me and acc.owner == me)
+        if snap is None:
+            unscanned.append({"company": acc.company, "owner": owner_label(acc.owner, acc.group), "mine": mine})
+            continue
         status_counts: dict[int, int] = {}
         for r in snap.get("records", []):
+            if (y := _apply_year(r.get("dataRegApplyTime"))) is not None:
+                years.add(y)
             if not in_year(r.get("dataRegApplyTime"), year):
                 continue
             code = int_or_none(r.get("dataRegAuditStatus"))
@@ -156,25 +247,45 @@ def api_status(request: Request, year: int | None = Query(None)) -> JSONResponse
                 status_counts[code] = status_counts.get(code, 0) + 1
 
         total = sum(status_counts.values())
+        ss = all_status.get(acc.username) or {}
+        health = scan_health(ss)
+        last_check = snap.get("snapshot_time")
         accounts.append({
             "company": snap.get("company", "未知"),
             "dot": account_dot(status_counts),
             "total": total,
             "status_counts": {str(k): v for k, v in status_counts.items()},
-            "last_check": _fmt_time(snap.get("snapshot_time")),
+            "last_check": _fmt_time(last_check),
             "owner": owner_label(acc.owner, acc.group),
-            "mine": bool(me and acc.owner == me),
+            "mine": mine,
+            **health,
+            "scan_label": scan_kind_label(ss.get("status")) if health["scan_failed"] or health["scan_partial"] else "",
+            "scan_error": (ss.get("error") or "")[:100] if health["scan_failed"] else "",
+            "stale": _is_stale(last_check, stale_hours),
+            # The durable record beats the snapshot's time: a failed scan
+            # leaves the old snapshot in place (as the dashboard card).
+            "last_success": _fmt_time(ss.get("last_success_at") or last_check),
         })
         total_records += total
         success_count += status_counts.get(7, 0)
         pending_correction += status_counts.get(2, 0)
 
+    todo_data = todo.build(shown_accounts(request))
+    scope = view_scope(request)
     return JSONResponse({
         "total_records": total_records,
         "success_count": success_count,
         "pending_correction": pending_correction,
         "accounts": accounts,
         "status_labels": {str(k): v for k, v in AUDIT_STATUS.items()},
+        "unscanned": unscanned,
+        "years": sorted(years, reverse=True),
+        "todo": {
+            "corrections": len(todo_data["corrections"]),
+            "urgent": sum(1 for c in todo_data["corrections"] if c["urgency"] in ("overdue", "red")),
+            "renewals": len(todo_data["renewals"]),
+        },
+        "scope": {"mine": scope["mine"], "owned": scope["owned"], "visible": scope["visible"]},
     })
 
 
@@ -182,22 +293,31 @@ def api_status(request: Request, year: int | None = Query(None)) -> JSONResponse
 def api_records(
     request: Request,
     company: str | None = Query(None),
-    status: int | None = Query(None),
     year: int | None = Query(None),
+    q: str | None = Query(None),
+    page: str | None = Query(None),
 ) -> JSONResponse:
-    """Registration records, filtered by company name, status and/or application year."""
+    """Registration records by company, status (?status=2,7 or repeated, as
+    the console), application year and keyword — the records page's own
+    filters (records.record_matches), so a search finds the same rows on
+    both. Without ?page= every row, as old builds expect; with it, pages of 50."""
+    statuses = _statuses(request)
+    needle = (q or "").strip().lower()
+    me = _me(request)
     rows: list[dict] = []
 
-    for _acc, snap in _visible_pairs(request):
+    for acc, snap in _shown_pairs(request):
+        if snap is None:
+            continue
         snap_company = snap.get("company", "")
         if company and snap_company != company:
             continue
         for r in snap.get("records", []):
             if not in_year(r.get("dataRegApplyTime"), year):
                 continue
-            code = int_or_none(r.get("dataRegAuditStatus"))
-            if status is not None and code != status:
+            if not record_matches(acc, r, statuses, needle=needle):
                 continue
+            code = int_or_none(r.get("dataRegAuditStatus"))
             reg_no = r.get("dataRegNo", "")
             rows.append({
                 "company": snap_company,
@@ -207,10 +327,21 @@ def api_records(
                 "status_code": code,
                 "status_label": decode_status(code),
                 "detail_url": detail_url(reg_no) if reg_no else "",
+                "mine": bool(me and acc.owner == me),
+                # 待补正 → the notice's deadline; 登记成功 → expiry inside the renewal window
+                "due": _due_json(todo.correction_for(acc, r)) if reg_no else None,
+                "cert": _cert_json(todo.renewal_for(acc, r)) if reg_no else None,
             })
 
     rows.sort(key=lambda r: r["apply_date"], reverse=True)
-    return JSONResponse({"records": rows, "total": len(rows)})
+    if page is None:
+        return JSONResponse({"records": rows, "total": len(rows)})
+    pages = max(1, (len(rows) + PAGE_SIZE - 1) // PAGE_SIZE)
+    current = min(_page_number(page), pages)
+    return JSONResponse({
+        "records": rows[(current - 1) * PAGE_SIZE: current * PAGE_SIZE],
+        "total": len(rows), "page": current, "pages": pages,
+    })
 
 
 # The mini program's 最近变化 list and its 「有新变化」 pop-up.
@@ -240,9 +371,9 @@ def api_changes(request: Request, since: str | None = Query(None)) -> JSONRespon
             asked = asked.replace(tzinfo=timezone.utc)
         start = max(start, asked)
 
-    # visible_accounts(), as /api/status: changes of a deleted company go too.
-    visible = {a.username: a for a in visible_accounts(request)}
-    me = (current_user(request) or {}).get("username")
+    # shown_accounts(), as /api/status: changes of a deleted company go too.
+    visible = {a.username: a for a in shown_accounts(request)}
+    me = _me(request)
     rows = read_change_rows(accounts=set(visible), since=start)
     out = []
     for r in rows[:CHANGES_LIMIT]:
@@ -268,3 +399,120 @@ def api_changes(request: Request, since: str | None = Query(None)) -> JSONRespon
         "total": len(rows),
         "next_since": (now - CHANGES_OVERLAP).isoformat(),
     })
+
+
+def _deadline_json(item: dict, mine: bool) -> dict:
+    """One todo.deadline_items entry, without the platform login."""
+    if item["kind"] == "correction":
+        label = due_label(item["days_left"], item.get("date"))
+    else:
+        label = cert_label(item["days_left"], item["date"])
+    return {
+        "kind": item["kind"], "date": item.get("date"), "company": item["company"],
+        "reg_no": item["reg_no"], "name": item["name"], "days_left": item["days_left"],
+        "urgency": item["urgency"], "label": label, "mine": mine,
+    }
+
+
+@router.get("/deadlines")
+def api_deadlines(request: Request) -> JSONResponse:
+    """待办 and 日程 of the shown companies: corrections by deadline and the
+    certificates inside the renewal window (the dashboard's 待办), then every
+    dated deadline (the console's 期限日历) and the corrections whose notice
+    gave no date — so nothing is silently missed."""
+    if (denied := _personal_only(request)):
+        return denied
+    accounts = shown_accounts(request)
+    me = _me(request)
+    owner_of = {a.username: a.owner for a in accounts}
+
+    def mine(item: dict) -> bool:
+        return bool(me and owner_of.get(item["username"]) == me)
+
+    today = todo.today_local()
+    built = todo.build(accounts, today)
+    dated = todo.deadline_items(accounts, today)
+    nxt = built["next_renewal"]
+    return JSONResponse({
+        "today": built["today"],
+        "corrections": [
+            {"company": c["company"], "reg_no": c["reg_no"], "name": c["name"], "mine": mine(c),
+             **_due_json(c)}
+            for c in built["corrections"]
+        ],
+        "renewals": [
+            {"company": r["company"], "reg_no": r["reg_no"], "name": r["name"], "mine": mine(r),
+             **_cert_json(r)}
+            for r in built["renewals"]
+        ],
+        "next_renewal": {k: nxt[k] for k in ("company", "reg_no", "name", "valid_to")} if nxt else None,
+        "items": [_deadline_json(i, mine(i)) for i in dated["items"]],
+        "undated": [_deadline_json(i, mine(i)) for i in dated["undated"]],
+    })
+
+
+@router.get("/record")
+def api_record(request: Request, company: str | None = Query(None), reg_no: str | None = Query(None)) -> JSONResponse:
+    """One record, as the console's detail drawer shows it (records.record_detail_data).
+    Any company the caller may see, whatever ?scope= says — the switch is a
+    view, never a permission."""
+    if (denied := _personal_only(request)):
+        return denied
+    found = find_visible_record(request, reg_no, company=company or "")
+    if found is None:
+        return _not_found()
+    d = record_detail_data(request, *found)
+    acc, r, cert = d["acc"], d["r"], d["cert"]
+    gazette = next((n for n in d["notices"] if n["kind"] == "公告" and n["current"]), None)
+    me = _me(request)
+    return JSONResponse({
+        "company": acc.company,
+        "reg_no": d["reg_no"],
+        "name": d["name"],
+        "status_code": d["status_code"],
+        "status_label": d["status_label"],
+        "apply_date": d["apply_date"],
+        "update_time": d["update_time"],
+        "snapshot_time": _fmt_datetime(d["snapshot_time"]),
+        "industry": str(r.get("dataRegIndustry") or ""),
+        "data_type": str(r.get("dataRegDataType") or ""),
+        "applicant": str(r.get("dataRegApplyName") or ""),
+        "detail_url": detail_url(d["reg_no"]),
+        "owner": owner_label(acc.owner, acc.group),
+        "mine": bool(me and acc.owner == me),
+        "due": _due_json(d["due"], reasons=True),
+        "cert": _cert_json(cert, gazette.get("valid_from") if gazette else None),
+        "notices": [
+            {"kind": n["kind"], "kind_label": NOTICE_KIND_LABELS.get(n["kind"], n["kind"] or ""),
+             "current": n["current"], "issued_on": n["issued_on"], "deadline": n["deadline"],
+             "valid_to": n["valid_to"], "reasons": n["reasons"]}
+            for n in d["notices"]
+        ],
+        "attachments": [
+            {"name": f, "ext": f.rpartition(".")[2].lower() if "." in f else ""} for f in d["attachments"]
+        ],
+        "archived": d["archived"],
+        "history": [
+            {"time": _fmt_datetime(h["timestamp"]), "type": h["type"],
+             "old_status": h["old_status"], "new_status": h["new_status"],
+             "old_status_code": int_or_none(h["old_status_code"]),
+             "new_status_code": int_or_none(h["new_status_code"])}
+            for h in d["history"]
+        ],
+        "can": _can(request),
+    })
+
+
+@router.get("/attachment")
+def api_attachment(
+    request: Request, company: str = Query(""), reg_no: str = Query(""), name: str = Query(""),
+) -> Response:
+    """One 通知书/证书 file, for wx.downloadFile — the console's download
+    (attachments.attachment_response): same check, same 操作日志 line. The
+    token rides in the Authorization header only; a query string is written
+    to the access log."""
+    if (denied := _personal_only(request)):
+        return denied
+    return attachment_response(
+        request, company, reg_no, name, lambda: JSONResponse({"error": "附件不存在"}, status_code=404),
+    )

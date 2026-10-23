@@ -147,14 +147,57 @@ def test_adding_the_owners_company_again_names_nothing(world, web_client, login_
     assert _leaks(resp.text.replace(f'value="{OWNER_COMPANY}"', "")) == []
 
 
-def test_the_mini_program_api_shows_nothing_of_the_owner(world, web_client):
+API_PAGES = [
+    "/api/status", "/api/status?scope=all", "/api/status?scope=mine", "/api/status?year=2026",
+    "/api/records", "/api/records?scope=all", f"/api/records?company={OWNER_COMPANY}",
+    "/api/records?q=老板", "/api/records?q=boss", "/api/records?status=2&page=1",
+    "/api/changes", "/api/changes?scope=all", "/api/me",
+    "/api/deadlines", "/api/deadlines?scope=all",
+    f"/api/record?company={OWNER_COMPANY}&reg_no=RBOSS1",
+    f"/api/attachment?company={OWNER_COMPANY}&reg_no=RBOSS1&name=notice.pdf",
+]
+
+
+def test_every_api_read_is_in_the_sweep():
+    """A new GET under /api has to be added to API_PAGES — and so gets swept."""
+    from web.app import app
+
+    def walk(routes):
+        for r in routes:
+            if hasattr(r, "original_router"):  # newer FastAPI wraps included routers
+                yield from walk(r.original_router.routes)
+            else:
+                yield r
+
+    gets = {r.path for r in walk(app.routes)
+            if r.path.startswith("/api/") and "GET" in (getattr(r, "methods", None) or ())}
+    assert gets == {p.split("?")[0] for p in API_PAGES}
+
+
+def _api_headers(web_client) -> dict:
     token = web_client.post("/api/login", json={"username": OPERATOR_A[0],
                                                 "password": OPERATOR_A[1]}).json()["token"]
-    headers = {"Authorization": f"Bearer {token}"}
-    for path in ("/api/status", "/api/records", f"/api/records?company={OWNER_COMPANY}", "/api/changes",
-                 "/api/me"):
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_the_mini_program_api_shows_nothing_of_the_owner(world, web_client):
+    headers = _api_headers(web_client)
+    for path in API_PAGES:
         resp = web_client.get(path, headers=headers)
-        text = resp.text.replace(f"company={OWNER_COMPANY}", "")
-        assert _leaks(text) == [], path
+        assert _leaks(resp.text) == [], (path, resp.status_code)
     rows = web_client.get("/api/changes", headers=headers).json()["rows"]
     assert [r["reg_no"] for r in rows] == ["RCOL1"]  # not empty for an unrelated reason
+
+
+@pytest.mark.parametrize("path", [
+    "/api/record?company={company}&reg_no={reg}",
+    "/api/attachment?company={company}&reg_no={reg}&name=notice.pdf",
+])
+def test_the_owners_record_reads_like_no_record_at_all(world, web_client, path):
+    headers = _api_headers(web_client)
+
+    def call(company, reg):
+        resp = web_client.get(path.format(company=company, reg=reg), headers=headers)
+        return resp.status_code, resp.text
+
+    assert call(OWNER_COMPANY, "RBOSS1") == call("没有这家公司", "NOPE")
