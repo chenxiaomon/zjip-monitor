@@ -52,6 +52,7 @@ from web import auth, login_guard  # noqa: E402 — logs at import; needs the si
 from web.routes import (  # noqa: E402 — same reason
     accounts,
     api,
+    api_accounts,
     attachments,
     audit,
     changes,
@@ -338,4 +339,5 @@ app.include_router(users.router)
 app.include_router(audit.router)
 app.include_router(view.router)
 app.include_router(api.router)
+app.include_router(api_accounts.router)
 app.include_router(attachments.router)

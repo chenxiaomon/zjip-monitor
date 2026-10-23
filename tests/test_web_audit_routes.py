@@ -122,10 +122,33 @@ ROUTES = {
 }
 
 
+# The mini program's writes: path → (JSON body, expected action, expected target)
+API_ROUTES = {
+    "/api/accounts": ({"company": "新公司", "username": "n1", "password": "p", "group": "group_a"},
+                      "account.add", "n1"),
+    "/api/accounts/scan": ({"company": "甲 公司"}, "account.scan", "ua1"),
+    "/api/accounts/platform-access": ({"company": "甲 公司"}, "account.reveal", "ua1"),
+}
+
+
 def test_every_state_changing_route_is_in_the_table():
     """A new POST route has to be added here — and so has to decide what it logs.
     The login routes (console and mini program) are covered by their own tests."""
-    assert _post_paths() == set(ROUTES) | {"/login", "/logout", "/api/login", "/api/logout"}
+    assert _post_paths() == set(ROUTES) | set(API_ROUTES) | {"/login", "/logout", "/api/login", "/api/logout"}
+
+
+@pytest.mark.parametrize("path", sorted(API_ROUTES))
+def test_each_mini_program_write_logs_exactly_one_line(world, _isolated_audit, path):
+    body, action, target = API_ROUTES[path]
+    client = _client()
+    token = client.post("/api/login", json={"username": BOSS[0], "password": BOSS[1]}).json()["token"]
+    before = len(_audit(_isolated_audit))
+    resp = client.post(path, json=body, headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200, resp.text
+
+    (entry,) = _audit(_isolated_audit)[before:]
+    assert (entry["action"], entry["actor"], entry["via"], entry["target"], entry["ok"]) == (
+        action, "boss", "api", target, True)
 
 
 @pytest.mark.parametrize("route", sorted(ROUTES))

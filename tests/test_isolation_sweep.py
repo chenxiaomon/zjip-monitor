@@ -155,6 +155,8 @@ API_PAGES = [
     "/api/deadlines", "/api/deadlines?scope=all",
     f"/api/record?company={OWNER_COMPANY}&reg_no=RBOSS1",
     f"/api/attachment?company={OWNER_COMPANY}&reg_no=RBOSS1&name=notice.pdf",
+    f"/api/company?company={OWNER_COMPANY}", f"/api/company?company={COLLEAGUE_COMPANY}",
+    "/api/accounts/new-form",
 ]
 
 
@@ -192,6 +194,7 @@ def test_the_mini_program_api_shows_nothing_of_the_owner(world, web_client):
 @pytest.mark.parametrize("path", [
     "/api/record?company={company}&reg_no={reg}",
     "/api/attachment?company={company}&reg_no={reg}&name=notice.pdf",
+    "/api/company?company={company}",
 ])
 def test_the_owners_record_reads_like_no_record_at_all(world, web_client, path):
     headers = _api_headers(web_client)
@@ -201,3 +204,20 @@ def test_the_owners_record_reads_like_no_record_at_all(world, web_client, path):
         return resp.status_code, resp.text
 
     assert call(OWNER_COMPANY, "RBOSS1") == call("没有这家公司", "NOPE")
+
+
+@pytest.mark.parametrize("path", ["/api/accounts/scan", "/api/accounts/platform-access"])
+def test_acting_on_the_owners_company_from_the_phone_reads_like_none(world, web_client, path):
+    headers = _api_headers(web_client)
+
+    def call(company):
+        resp = web_client.post(path, json={"company": company}, headers=headers)
+        return resp.status_code, resp.text
+
+    assert call(OWNER_COMPANY) == call("没有这家公司")
+
+
+def test_adding_the_owners_company_from_the_phone_names_nothing(world, web_client):
+    resp = web_client.post("/api/accounts", headers=_api_headers(web_client), json={
+        "company": OWNER_COMPANY, "username": "x1", "password": "p", "group": "u_opa"})
+    assert resp.json() == {"error": accounts_routes._TAKEN_ELSEWHERE}
