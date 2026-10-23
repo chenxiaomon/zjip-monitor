@@ -8,6 +8,20 @@
   color: #999;
 }
 
+.search {
+  background: #fff;
+  border-radius: 100rpx;
+  padding: 12rpx 28rpx;
+  font-size: 26rpx;
+  margin-bottom: 20rpx;
+}
+
+.year-note {
+  font-size: 24rpx;
+  color: #888;
+  margin-bottom: 20rpx;
+}
+
 .summary {
   font-size: 24rpx;
   color: #888;
@@ -34,12 +48,6 @@
   color: #888;
 }
 
-.pill {
-  font-size: 22rpx;
-  padding: 4rpx 16rpx;
-  border-radius: 100rpx;
-}
-
 .record-name {
   font-size: 28rpx;
   font-weight: 500;
@@ -48,10 +56,33 @@
   margin-bottom: 12rpx;
 }
 
+.record-pills {
+  margin-bottom: 8rpx;
+}
+
+.record-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.company {
+  font-size: 22rpx;
+  color: #888;
+  margin-right: 12rpx;
+}
+
 .apply-date {
   font-size: 22rpx;
   color: #bbb;
-  display: block;
+  margin-left: auto;
+}
+
+.more {
+  text-align: center;
+  font-size: 24rpx;
+  color: #bbb;
+  padding: 24rpx 0;
 }
 
 .empty {

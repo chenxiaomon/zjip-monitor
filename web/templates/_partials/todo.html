@@ -47,7 +47,7 @@
     {% set r_urgency = 'overdue' if r.expired else ('amber' if r.days_left <= 30 else 'normal') %}
     <div class="todo-item rail-{{ r_urgency }}">
       <span class="pill {{ urgency_class(r_urgency) }}">
-        {% if r.expired %}已过期 {{ -r.days_left }} 天，未续展{% else %}{{ r.valid_to }} 到期 · 剩 {{ r.days_left }} 天{% endif %}
+        {{ cert_label(r.days_left, r.valid_to) }}
       </span>
       <div class="todo-main">
         <a class="todo-title" title="{{ r.name }}" href="/records?q={{ r.reg_no | urlencode }}"

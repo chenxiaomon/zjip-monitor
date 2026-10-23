@@ -46,6 +46,16 @@ def _is_stale(snapshot_time: str | None, stale_hours: float) -> bool:
     return datetime.now(timezone.utc) - dt > timedelta(hours=stale_hours)
 
 
+def scan_health(ss: dict | None) -> dict:
+    """An account's durable scan status (src/status_store) as the company
+    card shows it — the dashboard's and the mini program's alike."""
+    return {
+        "scan_failed": bool(ss and ss.get("status") not in (None, "ok", "partial")),
+        "scan_partial": bool(ss and ss.get("status") == "partial"),
+        "login_paused": bool(ss and ss.get("login_paused")),
+    }
+
+
 def _filtered_events(request: Request, hours: int = 24, limit: int = 20) -> list[dict]:
     """The timeline's events: only ones that carry a change, scoped to the
     viewer's accounts before the cap so quiet scans cannot fill it."""
@@ -115,8 +125,7 @@ def _dashboard_ctx(request: Request, year: int | None = None, range_days: int = 
             last_check = snap.get("snapshot_time")
 
         ss = all_status.get(acc.username)
-        scan_failed = bool(ss and ss.get("status") not in (None, "ok", "partial"))
-        scan_partial = bool(ss and ss.get("status") == "partial")
+        health = scan_health(ss)
         if ss and (
             ss.get("login_paused")
             or ss.get("status") in ("login_failed", "platform_error", "captcha_required")
@@ -140,8 +149,8 @@ def _dashboard_ctx(request: Request, year: int | None = None, range_days: int = 
             "dot": account_dot(status_counts),
             "total": sum(status_counts.values()),
             "scan_status": ss,
-            "scan_failed": scan_failed,
-            "scan_partial": scan_partial,
+            "scan_failed": health["scan_failed"],
+            "scan_partial": health["scan_partial"],
             "stale": _is_stale(last_check, stale_hours),
         })
 

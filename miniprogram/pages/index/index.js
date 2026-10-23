@@ -8,6 +8,8 @@ const STATUS_ORDER = [1, 12, 2, 4, 3, 17, 7, 13, 6, 14, 5, 8, 9, 10, 11, 15, 16]
 // { since: 上次接口给的 next_since, seen: 上次返回的各条 key }
 const CHANGES_SEEN_KEY = 'zjip_changes_seen:'
 const POPUP_LINES = 3
+// 标签页回到前台时，数据超过这么久就重新拉一次
+const STALE_MS = 5 * 60 * 1000
 
 Page({
   data: {
@@ -17,6 +19,12 @@ Page({
     successCount: 0,
     pendingCorrection: 0,
     accounts: [],
+    unscanned: [], // 还没巡检过的企业：没有快照，不能和「0 条记录」混为一谈
+    todo: null, // { corrections, urgent, renewals }
+    scope: null, // app.scopeView()
+    years: [],
+    yearOptions: ['全部年份'],
+    yearIndex: 0, // 0 = 全部年份，其余对应 years[yearIndex - 1]
   },
 
   onLoad() {
@@ -32,7 +40,13 @@ Page({
 
   // 打开小程序、从后台切回来、从别的页面返回都会走这里
   onShow() {
-    if (app.globalData.auth) this.checkNewChanges()
+    if (!app.globalData.auth) return
+    // 在别的标签页切换了「我负责的 / 全部」，或者数据放久了
+    if (this._fetchedAt !== undefined &&
+        (this._scopeVersion !== app.globalData.scopeVersion || Date.now() - this._fetchedAt > STALE_MS)) {
+      this.fetchStatus()
+    }
+    this.checkNewChanges()
   },
 
   onLogout() {
@@ -48,20 +62,32 @@ Page({
   },
 
   fetchStatus(done) {
-    app.request('/api/status', {
+    this._scopeVersion = app.globalData.scopeVersion
+    this._fetchedAt = Date.now()
+    const year = this.data.yearIndex > 0 ? this.data.years[this.data.yearIndex - 1] : null
+    app.get('/api/status', { year: year }, {
       success: (res) => {
         const d = res.data
+        app.noteScope(d.scope)
         const accounts = (d.accounts || []).map(acc => ({
           ...acc,
           pills: this._buildPills(acc.status_counts, d.status_labels),
         }))
+        const years = d.years || []
         this.setData({
           loading: false,
           totalRecords: d.total_records,
           successCount: d.success_count,
           pendingCorrection: d.pending_correction,
           accounts,
+          unscanned: d.unscanned || [],
+          todo: d.todo || null,
+          scope: app.scopeView(),
+          years,
+          yearOptions: ['全部年份'].concat(years.map(y => y + ' 年')),
+          yearIndex: year ? years.indexOf(year) + 1 : 0,
         })
+        if (d.todo) app.setTodoBadge(d.todo.urgent)
       },
       fail: (err) => {
         this.setData({ loading: false })
@@ -82,8 +108,23 @@ Page({
       }))
   },
 
+  onScopeChange() {
+    this.fetchStatus()
+  },
+
+  onYear(e) {
+    this.setData({ yearIndex: Number(e.detail.value) })
+    this.fetchStatus()
+  },
+
+  onSearch(e) {
+    const q = (e.detail.value || '').trim()
+    if (!q) return
+    wx.navigateTo({ url: '/pages/records/records?q=' + encodeURIComponent(q) })
+  },
+
   // 把上次看过之后的新变化弹出来。第一次用只记下书签，不把 30 天的历史
-  // 一股脑弹出来——历史在「最近变化」里看。
+  // 一股脑弹出来——历史在「变更」里看。
   checkNewChanges() {
     if (this._checkingChanges) return
     const auth = app.globalData.auth
@@ -91,7 +132,7 @@ Page({
     const stored = wx.getStorageSync(storeKey)
     const saved = stored && typeof stored.since === 'string' ? stored : null
     this._checkingChanges = true
-    app.request('/api/changes' + (saved ? '?since=' + encodeURIComponent(saved.since) : ''), {
+    app.get('/api/changes', saved ? { since: saved.since } : null, {
       success: (res) => {
         const rows = res.data.rows || []
         // 接口从书签前一小时给起（补上晚写进日志的变化），上次给过的按 key 去掉
@@ -121,13 +162,19 @@ Page({
   },
 
   onTapChanges() {
-    wx.navigateTo({ url: '/pages/changes/changes' })
+    wx.switchTab({ url: '/pages/changes/changes' })
   },
 
+  onTapTodo() {
+    wx.switchTab({ url: '/pages/todo/todo' })
+  },
+
+  // 看这家企业的全部记录（不受「我负责的」影响），年份跟着概览走
   onTapAccount(e) {
     const company = e.currentTarget.dataset.company
+    const year = this.data.yearIndex > 0 ? this.data.years[this.data.yearIndex - 1] : ''
     wx.navigateTo({
-      url: '/pages/records/records?company=' + encodeURIComponent(company),
+      url: '/pages/records/records?company=' + encodeURIComponent(company) + (year ? '&year=' + year : ''),
     })
   },
 })

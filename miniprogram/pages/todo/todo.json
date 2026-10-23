@@ -1,0 +1,8 @@
+{
+  "navigationBarTitleText": "待办与期限",
+  "enablePullDownRefresh": true,
+  "backgroundColor": "#f5f5f5",
+  "usingComponents": {
+    "scope-bar": "/components/scope-bar/scope-bar"
+  }
+}

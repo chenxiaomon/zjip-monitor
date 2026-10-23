@@ -23,6 +23,7 @@ page {
 .pill-15 { background: #F1EFE8; color: #444441; }  /* 撤回审查 */
 .pill-16 { background: #F1EFE8; color: #444441; }  /* 撤回补正 */
 .pill-17 { background: #EEEDFE; color: #3C3489; }  /* 待发证 */
+.pill-none { background: #f0f0f0; color: #666; }   /* 平台没给状态码 */
 
 .pill {
   display: inline-block;
@@ -30,4 +31,49 @@ page {
   border-radius: 100rpx;
   font-size: 22rpx;
   margin: 4rpx 6rpx 4rpx 0;
+}
+
+/* 期限的紧急程度（和控制台一样）：逾期实心红，3 天内红，7 天内黄，更远绿，日期未知灰 */
+.u-overdue { background: #b91c1c; color: #fff; }
+.u-red     { background: #FCEBEB; color: #791F1F; }
+.u-amber   { background: #FAEEDA; color: #854F0B; }
+.u-normal  { background: #EAF3DE; color: #27500A; }
+.u-unknown { background: #f0f0f0; color: #666; }
+
+/* 企业卡片上的小标签 */
+.tag {
+  display: inline-block;
+  font-size: 20rpx;
+  border-radius: 100rpx;
+  padding: 2rpx 14rpx;
+  margin: 4rpx 8rpx 4rpx 0;
+}
+.tag-mine   { color: #1d4ed8; background: #e6f1fb; }
+.tag-danger { color: #791F1F; background: #FCEBEB; }
+.tag-warn   { color: #854F0B; background: #FAEEDA; }
+.tag-muted  { color: #666; background: #f0f0f0; }
+
+/* 一排可选的小方块：状态筛选、待办/日程 */
+.chips {
+  white-space: nowrap;
+  margin-bottom: 20rpx;
+}
+.chip {
+  display: inline-block;
+  font-size: 24rpx;
+  color: #555;
+  background: #fff;
+  border: 1rpx solid #e5e5e5;
+  border-radius: 100rpx;
+  padding: 8rpx 24rpx;
+  margin-right: 12rpx;
+}
+.chip.active {
+  color: #fff;
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+.link {
+  color: #2563eb;
 }

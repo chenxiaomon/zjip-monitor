@@ -253,7 +253,10 @@ async def _auth_middleware(request: Request, call_next) -> Response:  # type: ig
             if user is None:
                 return JSONResponse({"error": "登录已失效，请重新登录"}, status_code=401)
             request.state.user = user
-            return await call_next(request)
+            # A colleague's own sign-in: the only caller the endpoints that
+            # open a client's files, reveal or change anything will answer.
+            request.state.api_token = True
+            return _flag_unaudited(request, await call_next(request), path)
         api_key = request.headers.get("X-API-Key", "")
         key_ok = bool(_API_KEY) and secrets.compare_digest(api_key.encode(), _API_KEY.encode())
         if key_ok or _basic_admin_ok(request):
@@ -262,7 +265,7 @@ async def _auth_middleware(request: Request, call_next) -> Response:  # type: ig
             # path as the console, so binding keys to groups later is a change
             # to this line, not to every handler.
             request.state.user = auth.admin_user(via="api")
-            return await call_next(request)
+            return _flag_unaudited(request, await call_next(request), path)
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     # 控制台：会话 cookie，Basic 管理员兜底
     user = auth.user_from_cookie(request.cookies.get(auth.COOKIE_NAME))
@@ -276,11 +279,14 @@ async def _auth_middleware(request: Request, call_next) -> Response:  # type: ig
     request.state.user = user
     if user["role"] != "admin" and path.startswith(_ADMIN_ONLY_PREFIXES):
         return Response("无权限", status_code=403)
-    response = await call_next(request)
-    # Safety net for the operation log: every state-changing route records
-    # what it did (or says nothing changed). One that got through without
-    # either — a route added later and forgotten — still leaves a line.
-    # request.state is the scope's state dict, shared with the route.
+    return _flag_unaudited(request, await call_next(request), path)
+
+
+def _flag_unaudited(request: Request, response: Response, path: str) -> Response:
+    """Safety net for the operation log: every state-changing route records
+    what it did (or says nothing changed). One that got through without
+    either — a route added later and forgotten — still leaves a line.
+    request.state is the scope's state dict, shared with the route."""
     if (
         request.method in _UNSAFE_METHODS
         and response.status_code < 400

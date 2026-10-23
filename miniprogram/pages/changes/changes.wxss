@@ -77,12 +77,6 @@
   color: #b91c1c;
 }
 
-/* 平台没给状态码时的底色（pill-1…17 在 app.wxss） */
-.pill-none {
-  background: #f0f0f0;
-  color: #666;
-}
-
 .reg-no {
   font-family: monospace;
   font-size: 22rpx;
