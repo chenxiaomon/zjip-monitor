@@ -57,7 +57,7 @@
 - 点开显示这家企业的平台账号与口令（口令默认打码，可「显示」「复制」），以及「打开平台登录页」；从记录详情点开的，还有「登录后打开这条记录」。
 - 管理员可看任何企业，经办人只能看自己分组的企业，只读用户没有这个按钮。
 - **每次点开都记入操作日志**（「查看平台口令」：谁、哪家企业、哪条记录），口令本身不入日志；响应不缓存。
-- 控制台是明文 HTTP 时，口令在网络上也是明文——这也是尽快上 HTTPS 的理由之一。浏览器在明文 HTTP 下不开放剪贴板接口，「复制」用的是兼容写法，个别浏览器失败时点「显示」后手动复制。
+- 控制台全站 HTTPS（见「访问地址与 HTTPS」），口令在网络上是加密的。「复制」在 HTTPS 下用浏览器的剪贴板接口；本地明文 HTTP 调试时退回兼容写法，个别浏览器失败时点「显示」后手动复制。
 
 ## 负责人与「我负责的」
 
@@ -77,7 +77,8 @@
 - 小程序包里**不再放 `API_KEY`**：旧版把管理员密钥打进包里，发给同事就等于给了全部企业。`.env` 的 `API_KEY` 仍可用于脚本（`X-API-Key` 头）。旧的本机 `miniprogram/config.js` 里如果还留着 `API_KEY`，删掉那一行。
 - 本地联调：复制 `miniprogram/config.example.js` 为 `config.js`（已 gitignore）改 `API_BASE`，不要改 `app.js` 里的线上地址。`config.js` 只在开发版生效，体验版和正式版即使打包进去也用线上地址。
 - 接口出错（服务器 5xx、被拒绝、断网）时页面提示具体原因，不会显示成「暂无数据」。
-- 接口仍是 `http://服务器IP`：正式发布的小程序要求 HTTPS 域名并在小程序后台登记，所以目前只能用开发版 / 体验版并打开「开发调试」（不校验合法域名）。改完要在微信开发者工具里重新上传。
+- 接口地址是 `https://monitor.chenranorchenfei.asia`（`app.js` 里的 `API_BASE`），要在小程序后台「开发管理 → 开发设置 → 服务器域名」登记为 request 合法域名；登记后体验版不用再打开「开发调试」，也可以提交审核正式发布。改完要在微信开发者工具里重新上传。
+- 旧版小程序的接口是 `http://服务器IP`，服务器现在把 IP 访问一律跳转到 HTTPS 域名，旧版已经连不上，同事需要用重新上传后的新版。
 
 ## 操作日志
 
@@ -185,7 +186,7 @@ python scripts/decrypt_accounts.py --out config/accounts.yaml   # 导出明文�
 `GET /health` 返回 JSON：版本（来自服务器上的 `RELEASE`）、控制台启动时间、最近一轮巡检、
 上次成功巡检距今小时数、各状态计数、磁盘用量，以及 `checks[]` 逐项结论。
 
-- **它是免鉴权的公开端点**（服务器只有 IP、nginx 只开 80 明文），所以响应里只有计数、时间、
+- **它是免鉴权的公开端点**（任何人知道域名或 IP 都能访问），所以响应里只有计数、时间、
   状态码和阈值，**绝不能往里加企业名、用户名、错误原文或文件路径**——有测试专门拦这件事。
 - 不带参数永远返回 200（方便直接 curl 读 JSON）；`?strict=1` 才会在任一检查不通过时返回 503。
 - degraded 不等于部署失败：`deploy.sh` 收到 503 会打印 JSON 并警告，仍算部署成功。
@@ -251,7 +252,8 @@ cdn.tailwindcss.com 和 unpkg 现场拉 Tailwind 与 htmx，外网一抖整站�
 - **手机端**：900px 以下侧边栏折叠成抽屉，表格在卡片内横向滚动，次要列（行业、申请时间）在
   640px 以下隐藏；顶栏的全局搜索框直接跳到「登记记录」页按关键字过滤。
 - **手机桌面图标**：`manifest.webmanifest` 加三枚 PNG 图标，手机浏览器「添加到主屏幕」后有正式
-  图标和名称。服务器只有 IP、走明文 HTTP，所以没有 Service Worker、Android 也不弹安装提示。
+  图标和名称。控制台没有 Service Worker（离线时没有可看的），所以 Android 不一定弹安装提示，
+  用浏览器菜单里的「添加到主屏幕」即可。
   图标从 `web/static/app-icon.svg` 渲染，改了图形后用本机 Playwright 重新生成：
 
   ```bash
@@ -331,7 +333,20 @@ python run_daemon.py
 python run_web.py
 ```
 
-浏览器访问 `http://127.0.0.1:8000`，先用 `.env` 的 `WEB_USER` / `WEB_PASS`（备用管理员）登录，到「用户」页给自己和同事建个人账号。
+浏览器访问 `http://127.0.0.1:8000`（线上是 `https://monitor.chenranorchenfei.asia`），先用 `.env` 的 `WEB_USER` / `WEB_PASS`（备用管理员）登录，到「用户」页给自己和同事建个人账号。
+
+## 访问地址与 HTTPS
+
+控制台和小程序接口都走 `https://monitor.chenranorchenfei.asia`。TLS 由服务器上的 nginx 终止，证书是 certbot 签的
+Let's Encrypt（90 天，`certbot.timer` 自动续期），应用仍只监听 `127.0.0.1:8000`。
+
+- nginx 配置只在服务器上，不在仓库里：`/etc/nginx/conf.d/zjip-monitor-domain.conf` 是域名站点（443，
+  带 HSTS），`/etc/nginx/sites-available/zjip-monitor` 是 80 端口的默认站点，把用 IP 或其它主机名
+  访问的请求 301 跳转到域名。
+- 浏览器经 HTTPS 访问时，登录 cookie 带 `Secure`：有人手动输入 `http://` 时，cookie 不会在跳转前明文发出。
+  这依赖 nginx 传 `X-Forwarded-Proto`，uvicorn 默认只信任来自 `127.0.0.1` 的这个头。
+- `/api/*` 的响应一律 `Cache-Control: no-store`，以后在前面加 CDN 也不会把凭证或某人的企业列表缓存给别人。
+- 本地 `python run_web.py` 仍是明文 HTTP，cookie 不带 `Secure`，照常能登录。
 
 ## 部署到服务器
 

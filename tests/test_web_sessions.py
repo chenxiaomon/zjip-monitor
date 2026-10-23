@@ -178,3 +178,21 @@ def test_startup_imports_web_users_once(_isolated_users, monkeypatch):
     monkeypatch.setenv("WEB_USERS", "legacy:old-pass:group_a")
     asyncio.run(web_app._migrate_users())
     assert auth.authenticate("legacy", "old-pass") == ("legacy", "ok")
+
+
+@pytest.mark.parametrize("base_url,secure", [("https://testserver", True), ("http://testserver", False)])
+def test_the_session_cookie_is_secure_behind_https(base_url, secure):
+    """nginx terminates TLS and passes X-Forwarded-Proto, which uvicorn turns
+    into the request scheme; plain-HTTP local runs must still get a cookie
+    their browser sends back."""
+    from fastapi.testclient import TestClient
+
+    from web.app import app
+
+    client = TestClient(app, base_url=base_url)
+    login = client.post("/login", data={"username": OPERATOR_A[0], "password": OPERATOR_A[1]},
+                        follow_redirects=False)
+    assert login.status_code == 303
+    assert ("secure" in login.headers["set-cookie"].lower()) is secure
+    logout = client.post("/logout", follow_redirects=False)
+    assert ("secure" in logout.headers["set-cookie"].lower()) is secure

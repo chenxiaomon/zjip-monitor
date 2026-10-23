@@ -153,3 +153,15 @@ def test_failed_api_logins_mask_unknown_names(web_client, _isolated_audit):
     (entry,) = _audit(_isolated_audit)
     assert entry["action"] == "auth.login_failed" and entry["detail"] == {"via": "api"}
     assert "Sentinel-Typed-Password" not in json.dumps(entry)
+
+
+def test_api_answers_are_never_cached(web_client, two_companies):
+    """Tokens and per-person company lists: nothing in front may keep them."""
+    login = _login(web_client, *OPERATOR_A)
+    token = login.json()["token"]
+    answers = [login,
+               web_client.get("/api/status", headers=_bearer(token)),
+               web_client.get("/api/records", headers=_bearer(token)),
+               web_client.get("/api/status", headers=_bearer("garbage"))]
+    assert [r.status_code for r in answers] == [200, 200, 200, 401]
+    assert all(r.headers.get("cache-control") == "no-store" for r in answers)

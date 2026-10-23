@@ -202,14 +202,25 @@ def user_from_api_token(token: str | None) -> dict | None:
     return _file_user(users.normalize_username(username), rec, "api")
 
 
-def set_session_cookie(response, username: str) -> None:
+def is_https(request) -> bool:
+    """True when the browser reached us over HTTPS. nginx terminates TLS and
+    sends X-Forwarded-Proto; uvicorn trusts it from 127.0.0.1 by default."""
+    return request.url.scheme == "https"
+
+
+def set_session_cookie(response, username: str, *, secure: bool = False) -> None:
     """Sign `username` in on `response` (login, and after changing one's own
-    password — which rotated the key every older cookie was signed with)."""
+    password — which rotated the key every older cookie was signed with).
+
+    `secure` (pass is_https(request)): someone typing http:// would otherwise
+    send the cookie in clear on the request nginx then redirects to HTTPS.
+    Plain-HTTP local runs and tests keep a cookie the browser sends back."""
     response.set_cookie(
         COOKIE_NAME,
         make_cookie(username),
         max_age=SESSION_MAX_AGE,
         httponly=True,
+        secure=secure,
         samesite="lax",
         path="/",
     )

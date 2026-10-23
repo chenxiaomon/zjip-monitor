@@ -5,7 +5,7 @@
   </view>
 
   <block wx:else>
-    <view class="summary">共 {{total}} 条记录（2026 年）</view>
+    <view class="summary">共 {{total}} 条记录</view>
 
     <view
       wx:for="{{records}}"

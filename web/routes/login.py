@@ -87,7 +87,7 @@ async def login_submit(
     login_guard.record_success(ip, username)
     audit_log.record_request(request, "auth.login", as_user=auth.lookup(matched))
     response = RedirectResponse(url="/", status_code=303)
-    auth.set_session_cookie(response, matched)
+    auth.set_session_cookie(response, matched, secure=auth.is_https(request))
     return response
 
 
@@ -103,5 +103,5 @@ def logout(request: Request) -> RedirectResponse:
     if user is not None:
         audit_log.record_request(request, "auth.logout", as_user=user)
     response = RedirectResponse(url="/login", status_code=303)
-    response.delete_cookie(COOKIE_NAME, path="/")
+    response.delete_cookie(COOKIE_NAME, path="/", secure=auth.is_https(request))
     return response
