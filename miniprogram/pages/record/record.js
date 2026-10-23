@@ -1,4 +1,5 @@
 const app = getApp()
+const { decode } = require('../../utils/url')
 
 function pill(code) {
   return 'pill pill-' + (code || 'none')
@@ -12,8 +13,8 @@ Page({
   },
 
   onLoad(options) {
-    this._company = decodeURIComponent(options.company || '')
-    this._regNo = decodeURIComponent(options.reg_no || '')
+    this._company = decode(options.company)
+    this._regNo = decode(options.reg_no)
     this.fetch()
   },
 
@@ -71,6 +72,7 @@ Page({
     wx.setClipboardData({
       data: this.data.r.detail_url,
       success: () => wx.showToast({ title: '官网链接已复制', icon: 'success' }),
+      fail: () => wx.showToast({ title: '复制失败，请检查小程序的剪贴板权限', icon: 'none' }),
     })
   },
 })

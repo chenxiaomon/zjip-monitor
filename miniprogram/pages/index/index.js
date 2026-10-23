@@ -25,6 +25,7 @@ Page({
     years: [],
     yearOptions: ['全部年份'],
     yearIndex: 0, // 0 = 全部年份，其余对应 years[yearIndex - 1]
+    canAdd: false, // 管理员和经办人能新增企业
   },
 
   onLoad() {
@@ -36,14 +37,15 @@ Page({
     const u = auth.user || {}
     this.setData({ userLabel: u.display_name || u.username || '' })
     this.fetchStatus()
+    app.refreshMe(() => this.setData({ canAdd: app.globalData.can.add }))
   },
 
   // 打开小程序、从后台切回来、从别的页面返回都会走这里
   onShow() {
     if (!app.globalData.auth) return
-    // 在别的标签页切换了「我负责的 / 全部」，或者数据放久了
+    // 在别的标签页切换了「我负责的 / 全部」、新增了企业、巡检完了，或者数据放久了
     if (this._fetchedAt !== undefined &&
-        (this._scopeVersion !== app.globalData.scopeVersion || Date.now() - this._fetchedAt > STALE_MS)) {
+        (this._viewVersion !== app.globalData.viewVersion || Date.now() - this._fetchedAt > STALE_MS)) {
       this.fetchStatus()
     }
     this.checkNewChanges()
@@ -62,7 +64,7 @@ Page({
   },
 
   fetchStatus(done) {
-    this._scopeVersion = app.globalData.scopeVersion
+    this._viewVersion = app.globalData.viewVersion
     this._fetchedAt = Date.now()
     const year = this.data.yearIndex > 0 ? this.data.years[this.data.yearIndex - 1] : null
     app.get('/api/status', { year: year }, {
@@ -74,6 +76,13 @@ Page({
           pills: this._buildPills(acc.status_counts, d.status_labels),
         }))
         const years = d.years || []
+        if (year && years.indexOf(year) < 0) {
+          // 选的年份在新范围里没有记录（比如切到「我负责的」）：回到全部年份重新拉，
+          // 免得选择器写着「全部年份」、数字却是按那一年筛的
+          this.setData({ years, yearIndex: 0 })
+          this.fetchStatus(done)
+          return
+        }
         this.setData({
           loading: false,
           totalRecords: d.total_records,
@@ -108,7 +117,9 @@ Page({
       }))
   },
 
+  // 先把高亮挪过去，不等数据回来——否则回来前再点一次会被当成没切换
   onScopeChange() {
+    this.setData({ scope: app.scopeView() })
     this.fetchStatus()
   },
 
@@ -167,6 +178,10 @@ Page({
 
   onTapTodo() {
     wx.switchTab({ url: '/pages/todo/todo' })
+  },
+
+  onAdd() {
+    wx.navigateTo({ url: '/pages/account-new/account-new' })
   },
 
   // 看这家企业的全部记录（不受「我负责的」影响），年份跟着概览走

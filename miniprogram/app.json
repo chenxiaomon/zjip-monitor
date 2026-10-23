@@ -5,6 +5,7 @@
     "pages/changes/changes",
     "pages/records/records",
     "pages/record/record",
+    "pages/account-new/account-new",
     "pages/login/login"
   ],
   "window": {

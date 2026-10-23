@@ -21,7 +21,7 @@ Page({
 
   onShow() {
     if (!app.globalData.auth || this._fetchedAt === undefined) return
-    if (this._scopeVersion !== app.globalData.scopeVersion || Date.now() - this._fetchedAt > STALE_MS) {
+    if (this._viewVersion !== app.globalData.viewVersion || Date.now() - this._fetchedAt > STALE_MS) {
       this.fetchChanges()
     } else {
       this.setData({ scope: app.scopeView() })
@@ -34,7 +34,7 @@ Page({
 
   // 最近 30 天，最新的在前；同一次巡检的几条共用 key，列表用序号区分
   fetchChanges(done) {
-    this._scopeVersion = app.globalData.scopeVersion
+    this._viewVersion = app.globalData.viewVersion
     this._fetchedAt = Date.now()
     app.get('/api/changes', null, {
       success: (res) => {
@@ -59,7 +59,9 @@ Page({
     })
   },
 
+  // 先把高亮挪过去，不等数据回来——否则回来前再点一次会被当成没切换
   onScopeChange() {
+    this.setData({ scope: app.scopeView() })
     this.fetchChanges()
   },
 

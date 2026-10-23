@@ -8,6 +8,7 @@ import threading
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -26,7 +27,9 @@ from src.main import run_all, run_single
 from web.auth import (
     can_edit_accounts, current_user, editable_account, is_admin, require_admin, visible_accounts,
 )
-from web.deps import executor as _executor, get_groups, group_label, spawn, templates, zjip_base_url
+from web.deps import (
+    executor as _executor, get_groups, group_label, owner_choices, spawn, templates, zjip_base_url,
+)
 from web.services import audit_log, users
 from web.services.run_state import run_state_ctx
 from web.services.session import _SESSIONS_DIR, _safe_name, get_session, token_status
@@ -116,6 +119,30 @@ def _my_groups(request: Request) -> set[str]:
 # A colleague must not learn which other companies or platform accounts the
 # system holds: a clash with someone else's is reported without naming it.
 _TAKEN_ELSEWHERE = "该企业或平台账号已在系统中（可能由其他同事管理），请联系管理员"
+
+
+@dataclass(frozen=True)
+class ActionResult:
+    """What a company action came to. The console's routes turn it into
+    HTML, the mini program's (web/routes/api_accounts.py) into JSON — one
+    implementation, so the two can never drift apart. status 403 = this
+    caller may not do this at all; 404 = no such company among their own,
+    the same answer as for one that does not exist."""
+    ok: bool = True
+    status: int = 200
+    error: str = ""
+    acc: Account | None = None
+    retry_after: int = 0
+    already_running: bool = False
+    reg_no: str = ""
+
+
+_READ_ONLY = ActionResult(ok=False, status=403, error="只读账号不能操作企业")
+_NO_SUCH = ActionResult(ok=False, status=404, error="账号不存在")
+
+
+def platform_login_url() -> str:
+    return f"{zjip_base_url()}/user/login"
 
 
 def _bump_verify_seq(username: str) -> int:
@@ -341,27 +368,25 @@ def token_status_poll(request: Request, username: str) -> HTMLResponse:
     )
 
 
-@router.post("/accounts/{username}/scan", response_class=HTMLResponse)
-async def scan_account(request: Request, username: str) -> HTMLResponse:
-    # A single-account scan takes the GLOBAL run lock and one of the two shared
-    # workers, so 经办人 (their own groups' companies only) get one per
-    # account per window; 只读 users none. Admins are not limited.
+async def start_scan(request: Request, username: str) -> ActionResult:
+    """立即巡检 of one company. A single-account scan takes the GLOBAL run
+    lock and one of the two shared workers, so 经办人 (their own groups'
+    companies only) get one per account per window; 只读 users none. Admins
+    are not limited. Async because it starts the scan on the running loop."""
     if not can_edit_accounts(request):
-        require_admin(request)
+        return _READ_ONLY
     acc = editable_account(request, username)
     if acc is None:
-        return _row_error_on(request, username)
+        audit_log.nothing_changed(request)
+        return _NO_SUCH
 
     if not is_admin(request) and _scan_tasks.get(username) != "running":
         left = _scan_cooldown_left(username)
         if left:
             audit_log.record_request(request, "account.scan", company=acc.company, target=username,
                                      ok=False, detail={"error": "过于频繁"})
-            return templates.TemplateResponse(
-                request, "_partials/account_row.html",
-                {"row": _row(acc, task={"status": "error",
-                                        "msg": f"手动巡检过于频繁，请 {left // 60 + 1} 分钟后再试"})},
-            )
+            return ActionResult(ok=False, status=429, acc=acc, retry_after=left,
+                                error=f"手动巡检过于频繁，请 {left // 60 + 1} 分钟后再试")
         _last_scan[username] = time.monotonic()
 
     already = _scan_tasks.get(username) == "running"
@@ -370,9 +395,30 @@ async def scan_account(request: Request, username: str) -> HTMLResponse:
         spawn(_scan_one_async(username, acc))
     audit_log.record_request(request, "account.scan", company=acc.company, target=username,
                              detail={"already_running": True} if already else None)
+    return ActionResult(acc=acc, already_running=already)
 
+
+def scan_wait(request: Request, username: str) -> int:
+    """Seconds until this caller may start 立即巡检 on `username` again (0 = now)."""
+    if is_admin(request) or _scan_tasks.get(username) == "running":
+        return 0
+    return _scan_cooldown_left(username)
+
+
+@router.post("/accounts/{username}/scan", response_class=HTMLResponse)
+async def scan_account(request: Request, username: str) -> HTMLResponse:
+    result = await start_scan(request, username)
+    if result.status == 403:
+        require_admin(request)
+    if result.status == 404:
+        return _row_error(username)
+    if result.status == 429:
+        return templates.TemplateResponse(
+            request, "_partials/account_row.html",
+            {"row": _row(result.acc, task={"status": "error", "msg": result.error})},
+        )
     return templates.TemplateResponse(
-        request, "_partials/account_row.html", {"row": _row(acc, scan_task="running")}
+        request, "_partials/account_row.html", {"row": _row(result.acc, scan_task="running")}
     )
 
 
@@ -427,6 +473,22 @@ def run_once_status(request: Request) -> HTMLResponse:
 # Account CRUD
 # ---------------------------------------------------------------------------
 
+def add_form_options(request: Request) -> dict:
+    """The 新增 dialog's choices: the groups this caller may add to (admins
+    also 未分组), who may be 负责人 in each, and the defaults — a 经办人's
+    own first group, with themselves as 负责人."""
+    admin = is_admin(request)
+    mine = _my_groups(request)
+    keys = ([""] if admin else []) + [k for k in get_groups() if admin or k in mine]
+    first = sorted(mine)
+    return {
+        "groups": keys,
+        "owners": {k: owner_choices(k) for k in keys},
+        "default_group": "" if admin else (first[0] if first else ""),
+        "default_owner": "" if admin else (current_user(request) or {}).get("username", ""),
+    }
+
+
 @router.get("/accounts/new-form", response_class=HTMLResponse)
 def new_account_form(request: Request) -> HTMLResponse:
     """经办人 add companies to their own groups, owned by themselves by default."""
@@ -434,28 +496,23 @@ def new_account_form(request: Request) -> HTMLResponse:
         require_admin(request)
     form = None
     if not is_admin(request):
-        mine = sorted(_my_groups(request))
-        form = {"group": mine[0] if mine else "", "owner": (current_user(request) or {}).get("username", "")}
+        options = add_form_options(request)
+        form = {"group": options["default_group"], "owner": options["default_owner"]}
     return templates.TemplateResponse(
         request, "_partials/account_form.html", {"error": None, "mode": "add", "form": form}
     )
 
 
-@router.post("/accounts", response_class=HTMLResponse)
-async def add_account(
-    request: Request,
-    company: str = Form(...),
-    username: str = Form(...),
-    password: str = Form(...),
-    contact: str = Form(""),
-    group: str = Form(""),
-    owner: str = Form(""),
-) -> HTMLResponse:
+async def add_account_core(
+    request: Request, *, company: str, username: str, password: str,
+    contact: str = "", group: str = "", owner: str = "",
+) -> ActionResult:
     """New company account. 经办人 may add to their own groups only — a
     company they put 未分组 or into someone else's group would vanish from
-    their own sight the moment it was saved."""
+    their own sight the moment it was saved. Async because, once saved, it
+    starts the account's first login on the running loop."""
     if not can_edit_accounts(request):
-        require_admin(request)
+        return _READ_ONLY
     admin = is_admin(request)
     company = company.strip()
     username = username.strip()
@@ -464,16 +521,9 @@ async def add_account(
     group = group.strip()
     owner = users.normalize_username(owner)
 
-    def _err(error: str) -> HTMLResponse:
+    def _err(error: str) -> ActionResult:
         audit_log.nothing_changed(request)
-        return templates.TemplateResponse(
-            request,
-            "_partials/account_form.html",
-            {"error": error, "mode": "add",
-             "form": {"company": company, "username": username, "contact": contact, "group": group,
-                      "owner": owner}},
-            headers={"HX-Retarget": "#modal-container", "HX-Reswap": "innerHTML"},
-        )
+        return ActionResult(ok=False, status=400, error=error)
 
     if not company:
         return _err("公司名称不能为空")
@@ -506,10 +556,11 @@ async def add_account(
             # a duplicate (even one that only collides after sanitization)
             # would overwrite the other account's history.
             return _err(f"公司名称 {company} 与现有账号的公司重名（或脱敏后同名），历史数据按公司名称存储，请区分开")
-        accounts_list.append(Account(
+        acc = Account(
             company=company, username=username, password=password, contact=contact, group=group,
             owner=owner,
-        ))
+        )
+        accounts_list.append(acc)
         try:
             save_accounts(accounts_list)
         except ConfigError as exc:
@@ -522,7 +573,32 @@ async def add_account(
     _note_login(username)
     _tasks[username] = {"status": "pending", "msg": ""}
     spawn(_verify_async(username, password, company, seq=_bump_verify_seq(username)))
+    return ActionResult(acc=acc)
 
+
+@router.post("/accounts", response_class=HTMLResponse)
+async def add_account(
+    request: Request,
+    company: str = Form(...),
+    username: str = Form(...),
+    password: str = Form(...),
+    contact: str = Form(""),
+    group: str = Form(""),
+    owner: str = Form(""),
+) -> HTMLResponse:
+    result = await add_account_core(request, company=company, username=username, password=password,
+                                    contact=contact, group=group, owner=owner)
+    if result.status == 403:
+        require_admin(request)
+    if not result.ok:
+        return templates.TemplateResponse(
+            request,
+            "_partials/account_form.html",
+            {"error": result.error, "mode": "add",
+             "form": {"company": company.strip(), "username": username.strip(), "contact": contact.strip(),
+                      "group": group.strip(), "owner": users.normalize_username(owner)}},
+            headers={"HX-Retarget": "#modal-container", "HX-Reswap": "innerHTML"},
+        )
     # Success: clear modal and trigger tbody refresh
     response = HTMLResponse("")
     response.headers["HX-Trigger"] = "accountSaved"
@@ -803,33 +879,42 @@ def set_account_owner(request: Request, username: str, owner: str = Form("")) ->
 _REG_NO_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
-@router.post("/accounts/{username}/platform-access", response_class=HTMLResponse)
-def platform_access(
-    request: Request, username: str, reg_no: str = Form(""), inline: str = Form(""),
-) -> HTMLResponse:
-    """去平台办理: show a company's platform account and password so whoever
+def reveal_account(request: Request, username: str, reg_no: str = "") -> ActionResult:
+    """去平台办理: a company's platform account and password, so whoever
     handles it can sign in on zjip.org.cn and file there themselves.
 
     The system stays read-only towards the platform — submitting a filing is
     a person's act on the platform's own site. Showing the password is the
     disclosure, so it is logged here, every time (the copy button is client
     side). 经办人 for their own groups' companies, admins for any; 只读 users
-    never see a client's password. POST so no prefetch or history entry
-    carries it, and no-store so no cache keeps it.
+    never see a client's password. Callers answer by POST, so no prefetch or
+    history entry carries it, and no-store, so no cache keeps it.
     """
     if not can_edit_accounts(request):
-        require_admin(request)
+        return _READ_ONLY
     acc = editable_account(request, username)
     if acc is None:
-        return PlainTextResponse("账号不存在", status_code=404)
+        return _NO_SUCH
     reg_no = reg_no.strip() if _REG_NO_RE.match(reg_no.strip()) else ""
     audit_log.record_request(request, "account.reveal", company=acc.company, target=username,
                              detail={"reg_no": reg_no} if reg_no else None)
+    return ActionResult(acc=acc, reg_no=reg_no)
+
+
+@router.post("/accounts/{username}/platform-access", response_class=HTMLResponse)
+def platform_access(
+    request: Request, username: str, reg_no: str = Form(""), inline: str = Form(""),
+) -> HTMLResponse:
+    result = reveal_account(request, username, reg_no)
+    if result.status == 403:
+        require_admin(request)
+    if result.status == 404:
+        return PlainTextResponse("账号不存在", status_code=404)
     return templates.TemplateResponse(
         request,
         "_partials/platform_access.html",
-        {"acc": acc, "reg_no": reg_no, "modal": inline != "1",
-         "login_url": f"{zjip_base_url()}/user/login"},
+        {"acc": result.acc, "reg_no": result.reg_no, "modal": inline != "1",
+         "login_url": platform_login_url()},
         headers={"Cache-Control": "no-store"},
     )
 

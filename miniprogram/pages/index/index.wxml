@@ -50,7 +50,10 @@
     <!-- Account list -->
     <view class="section-head">
       <view class="section-title">账号状态</view>
-      <text class="changes-link" bindtap="onTapChanges">最近变化 ›</text>
+      <view>
+        <text wx:if="{{canAdd}}" class="changes-link" bindtap="onAdd">+ 新增企业</text>
+        <text class="changes-link" bindtap="onTapChanges">最近变化 ›</text>
+      </view>
     </view>
     <view
       wx:for="{{accounts}}"

@@ -1,0 +1,53 @@
+.page {
+  padding: 32rpx 24rpx;
+}
+
+.loading {
+  text-align: center;
+  padding: 80rpx 0;
+  color: #999;
+}
+
+.field {
+  background: #fff;
+  border-radius: 16rpx;
+  padding: 20rpx 28rpx;
+  margin-bottom: 16rpx;
+}
+
+.label {
+  display: block;
+  font-size: 24rpx;
+  color: #888;
+  margin-bottom: 8rpx;
+}
+
+.input,
+.picker {
+  font-size: 28rpx;
+  color: #222;
+  min-height: 48rpx;
+}
+
+.muted {
+  font-size: 24rpx;
+  color: #999;
+}
+
+.error {
+  font-size: 24rpx;
+  color: #b91c1c;
+  margin: 16rpx 4rpx;
+}
+
+.submit {
+  margin-top: 32rpx;
+}
+
+.hint {
+  display: block;
+  font-size: 22rpx;
+  color: #999;
+  margin-top: 24rpx;
+  line-height: 1.6;
+}

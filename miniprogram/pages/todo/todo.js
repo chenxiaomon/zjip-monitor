@@ -32,7 +32,7 @@ Page({
 
   onShow() {
     if (!app.globalData.auth || this._fetchedAt === undefined) return
-    if (this._scopeVersion !== app.globalData.scopeVersion || Date.now() - this._fetchedAt > STALE_MS) {
+    if (this._viewVersion !== app.globalData.viewVersion || Date.now() - this._fetchedAt > STALE_MS) {
       this.fetch()
     } else {
       this.setData({ scope: app.scopeView() })
@@ -44,12 +44,16 @@ Page({
   },
 
   fetch(done) {
-    this._scopeVersion = app.globalData.scopeVersion
+    this._viewVersion = app.globalData.viewVersion
     this._fetchedAt = Date.now()
     app.get('/api/deadlines', null, {
       success: (res) => {
         const d = res.data
-        const items = d.items || []
+        // 通知书上的日期读出来了却不是有效日期（比如 02-30）时，服务器算不出还剩几天：
+        // 当成日期未知，不排进日程（null >= 0 在 JS 里是 true）
+        const all = d.items || []
+        const items = all.filter(i => typeof i.days_left === 'number')
+        const unparsed = all.filter(i => typeof i.days_left !== 'number')
         const corrections = (d.corrections || []).map(withPill)
         this.setData({
           loading: false,
@@ -59,7 +63,7 @@ Page({
           nextRenewal: d.next_renewal || null,
           overdue: items.filter(i => i.days_left < 0).map(withPill),
           months: this._byMonth(items.filter(i => i.days_left >= 0)),
-          undated: (d.undated || []).map(withPill),
+          undated: (d.undated || []).concat(unparsed).map(withPill),
         })
         app.setTodoBadge(corrections.filter(c => c.urgency === 'overdue' || c.urgency === 'red').length)
       },
@@ -98,7 +102,9 @@ Page({
     return date.slice(5) + ' 周' + weekday + ' · ' + when
   },
 
+  // 先把高亮挪过去，不等数据回来——否则回来前再点一次会被当成没切换
   onScopeChange() {
+    this.setData({ scope: app.scopeView() })
     this.fetch()
   },
 

@@ -28,7 +28,9 @@ App({
     apiBase: API_BASE,
     auth: null, // { token, expires_at, user: { username, display_name, role, groups } }
     scope: 'mine',
-    scopeVersion: 0, // 每切换一次加一，标签页回到前台时据此判断要不要重新加载
+    // 切换了「我负责的 / 全部」或改了数据（新增企业、巡检完）就加一，
+    // 标签页回到前台时据此判断要不要重新加载
+    viewVersion: 0,
     scopeInfo: null, // { owned, visible }：接口最近一次告诉我们的企业数
     can: { add: false, scan: false, reveal: false },
   },
@@ -46,8 +48,11 @@ App({
     this.refreshMe()
   },
 
+  // 连上一个人能做什么、负责几家一起忘掉：下一个人的 /api/me 万一失败，也不会顶着上一个人的
   clearAuth() {
     this.globalData.auth = null
+    this.globalData.can = { add: false, scan: false, reveal: false }
+    this.globalData.scopeInfo = null
     wx.removeStorageSync(AUTH_KEY)
   },
 
@@ -66,8 +71,13 @@ App({
 
   setScope(scope) {
     this.globalData.scope = scope === 'all' ? 'all' : 'mine'
-    this.globalData.scopeVersion += 1
+    this.globalData.viewVersion += 1
     wx.setStorageSync(this._scopeKey(), this.globalData.scope)
+  },
+
+  // 数据变了：各标签页回到前台时重新加载
+  invalidate() {
+    this.globalData.viewVersion += 1
   },
 
   // 接口回来的 { owned, visible } 记下来，切换条用它显示数字
@@ -144,6 +154,17 @@ App({
   // GET，自动带上「我负责的 / 全部」；params 里给了 scope 就用给的
   get(path, params, options) {
     this.request(path + this.query({ scope: this.globalData.scope, ...(params || {}) }), options)
+  },
+
+  // POST 一个 JSON 对象（服务器只认 JSON）
+  post(path, body, options) {
+    const opts = options || {}
+    this.request(path, {
+      ...opts,
+      method: 'POST',
+      data: body || {},
+      header: { ...(opts.header || {}), 'content-type': 'application/json' },
+    })
   },
 
   query(params) {
