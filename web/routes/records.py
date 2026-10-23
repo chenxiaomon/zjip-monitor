@@ -107,6 +107,35 @@ def _sort_rows(rows: list[dict], sort: str) -> None:
         rows.sort(key=lambda r: str(r["name"] or ""))
 
 
+def record_matches(
+    acc,
+    r: dict,
+    statuses: frozenset[int] | set[int] | None = None,
+    start_ms: int | None = None,
+    end_ms: int | None = None,
+    needle: str = "",
+) -> bool:
+    """One record against the records page's filters. The mini program's
+    /api/records calls this too, so a search finds the same rows on both.
+    `needle` is the keyword already stripped and lower-cased."""
+    code = int_or_none(r.get("dataRegAuditStatus"))
+    if statuses and code not in statuses:
+        return False
+    apply_ms = int_or_none(r.get("dataRegApplyTime"))
+    if start_ms and apply_ms and apply_ms < start_ms:
+        return False
+    if end_ms and apply_ms and apply_ms > end_ms:
+        return False
+    if needle:
+        haystack = " ".join([
+            str(r.get("dataRegNo", "")), str(r.get("dataRegName", "")), acc.company, acc.username,
+            str(r.get("dataRegApplyName") or ""),
+        ]).lower()
+        if needle not in haystack:
+            return False
+    return True
+
+
 def _build_records(
     accounts: list,
     account_filter: str | None,
@@ -161,23 +190,11 @@ def _build_records(
             continue
 
         for r in snap.get("records", []):
+            if not record_matches(acc, r, status_filter, start_ms, end_ms, needle):
+                continue
             code = int_or_none(r.get("dataRegAuditStatus"))
-            if status_filter and code not in status_filter:
-                continue
-            apply_ms = int_or_none(r.get("dataRegApplyTime"))
-            if start_ms and apply_ms and apply_ms < start_ms:
-                continue
-            if end_ms and apply_ms and apply_ms > end_ms:
-                continue
             reg_no = r.get("dataRegNo", "")
             name = r.get("dataRegName", "")
-            if needle:
-                haystack = " ".join([
-                    str(reg_no), str(name), acc.company, acc.username,
-                    str(r.get("dataRegApplyName") or ""),
-                ]).lower()
-                if needle not in haystack:
-                    continue
             rows.append({
                 "company": acc.company,
                 "username": acc.username,
@@ -342,27 +359,39 @@ def _ms_to_datetime(ms) -> str:
         return "—"
 
 
-@router.get("/partials/record", response_class=HTMLResponse)
-def record_detail(request: Request, account: str | None = None, reg_no: str | None = None) -> Response:
-    """The detail drawer: one record of one visible account. Anything the
-    viewer may not see, or that no longer exists, is the same plain 404 —
-    the response never echoes the parameters back."""
+def find_visible_record(
+    request: Request, reg_no: str | None, *, username: str | None = None, company: str | None = None,
+) -> tuple | None:
+    """(account, snapshot, record) of one record the caller may see, or None.
+    The console names the account by its platform login, the mini program by
+    the company — the login never goes to the phone."""
     reg_no = (reg_no or "").strip()
-    acc = next((a for a in visible_accounts(request) if a.username == (account or "")), None)
-    snap = get_latest_snapshot(acc.company) if acc and reg_no else None
+    if not reg_no:
+        return None
+    acc = next(
+        (a for a in visible_accounts(request)
+         if (username is not None and a.username == username)
+         or (company is not None and a.company == company)),
+        None,
+    )
+    snap = get_latest_snapshot(acc.company) if acc else None
     record = next(
         (r for r in (snap or {}).get("records", []) if str(r.get("dataRegNo") or "") == reg_no),
         None,
     )
-    if record is None:
-        return Response("记录不存在或无权查看", status_code=404, media_type="text/plain; charset=utf-8")
-    code = int_or_none(record.get("dataRegAuditStatus"))
-    ctx = {
+    return (acc, snap, record) if record is not None else None
+
+
+def record_detail_data(request: Request, acc, snap: dict, record: dict) -> dict:
+    """Everything the detail drawer shows about one record — and what the
+    mini program's /api/record serializes, so the two never drift apart."""
+    reg_no = str(record.get("dataRegNo") or "")
+    return {
         "acc": acc,
         "r": record,
         "reg_no": reg_no,
         "name": str(record.get("dataRegName") or ""),
-        "status_code": code,
+        "status_code": int_or_none(record.get("dataRegAuditStatus")),
         "status_label": decode_status(record.get("dataRegAuditStatus")),
         "apply_date": _ms_to_date(int_or_none(record.get("dataRegApplyTime"))),
         "update_time": _ms_to_datetime(record.get("updateTime")),
@@ -375,8 +404,18 @@ def record_detail(request: Request, account: str | None = None, reg_no: str | No
             account=acc.username, accounts=allowed_usernames(request), since=_EPOCH, reg_no=reg_no,
         ),
         "snapshot_time": snap.get("snapshot_time"),
-        "AUDIT_STATUS": AUDIT_STATUS,
     }
+
+
+@router.get("/partials/record", response_class=HTMLResponse)
+def record_detail(request: Request, account: str | None = None, reg_no: str | None = None) -> Response:
+    """The detail drawer: one record of one visible account. Anything the
+    viewer may not see, or that no longer exists, is the same plain 404 —
+    the response never echoes the parameters back."""
+    found = find_visible_record(request, reg_no, username=account or "")
+    if found is None:
+        return Response("记录不存在或无权查看", status_code=404, media_type="text/plain; charset=utf-8")
+    ctx = {**record_detail_data(request, *found), "AUDIT_STATUS": AUDIT_STATUS}
     return templates.TemplateResponse(request, "_partials/record_drawer.html", ctx)
 
 

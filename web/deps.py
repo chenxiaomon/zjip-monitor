@@ -296,8 +296,38 @@ def due_label(days_left: int | None, deadline: str | None) -> str:
     return f"截止 {when} · 剩 {days_left} 天"
 
 
+def cert_label(days_left: int, valid_to: str) -> str:
+    """'2027-03-01 到期 · 剩 120 天' / '已过期 3 天，未续展'."""
+    if days_left < 0:
+        return f"已过期 {-days_left} 天，未续展"
+    return f"{valid_to} 到期 · 剩 {days_left} 天"
+
+
+# The page templates and the mini program's JSON use the same words, so
+# they live here rather than in a template.
+NOTICE_KIND_LABELS: dict[str, str] = {
+    "补正": "补正通知书", "公示": "公示通知书", "公告": "登记公告",
+    "不予登记": "不予登记通知书", "异议": "异议通知书",
+}
+
+# Why the last scan of an account did not succeed (src/status_store status).
+SCAN_KIND_LABELS: dict[str, str] = {
+    "partial": "部分抓取", "login_failed": "登录失败", "captcha_required": "需验证码",
+    "platform_error": "平台暂时不可用", "scrape_failed": "抓取失败",
+    "shrink_refused": "数量骤减·未保存",
+    "timeout": "巡检超时", "error": "巡检异常",
+}
+
+
+def scan_kind_label(status: str | None) -> str:
+    return SCAN_KIND_LABELS.get(status or "", "巡检失败")
+
+
 templates.env.globals["urgency_class"] = urgency_class
 templates.env.globals["due_label"] = due_label
+templates.env.globals["cert_label"] = cert_label
+templates.env.globals["NOTICE_KIND_LABELS"] = NOTICE_KIND_LABELS
+templates.env.globals["scan_kind_label"] = scan_kind_label
 templates.env.filters["fmt_time"] = _fmt_time
 templates.env.filters["fmt_time_short"] = _fmt_time_short
 templates.env.filters["fmt_datetime"] = _fmt_datetime

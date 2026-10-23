@@ -32,7 +32,7 @@ import time
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Query, Request
 from loguru import logger
 
 from src.config_loader import Account, ConfigError, load_accounts
@@ -284,8 +284,9 @@ def require_admin(request: Request) -> None:
 
 def can_edit_accounts(request: Request) -> bool:
     """Admins and 经办人 may change a visible company's platform password and
-    contact, and run 测试登录 for it. Adding, deleting, regrouping and
-    scanning stay admin-only."""
+    contact, run 测试登录 and 立即巡检, reveal its platform login (去平台办理),
+    and add or delete companies in their own groups. Regrouping, 负责人 and
+    the full scan stay admin-only."""
     user = current_user(request)
     return user is not None and user.get("role") in ("admin", "operator")
 
@@ -322,9 +323,24 @@ def visible_accounts(request: Request) -> list[Account]:
 # ---------------------------------------------------------------------------
 # Colleagues split the work by client: whoever is a company's 负责人 sees
 # 「我负责的」by default on the dashboard, calendar, records and changes, and
-# can switch to everything they may see. The choice lives in a cookie. Rights
-# (editing, attachments, the record drawer) keep using visible_accounts().
+# can switch to everything they may see. The console keeps the choice in a
+# cookie; the mini program sends it on every call (?scope=, use_query_scope).
+# Rights (editing, attachments, the record drawer) keep using visible_accounts().
 SCOPE_COOKIE = "zjip_scope"
+
+
+def use_query_scope(request: Request, scope: str | None = Query(None)) -> None:
+    """Router dependency of /api: ?scope=mine|all. Anything else — and every
+    build from before the switch, which sends nothing — means 全部, so an old
+    mini program keeps getting exactly what it always got."""
+    request.state.scope_pref = scope if scope in ("mine", "all") else "all"
+
+
+def _wants_mine(request: Request) -> bool:
+    pref = getattr(request.state, "scope_pref", None)
+    if pref is not None:
+        return pref == "mine"
+    return request.cookies.get(SCOPE_COOKIE) != "all"
 
 
 def view_scope(request: Request) -> dict:
@@ -336,7 +352,7 @@ def view_scope(request: Request) -> dict:
     visible = visible_accounts(request)
     me = (current_user(request) or {}).get("username")
     owned = [a for a in visible if me and a.owner == me]
-    mine = bool(owned) and request.cookies.get(SCOPE_COOKIE) != "all"
+    mine = bool(owned) and _wants_mine(request)
     scope = {"mine": mine, "owned": len(owned), "visible": len(visible),
              "accounts": owned if mine else visible}
     request.state.view_scope = scope
