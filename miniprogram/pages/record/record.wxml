@@ -1,0 +1,114 @@
+<view class="page">
+
+  <view wx:if="{{loading}}" class="loading">
+    <text>加载中...</text>
+  </view>
+
+  <view wx:elif="{{error}}" class="empty">{{error}}</view>
+
+  <block wx:else>
+    <!-- Header -->
+    <view class="card">
+      <view class="company-line">
+        <text class="company">{{r.company}}</text>
+        <text wx:if="{{r.mine}}" class="tag tag-mine">我负责</text>
+      </view>
+      <text class="title">{{r.name || '（未命名数据）'}}</text>
+      <view class="pills">
+        <text class="{{r.pillCls}}">{{r.status_label}}</text>
+        <text wx:if="{{r.due}}" class="{{r.dueCls}}">{{r.due.label}}</text>
+      </view>
+      <view class="reg-line">
+        <text class="reg-no">{{r.reg_no}}</text>
+        <text class="link" bindtap="onCopyLink">复制官网链接</text>
+      </view>
+    </view>
+
+    <!-- 概要 -->
+    <view class="card">
+      <text class="card-title">概要</text>
+      <view class="kv"><text class="k">申请时间</text><text class="v">{{r.apply_date}}</text></view>
+      <view class="kv"><text class="k">行业</text><text class="v">{{r.industry || '—'}}</text></view>
+      <view class="kv"><text class="k">数据类型</text><text class="v">{{r.data_type || '—'}}</text></view>
+      <view wx:if="{{r.applicant}}" class="kv"><text class="k">申请人</text><text class="v">{{r.applicant}}</text></view>
+      <view wx:if="{{r.owner}}" class="kv"><text class="k">负责人</text><text class="v">{{r.owner}}</text></view>
+      <view class="kv"><text class="k">平台更新</text><text class="v">{{r.update_time}}</text></view>
+      <view class="kv"><text class="k">快照时间</text><text class="v">{{r.snapshot_time}}</text></view>
+    </view>
+
+    <!-- 补正 -->
+    <view wx:if="{{r.due}}" class="card">
+      <text class="card-title">补正</text>
+      <text wx:if="{{r.due.deadline}}" class="p">截止 <text class="b">{{r.due.deadline}}</text><text wx:if="{{r.due.issued_on}}">，通知书落款 {{r.due.issued_on}}</text>。逾期未补正视为撤回登记申请。</text>
+      <text wx:else class="p muted">没能从补正通知书里读出截止日期，请打开通知书核对。</text>
+      <text wx:if="{{r.due.reasons}}" class="reasons">{{r.due.reasons}}</text>
+    </view>
+
+    <!-- 登记证书 -->
+    <view wx:if="{{r.cert}}" class="card">
+      <text class="card-title">登记证书</text>
+      <text class="p">有效期<text wx:if="{{r.cert.valid_from}}"> {{r.cert.valid_from}} </text>至 <text class="b">{{r.cert.valid_to}}</text>，<text wx:if="{{r.cert.expired}}" class="danger">已过期 {{r.cert.daysAgo}} 天</text><text wx:else>还剩 {{r.cert.days_left}} 天</text>。期满前 6 个月内可办理续展。</text>
+    </view>
+
+    <!-- 附件 -->
+    <view class="card">
+      <text class="card-title">附件</text>
+      <block wx:if="{{r.attachments.length > 0 || r.archived.length > 0}}">
+        <view
+          wx:for="{{r.attachments}}"
+          wx:key="name"
+          class="file"
+          bindtap="onOpenFile"
+          data-name="{{item.name}}"
+          data-ext="{{item.ext}}"
+        >
+          <text class="link">{{item.name}}</text>
+        </view>
+        <view wx:for="{{r.archived}}" wx:key="name" class="file archived" bindtap="onArchived">
+          <text>{{item.name}}</text>
+          <text class="xs">（已归档<text wx:if="{{item.archived_on}}"> · {{item.archived_on}}</text>）</text>
+        </view>
+      </block>
+      <text wx:else class="p muted">还没有下载到通知书或证书</text>
+    </view>
+
+    <!-- 通知书要点 -->
+    <view wx:if="{{r.notices.length > 0}}" class="card">
+      <text class="card-title">通知书要点</text>
+      <view wx:for="{{r.notices}}" wx:key="i" class="notice {{index > 0 ? 'sep' : ''}}">
+        <view class="notice-head">
+          <text class="pill {{item.current ? 'pill-current' : 'pill-none'}}">{{item.kind_label}}<text wx:if="{{!item.current}}"> · 历史</text></text>
+          <text wx:if="{{item.issued_on}}" class="xs">落款 {{item.issued_on}}</text>
+          <text wx:if="{{item.deadline}}" class="xs">截止 {{item.deadline}}</text>
+          <text wx:if="{{item.valid_to}}" class="xs">有效期至 {{item.valid_to}}</text>
+        </view>
+        <block wx:if="{{item.reasons && !item.hideReasons}}">
+          <text class="link xs" bindtap="onToggleReasons" data-i="{{item.i}}">{{item.showReasons ? '收起要点' : '查看要点'}}</text>
+          <text wx:if="{{item.showReasons}}" class="reasons">{{item.reasons}}</text>
+        </block>
+      </view>
+    </view>
+
+    <!-- 状态历史 -->
+    <view class="card">
+      <text class="card-title">状态历史</text>
+      <view wx:for="{{r.history}}" wx:key="i" class="hist {{index > 0 ? 'sep' : ''}}">
+        <text class="hist-time">{{item.time}}</text>
+        <view class="hist-change">
+          <block wx:if="{{item.type === 'changed'}}">
+            <text class="{{item.oldCls}}">{{item.old_status}}</text>
+            <text class="to">→</text>
+            <text class="{{item.newCls}}">{{item.new_status}}</text>
+          </block>
+          <block wx:elif="{{item.type === 'added'}}">
+            <text class="pill u-normal">首次出现</text>
+            <text wx:if="{{item.new_status}}" class="{{item.newCls}}">{{item.new_status}}</text>
+          </block>
+          <text wx:else class="pill u-red">从平台列表消失</text>
+        </view>
+      </view>
+      <text wx:if="{{r.history.length === 0}}" class="p muted">开始监控以来没有状态变化（首轮巡检不记变化，记录从第一次变化开始）</text>
+    </view>
+  </block>
+
+</view>

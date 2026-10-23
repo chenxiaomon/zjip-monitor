@@ -1,5 +1,8 @@
 {
   "navigationBarTitleText": "最近变化",
   "enablePullDownRefresh": true,
-  "backgroundColor": "#f5f5f5"
+  "backgroundColor": "#f5f5f5",
+  "usingComponents": {
+    "scope-bar": "/components/scope-bar/scope-bar"
+  }
 }

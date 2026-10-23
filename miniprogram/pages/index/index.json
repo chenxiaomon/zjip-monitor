@@ -1,5 +1,8 @@
 {
-  "navigationBarTitleText": "登记状态",
+  "navigationBarTitleText": "概览",
   "enablePullDownRefresh": true,
-  "backgroundColor": "#f5f5f5"
+  "backgroundColor": "#f5f5f5",
+  "usingComponents": {
+    "scope-bar": "/components/scope-bar/scope-bar"
+  }
 }

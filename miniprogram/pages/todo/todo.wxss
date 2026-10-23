@@ -1,0 +1,109 @@
+.page {
+  padding: 24rpx;
+}
+
+.loading {
+  text-align: center;
+  padding: 80rpx 0;
+  color: #999;
+}
+
+.section-title {
+  font-size: 26rpx;
+  font-weight: 500;
+  color: #444;
+  margin: 24rpx 0 4rpx;
+}
+
+.section-title.danger {
+  color: #b91c1c;
+}
+
+.section-sub {
+  display: block;
+  font-size: 22rpx;
+  color: #999;
+  margin-bottom: 16rpx;
+}
+
+/* One deadline; the left rail is its urgency */
+.item {
+  background: #fff;
+  border-radius: 16rpx;
+  padding: 24rpx 28rpx;
+  margin-bottom: 16rpx;
+  border-left: 8rpx solid #e5e5e5;
+}
+
+.rail-overdue { border-left-color: #b91c1c; }
+.rail-red     { border-left-color: #ef4444; }
+.rail-amber   { border-left-color: #f59e0b; }
+.rail-normal  { border-left-color: #22c55e; }
+.rail-unknown { border-left-color: #d4d4d4; }
+
+.item-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.kind {
+  font-size: 22rpx;
+  color: #888;
+  margin-right: 12rpx;
+}
+
+.item-title {
+  display: block;
+  font-size: 28rpx;
+  font-weight: 500;
+  color: #222;
+  margin: 8rpx 0;
+}
+
+.item-sum {
+  display: block;
+  font-size: 24rpx;
+  color: #666;
+  margin-bottom: 8rpx;
+}
+
+.item-meta {
+  display: flex;
+  align-items: center;
+}
+
+.reg-no {
+  font-family: monospace;
+  font-size: 22rpx;
+  color: #bbb;
+  margin-right: 12rpx;
+}
+
+.day {
+  margin-bottom: 8rpx;
+}
+
+.day-title {
+  display: block;
+  font-size: 24rpx;
+  color: #888;
+  margin: 12rpx 0 8rpx;
+}
+
+.empty-sm {
+  font-size: 24rpx;
+  color: #bbb;
+  padding: 24rpx 0 8rpx;
+}
+
+.next {
+  display: block;
+  margin-top: 8rpx;
+}
+
+.empty {
+  text-align: center;
+  color: #bbb;
+  padding: 80rpx 0;
+}

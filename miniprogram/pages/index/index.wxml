@@ -6,6 +6,17 @@
     <text class="logout" bindtap="onLogout">退出</text>
   </view>
 
+  <!-- 我负责的 / 全部 -->
+  <scope-bar scope="{{scope}}" bind:change="onScopeChange" />
+
+  <!-- Search (opens the records page) and year -->
+  <view class="toolbar">
+    <input class="search" confirm-type="search" placeholder="搜索登记号、数据名称、企业" bindconfirm="onSearch" />
+    <picker wx:if="{{years.length > 0}}" range="{{yearOptions}}" value="{{yearIndex}}" bindchange="onYear">
+      <view class="year">{{yearOptions[yearIndex]}} ▾</view>
+    </picker>
+  </view>
+
   <!-- Loading -->
   <view wx:if="{{loading}}" class="loading">
     <text>加载中...</text>
@@ -28,6 +39,14 @@
       </view>
     </view>
 
+    <!-- 待办 summary: opens the 待办 tab -->
+    <view wx:if="{{todo && (todo.corrections > 0 || todo.renewals > 0)}}" class="todo-card" bindtap="onTapTodo">
+      <text class="todo-title">待办</text>
+      <text wx:if="{{todo.corrections > 0}}" class="todo-line">待补正 {{todo.corrections}} 件<text wx:if="{{todo.urgent > 0}}" class="urgent">，其中 {{todo.urgent}} 件已逾期或 3 天内到期</text></text>
+      <text wx:if="{{todo.renewals > 0}}" class="todo-line">证书可续展 {{todo.renewals}} 张</text>
+      <text class="arrow">›</text>
+    </view>
+
     <!-- Account list -->
     <view class="section-head">
       <view class="section-title">账号状态</view>
@@ -43,9 +62,16 @@
       <!-- Dot -->
       <view class="dot dot-{{item.dot}}"></view>
 
-      <!-- Company name; 我负责 marks the companies this colleague follows up -->
       <text class="company-name">{{item.company}}</text>
-      <text wx:if="{{item.mine}}" class="mine-tag">我负责</text>
+
+      <!-- 我负责 marks the companies this colleague follows up; then the scan's health -->
+      <view class="tags" wx:if="{{item.mine || item.scan_failed || item.scan_partial || item.stale}}">
+        <text wx:if="{{item.mine}}" class="tag tag-mine">我负责</text>
+        <text wx:if="{{item.scan_failed}}" class="tag tag-danger">上次巡检失败 · {{item.scan_label}}</text>
+        <text wx:elif="{{item.scan_partial}}" class="tag tag-warn">{{item.scan_label}}</text>
+        <text wx:elif="{{item.stale}}" class="tag tag-muted">数据可能过期</text>
+      </view>
+      <text wx:if="{{item.scan_error}}" class="scan-error">{{item.scan_error}}</text>
 
       <!-- Status pills -->
       <view class="pills" wx:if="{{item.pills.length > 0}}">
@@ -58,14 +84,26 @@
       </view>
       <text wx:else class="no-data">暂无数据</text>
 
-      <!-- Last check -->
-      <text class="last-check">最后巡检：{{item.last_check}}</text>
+      <!-- Last successful scan (falls back to the snapshot time) -->
+      <text class="last-check">最后巡检：{{item.last_success || item.last_check}}</text>
 
       <!-- Arrow -->
       <text class="arrow">›</text>
     </view>
 
-    <view wx:if="{{accounts.length === 0}}" class="empty">暂无账号数据</view>
+    <view wx:if="{{accounts.length === 0 && unscanned.length === 0}}" class="empty">暂无账号数据</view>
+
+    <!-- Companies not scanned yet -->
+    <block wx:if="{{unscanned.length > 0}}">
+      <view class="section-title">等待首次巡检</view>
+      <view wx:for="{{unscanned}}" wx:key="company" class="account-card unscanned">
+        <text class="company-name">{{item.company}}</text>
+        <view class="tags">
+          <text wx:if="{{item.mine}}" class="tag tag-mine">我负责</text>
+          <text class="tag tag-muted">还没有巡检结果</text>
+        </view>
+      </view>
+    </block>
   </block>
 
 </view>

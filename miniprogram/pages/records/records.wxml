@@ -1,5 +1,30 @@
 <view class="page">
 
+  <!-- 我负责的 / 全部: only when searching across companies -->
+  <scope-bar wx:if="{{!company}}" scope="{{scope}}" bind:change="onScopeChange" />
+
+  <input
+    class="search"
+    value="{{q}}"
+    confirm-type="search"
+    placeholder="{{company ? '在这家企业里搜索' : '搜索登记号、数据名称、企业'}}"
+    bindconfirm="onSearch"
+  />
+
+  <scroll-view scroll-x class="chips">
+    <text
+      wx:for="{{groups}}"
+      wx:key="key"
+      class="chip {{status === item.key ? 'active' : ''}}"
+      data-key="{{item.key}}"
+      bindtap="onStatus"
+    >{{item.label}}</text>
+  </scroll-view>
+
+  <view wx:if="{{year}}" class="year-note">
+    只看 {{year}} 年申请的 · <text class="link" bindtap="onClearYear">看全部年份</text>
+  </view>
+
   <view wx:if="{{loading}}" class="loading">
     <text>加载中...</text>
   </view>
@@ -9,20 +34,30 @@
 
     <view
       wx:for="{{records}}"
-      wx:key="reg_no"
+      wx:key="key"
       class="record-card"
       bindtap="onTapRecord"
-      data-url="{{item.detail_url}}"
-      data-regno="{{item.reg_no}}"
+      data-company="{{item.company}}"
+      data-reg="{{item.reg_no}}"
     >
       <view class="record-header">
         <text class="reg-no">{{item.reg_no}}</text>
-        <text class="pill" style="{{item.pillStyle}}">{{item.status_label}}</text>
+        <text class="{{item.pillCls}}">{{item.status_label}}</text>
       </view>
       <text class="record-name">{{item.name || '—'}}</text>
-      <text class="apply-date">申请时间：{{item.apply_date}}</text>
+      <view wx:if="{{item.due || item.cert}}" class="record-pills">
+        <text wx:if="{{item.due}}" class="{{item.dueCls}}">{{item.due.label}}</text>
+        <text wx:if="{{item.cert}}" class="{{item.certCls}}">{{item.cert.label}}</text>
+      </view>
+      <view class="record-foot">
+        <text wx:if="{{!company}}" class="company">{{item.company}}</text>
+        <text wx:if="{{item.mine && !company}}" class="tag tag-mine">我负责</text>
+        <text class="apply-date">申请时间：{{item.apply_date}}</text>
+      </view>
     </view>
 
+    <view wx:if="{{loadingMore}}" class="more">加载中...</view>
+    <view wx:elif="{{records.length > 0 && page >= pages}}" class="more">没有更多了</view>
     <view wx:if="{{records.length === 0}}" class="empty">暂无记录</view>
   </block>
 

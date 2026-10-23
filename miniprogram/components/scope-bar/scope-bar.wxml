@@ -1,0 +1,4 @@
+<view wx:if="{{scope && scope.owned > 0}}" class="scope-bar">
+  <text class="chip {{scope.mine ? 'active' : ''}}" data-to="mine" bindtap="onPick">我负责的 {{scope.owned}}</text>
+  <text class="chip {{scope.mine ? '' : 'active'}}" data-to="all" bindtap="onPick">全部 {{scope.visible}}</text>
+</view>

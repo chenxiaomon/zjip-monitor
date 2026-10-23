@@ -1,5 +1,8 @@
 <view class="page">
 
+  <!-- 我负责的 / 全部 -->
+  <scope-bar scope="{{scope}}" bind:change="onScopeChange" />
+
   <view wx:if="{{loading}}" class="loading">
     <text>加载中...</text>
   </view>
@@ -14,7 +17,9 @@
       wx:key="id"
       class="change-card"
       bindtap="onTapRow"
-      data-url="{{item.detail_url}}"
+      data-company="{{item.company}}"
+      data-reg="{{item.reg_no}}"
+      data-type="{{item.type}}"
     >
       <view class="change-header">
         <text class="company">{{item.company}}</text>

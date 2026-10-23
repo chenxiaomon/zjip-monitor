@@ -1,0 +1,120 @@
+<view class="page">
+
+  <!-- 我负责的 / 全部 -->
+  <scope-bar scope="{{scope}}" bind:change="onScopeChange" />
+
+  <view class="chips">
+    <text class="chip {{view === 'todo' ? 'active' : ''}}" data-view="todo" bindtap="onView">待办</text>
+    <text class="chip {{view === 'agenda' ? 'active' : ''}}" data-view="agenda" bindtap="onView">日程</text>
+  </view>
+
+  <view wx:if="{{loading}}" class="loading">
+    <text>加载中...</text>
+  </view>
+
+  <!-- 待办: corrections by deadline, certificates inside the renewal window -->
+  <block wx:elif="{{view === 'todo'}}">
+    <view class="section-title">待补正 {{corrections.length}}</view>
+    <text class="section-sub">按截止日期 · 逾期视为撤回登记申请</text>
+    <view
+      wx:for="{{corrections}}"
+      wx:key="reg_no"
+      class="item rail-{{item.urgency}}"
+      bindtap="onTapItem"
+      data-company="{{item.company}}"
+      data-reg="{{item.reg_no}}"
+    >
+      <text class="{{item.cls}}">{{item.label}}</text>
+      <text class="item-title">{{item.company}} · {{item.name}}</text>
+      <text wx:if="{{item.summary}}" class="item-sum">{{item.summary}}</text>
+      <view class="item-meta">
+        <text class="reg-no">{{item.reg_no}}</text>
+        <text wx:if="{{item.mine}}" class="tag tag-mine">我负责</text>
+      </view>
+    </view>
+    <view wx:if="{{corrections.length === 0}}" class="empty-sm">没有待补正的申请</view>
+
+    <view class="section-title">可续展 {{renewals.length}}</view>
+    <text class="section-sub">证书期满前 6 个月内可办理续展</text>
+    <view
+      wx:for="{{renewals}}"
+      wx:key="reg_no"
+      class="item rail-{{item.urgency}}"
+      bindtap="onTapItem"
+      data-company="{{item.company}}"
+      data-reg="{{item.reg_no}}"
+    >
+      <text class="{{item.cls}}">{{item.label}}</text>
+      <text class="item-title">{{item.company}} · {{item.name}}</text>
+      <view class="item-meta">
+        <text class="reg-no">{{item.reg_no}}</text>
+        <text wx:if="{{item.mine}}" class="tag tag-mine">我负责</text>
+      </view>
+    </view>
+    <view wx:if="{{renewals.length === 0}}" class="empty-sm">
+      <text>180 天内没有到期的证书</text>
+      <text wx:if="{{nextRenewal}}" class="next">最近一张：{{nextRenewal.valid_to}} {{nextRenewal.company}} · {{nextRenewal.name}}</text>
+    </view>
+  </block>
+
+  <!-- 日程: every dated deadline, as the console's calendar -->
+  <block wx:else>
+    <block wx:if="{{overdue.length > 0}}">
+      <view class="section-title danger">已逾期 {{overdue.length}}</view>
+      <view
+        wx:for="{{overdue}}"
+        wx:key="reg_no"
+        class="item rail-overdue"
+        bindtap="onTapItem"
+        data-company="{{item.company}}"
+        data-reg="{{item.reg_no}}"
+      >
+        <view class="item-head">
+          <text class="kind">{{item.kindLabel}}</text>
+          <text class="{{item.cls}}">{{item.label}}</text>
+        </view>
+        <text class="item-title">{{item.company}} · {{item.name}}</text>
+      </view>
+    </block>
+
+    <block wx:for="{{months}}" wx:for-item="month" wx:key="key">
+      <view class="section-title">{{month.title}}</view>
+      <view wx:for="{{month.days}}" wx:for-item="day" wx:key="date" class="day">
+        <text class="day-title">{{day.title}}</text>
+        <view
+          wx:for="{{day.items}}"
+          wx:key="reg_no"
+          class="item rail-{{item.urgency}}"
+          bindtap="onTapItem"
+          data-company="{{item.company}}"
+          data-reg="{{item.reg_no}}"
+        >
+          <view class="item-head">
+            <text class="kind">{{item.kindLabel}}</text>
+            <text class="{{item.cls}}">{{item.label}}</text>
+          </view>
+          <text class="item-title">{{item.company}} · {{item.name}}</text>
+        </view>
+      </view>
+    </block>
+
+    <block wx:if="{{undated.length > 0}}">
+      <view class="section-title">截止日期未知 {{undated.length}}</view>
+      <text class="section-sub">没能从补正通知书里读出截止日期，请打开通知书核对</text>
+      <view
+        wx:for="{{undated}}"
+        wx:key="reg_no"
+        class="item rail-unknown"
+        bindtap="onTapItem"
+        data-company="{{item.company}}"
+        data-reg="{{item.reg_no}}"
+      >
+        <text class="item-title">{{item.company}} · {{item.name}}</text>
+        <text class="reg-no">{{item.reg_no}}</text>
+      </view>
+    </block>
+
+    <view wx:if="{{overdue.length === 0 && months.length === 0 && undated.length === 0}}" class="empty">没有带日期的期限</view>
+  </block>
+
+</view>

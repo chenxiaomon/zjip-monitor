@@ -1,8 +1,10 @@
 {
   "pages": [
     "pages/index/index",
-    "pages/records/records",
+    "pages/todo/todo",
     "pages/changes/changes",
+    "pages/records/records",
+    "pages/record/record",
     "pages/login/login"
   ],
   "window": {
@@ -10,6 +12,17 @@
     "navigationBarBackgroundColor": "#ffffff",
     "navigationBarTextStyle": "black",
     "backgroundColor": "#f5f5f5"
+  },
+  "tabBar": {
+    "color": "#888888",
+    "selectedColor": "#2563eb",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "black",
+    "list": [
+      { "pagePath": "pages/index/index", "text": "概览" },
+      { "pagePath": "pages/todo/todo", "text": "待办" },
+      { "pagePath": "pages/changes/changes", "text": "变更" }
+    ]
   },
   "style": "v2",
   "sitemapLocation": "sitemap.json"
