@@ -1,0 +1,48 @@
+<view class="page">
+
+  <view wx:if="{{loading}}" class="loading">
+    <text>加载中...</text>
+  </view>
+
+  <block wx:else>
+    <view class="summary">
+      最近 30 天共 {{total}} 条变化<text wx:if="{{total > rows.length}}">，显示最新 {{rows.length}} 条</text>
+    </view>
+
+    <view
+      wx:for="{{rows}}"
+      wx:key="id"
+      class="change-card"
+      bindtap="onTapRow"
+      data-url="{{item.detail_url}}"
+    >
+      <view class="change-header">
+        <text class="company">{{item.company}}</text>
+        <text wx:if="{{item.mine}}" class="mine-tag">我负责</text>
+        <text class="time">{{item.time}}</text>
+      </view>
+      <text class="record-name">{{item.name || item.reg_no}}</text>
+
+      <view class="change-line">
+        <block wx:if="{{item.type === 'changed'}}">
+          <text class="{{item.oldCls}}">{{item.old_status}}</text>
+          <text class="to">→</text>
+          <text class="{{item.newCls}}">{{item.new_status}}</text>
+        </block>
+        <block wx:elif="{{item.type === 'added'}}">
+          <text class="kind">新增登记</text>
+          <text class="{{item.newCls}}">{{item.new_status}}</text>
+        </block>
+        <block wx:else>
+          <text class="{{item.oldCls}}">{{item.old_status}}</text>
+          <text class="kind warn">记录消失，请核查</text>
+        </block>
+      </view>
+
+      <text class="reg-no">{{item.reg_no}}</text>
+    </view>
+
+    <view wx:if="{{rows.length === 0}}" class="empty">最近 30 天没有变化</view>
+  </block>
+
+</view>

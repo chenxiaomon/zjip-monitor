@@ -20,6 +20,7 @@ from web import auth, login_guard
 from web.auth import current_user, visible_accounts
 from web.deps import _fmt_time, account_dot, detail_url, in_year, int_or_none, owner_label
 from web.services import audit_log
+from web.services.events import read_change_rows
 from web.services.snapshot import get_latest_snapshot
 
 router = APIRouter(prefix="/api")
@@ -210,3 +211,60 @@ def api_records(
 
     rows.sort(key=lambda r: r["apply_date"], reverse=True)
     return JSONResponse({"records": rows, "total": len(rows)})
+
+
+# The mini program's 最近变化 list and its 「有新变化」 pop-up.
+CHANGES_DAYS = 30  # the console's 变更 page shows the same window
+CHANGES_LIMIT = 200
+# An event is stamped with its scan's fetch time but written only after the
+# snapshot is saved (and, for a single-company scan, after the push went
+# out), while scans run in parallel — so an event can reach the log stamped
+# earlier than one already there. A bookmark taken from the clock would step
+# over it; the phone asks again from an hour back and drops by `key` the
+# events it has already shown.
+CHANGES_OVERLAP = timedelta(hours=1)
+
+
+@router.get("/changes")
+def api_changes(request: Request, since: str | None = Query(None)) -> JSONResponse:
+    """Change rows, newest first: the last 30 days, or those stamped at or
+    after `since` — the previous answer's `next_since`."""
+    now = datetime.now(timezone.utc)
+    start = now - timedelta(days=CHANGES_DAYS)
+    if since:
+        try:
+            asked = datetime.fromisoformat(since)
+        except ValueError:
+            return JSONResponse({"error": "since 格式错误"}, status_code=400)
+        if asked.tzinfo is None:
+            asked = asked.replace(tzinfo=timezone.utc)
+        start = max(start, asked)
+
+    # visible_accounts(), as /api/status: changes of a deleted company go too.
+    visible = {a.username: a for a in visible_accounts(request)}
+    me = (current_user(request) or {}).get("username")
+    rows = read_change_rows(accounts=set(visible), since=start)
+    out = []
+    for r in rows[:CHANGES_LIMIT]:
+        acc = visible.get(r["account"])
+        reg_no = r["reg_no"]
+        out.append({
+            # One scan of one company; the platform login stays off the wire.
+            "key": f"{r['company']}|{r['timestamp']}",
+            "company": r["company"],
+            "time": _fmt_time(r["timestamp"]),
+            "type": r["type"],
+            "reg_no": reg_no,
+            "name": r["name"],
+            "old_status": r["old_status"],
+            "new_status": r["new_status"],
+            "old_status_code": int_or_none(r["old_status_code"]),
+            "new_status_code": int_or_none(r["new_status_code"]),
+            "mine": bool(me and acc is not None and acc.owner == me),
+            "detail_url": detail_url(reg_no) if reg_no else "",
+        })
+    return JSONResponse({
+        "rows": out,
+        "total": len(rows),
+        "next_since": (now - CHANGES_OVERLAP).isoformat(),
+    })

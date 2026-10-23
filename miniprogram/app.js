@@ -56,9 +56,12 @@ App({
       header: { ...(opts.header || {}), Authorization: 'Bearer ' + auth.token },
       success: (res) => {
         if (res.statusCode === 401) {
-          this.clearAuth()
-          wx.showToast({ title: '登录已失效，请重新登录', icon: 'none' })
-          this.toLogin()
+          // 首页同时发两个请求，只让第一个 401 处理，免得提示两遍、跳两次登录页
+          if (this.globalData.auth === auth) {
+            this.clearAuth()
+            wx.showToast({ title: '登录已失效，请重新登录', icon: 'none' })
+            this.toLogin()
+          }
           return
         }
         if (res.statusCode !== 200) {
