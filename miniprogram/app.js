@@ -1,7 +1,8 @@
 // 后端地址。本地联调别改这里（容易误提交上线）：复制 config.example.js 为 config.js
 // （已被 .gitignore 排除）改 API_BASE。只有开发版（开发者工具、真机预览）读它，
 // 体验版和正式版一律用线上地址，config.js 就算被打进上传包也不生效。
-let API_BASE = 'http://104.249.172.32'
+// 线上地址要在小程序后台「开发管理 → 开发设置 → 服务器域名」登记为 request 合法域名。
+let API_BASE = 'https://monitor.chenranorchenfei.asia'
 try {
   if (wx.getAccountInfoSync().miniProgram.envVersion === 'develop') {
     const config = require('./config')

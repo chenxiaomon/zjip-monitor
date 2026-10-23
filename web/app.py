@@ -291,6 +291,17 @@ async def _auth_middleware(request: Request, call_next) -> Response:  # type: ig
     return response
 
 
+@app.middleware("http")
+async def _api_no_store(request: Request, call_next) -> Response:
+    """Every /api answer is a token or one person's view of their companies:
+    no cache in front (a CDN one day) may keep it and hand it to someone else.
+    Registered after _auth_middleware, so it wraps it and covers its 401s too."""
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 # Python's table does not know the web-app manifest type on every platform.
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 app.mount("/static", StaticFiles(directory=_HERE / "static"), name="static")

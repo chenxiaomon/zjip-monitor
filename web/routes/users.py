@@ -459,5 +459,5 @@ def me_password_change(
     # The new key ended every session, this one included — sign it back in.
     request.state.user = dict(user, must_change_password=False)
     response = _me_page(request, saved=True)
-    auth.set_session_cookie(response, name)
+    auth.set_session_cookie(response, name, secure=auth.is_https(request))
     return response
