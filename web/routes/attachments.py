@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from typing import Callable
-from urllib.parse import quote
 
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from web.auth import allowed_company_keys, current_user
+from web.deps import attachment_disposition
 from web.services import audit_log
 from web.services.attachments_svc import _safe_name, attachment_path, download_name
 
@@ -43,12 +43,10 @@ def attachment_response(
     if audit_log.should_record_download(who, f"{_safe_name(company)}/{reg_no}/{path.name}"):
         audit_log.record_request(request, "data.attachment", company=company,
                                  target=f"{reg_no}/{path.name}")
-    # 双格式 Content-Disposition:filename= 放原始 UTF-8 字节(经 latin-1 转义通过
-    # 头部编码校验,线上字节仍是 UTF-8)供不认 filename* 的浏览器/WebView 兜底——
-    # 否则它们退回用 URL 最后一段,即磁盘上的旧类型名;现代浏览器优先取 filename*
-    utf8_fallback = name.encode("utf-8").decode("latin-1")
+    # 双格式 Content-Disposition（见 attachment_disposition）：不认 filename* 的
+    # 浏览器/WebView 否则会退回用 URL 最后一段，即磁盘上的旧类型名
     return FileResponse(path, headers={
-        "Content-Disposition": f'attachment; filename="{utf8_fallback}"; filename*=utf-8\'\'{quote(name)}',
+        "Content-Disposition": attachment_disposition(name),
         # 禁缓存:响应头里的下载名会随快照变化,不能让浏览器复用旧缓存头
         "Cache-Control": "no-store",
     })

@@ -129,6 +129,7 @@ ACTION_LABELS: dict[str, str] = {
     "report.delete": "删除报表",
     "data.attachment": "下载附件",
     "data.records_csv": "导出 CSV",
+    "data.records_ledger": "导出台账",
     "archive.release": "归档释放（删除服务器文件）",
     "archive.unarchive": "取消归档（文件送回服务器）",
     "http.unaudited": "未登记的写操作",

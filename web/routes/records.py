@@ -13,8 +13,8 @@ from fastapi.responses import HTMLResponse, Response
 from src import todo
 from src.scraper import AUDIT_STATUS, decode_status
 from web.auth import allowed_usernames, shown_accounts, visible_accounts
-from web.deps import STATUS_COLORS, int_or_none, templates
-from web.services import audit_log
+from web.deps import STATUS_COLORS, attachment_disposition, int_or_none, templates
+from web.services import audit_log, ledger
 from web.services.attachments_svc import archived_attachments, list_attachments
 from web.services.events import read_change_rows
 from web.services.snapshot import get_latest_snapshot
@@ -457,3 +457,29 @@ def records_csv(
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"},
     )
+
+
+@router.get("/records/ledger.xlsx")
+def records_ledger(request: Request, account: str | None = None) -> Response:
+    """一家企业的进度台账（xlsx）：全部登记记录和开始监控以来的状态变更，
+    不受登记记录页上状态、关键字等筛选的影响。看不到的企业、不存在的企业、
+    还没有巡检数据的企业，回答都一样。"""
+    acc = next((a for a in visible_accounts(request) if a.username == (account or "")), None)
+    snap = get_latest_snapshot(acc.company) if acc else None
+    if snap is None:
+        return Response("没有这家企业的巡检数据", status_code=404, media_type="text/plain; charset=utf-8")
+    records = snap.get("records", [])
+    changes = read_change_rows(account=acc.username, accounts=allowed_usernames(request), since=_EPOCH)
+    noticed = {
+        reg_no: sum(1 for n in todo.notices_of(acc.company, reg_no) if n["kind"] == "补正")
+        for r in records if (reg_no := str(r.get("dataRegNo") or ""))
+    }
+    body = ledger.build_ledger(acc.company, records, changes, corrections_noticed=noticed,
+                               as_of=snap.get("snapshot_time"))
+    audit_log.record_request(request, "data.records_ledger", company=acc.company, detail={
+        "rows": len(records), "changes": sum(1 for c in changes if c["type"] != "removed"),
+    })
+    name = ledger.filename(acc.company, datetime.now(_SHANGHAI_TZ).date())
+    return Response(body, media_type=ledger.MEDIA_TYPE, headers={
+        "Content-Disposition": attachment_disposition(name), "Cache-Control": "no-store",
+    })

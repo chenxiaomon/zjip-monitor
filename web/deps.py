@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Coroutine, Iterable
+from urllib.parse import quote
 import zlib
 
 from markupsafe import Markup
@@ -25,6 +26,17 @@ _HERE = Path(__file__).parent
 _SHANGHAI_TZ = timezone(timedelta(hours=8))
 
 templates = Jinja2Templates(directory=_HERE / "templates")
+
+
+def attachment_disposition(name: str) -> str:
+    """Content-Disposition for a download with a Chinese file name.
+
+    filename= carries the raw UTF-8 bytes (passed through as latin-1 so the
+    header encoder accepts them; on the wire they are still UTF-8) for
+    browsers and WebViews that ignore filename* — otherwise they fall back
+    to the URL's last segment. Modern browsers take filename*."""
+    utf8_fallback = name.encode("utf-8").decode("latin-1")
+    return f'attachment; filename="{utf8_fallback}"; filename*=utf-8\'\'{quote(name)}'
 
 # Single shared pool for all blocking work (scans, relogins, report runs).
 # One instance so lifespan shutdown can cancel queued work in one place.
