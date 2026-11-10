@@ -13,3 +13,5 @@ python-multipart>=0.0.9
 filelock>=3.13.0
 # 通知书 PDF 文字层解析（补正截止日期、证书有效期）；纯 Python
 pypdf>=4.0
+# 进度台账导出（xlsx，汇总公式带计算结果）；纯 Python
+xlsxwriter>=3.2

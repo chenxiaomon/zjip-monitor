@@ -8,7 +8,9 @@ colleagues "看不到我的内容".
 """
 
 import json
+import zipfile
 from datetime import datetime, timezone
+from io import BytesIO
 
 import pytest
 
@@ -78,6 +80,7 @@ PAGES = [
     "/me/password", "/scope?to=all&next=/", "/",
     f"/partials/record?account={OWNER_LOGIN}&reg_no=RBOSS1",
     f"/attachments/{OWNER_COMPANY}/RBOSS1/notice.pdf",
+    f"/records/ledger.xlsx?account={OWNER_LOGIN}",
 ]
 
 
@@ -96,6 +99,25 @@ def test_no_page_shows_the_owners_company(world, web_client, login_as, path):
     login_as(web_client, *OPERATOR_A)
     resp = web_client.get(path, follow_redirects=True)
     assert _leaks(resp.text) == [], (path, resp.status_code)
+
+
+def test_the_ledger_export_never_carries_the_owners_company(world, web_client, login_as, monkeypatch):
+    """The workbook is zipped, so the sweep's text check above cannot see
+    inside the colleague's own one; unzip it and look."""
+    from web.routes import records as records_routes
+
+    # TestClient cannot carry the UTF-8 file name header (see test_records_ledger)
+    monkeypatch.setattr(records_routes, "attachment_disposition", lambda name: "attachment")
+    login_as(web_client, *OPERATOR_A)
+    own = web_client.get("/records/ledger.xlsx?account=col-acct")
+    assert own.status_code == 200
+    with zipfile.ZipFile(BytesIO(own.content)) as z:
+        text = "".join(z.read(n).decode("utf-8") for n in z.namelist())
+    assert COLLEAGUE_COMPANY in text and _leaks(text) == []
+
+    owner = web_client.get(f"/records/ledger.xlsx?account={OWNER_LOGIN}")
+    missing = web_client.get("/records/ledger.xlsx?account=no-such-acct")
+    assert owner.status_code == missing.status_code == 404 and owner.text == missing.text
 
 
 @pytest.mark.parametrize("method,path,data", [
