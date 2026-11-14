@@ -12,6 +12,8 @@ Files are stored under data/attachments/{company}/{dataRegNo}/ with a .sync.json
 manifest per record recording the audit status at last sync; a record is re-synced
 only when its status changes or the platform has updated the record since (its
 updateTime), so each record costs one API round-trip per change on the platform.
+A pass the platform did not answer (HTTP or API error) writes no manifest, so
+the next scan asks again instead of taking the error for "no documents".
 
 getNotification lists only the record's *current* notice. A second 补正 round
 replaces the first on the platform but arrives under the same file name here, so
@@ -129,33 +131,48 @@ def _download_file(
             tmp.unlink(missing_ok=True)
 
 
+class _NoAnswer(Exception):
+    """The platform did not answer a document query (HTTP error, non-JSON,
+    or an error code). Not the same as "no documents": the record must not
+    be marked synced on the strength of it."""
+
+
 def _api_data(resp: requests.Response, what: str) -> dict | list | None:
+    """The response's data (None when the platform answered with none).
+    Raises _NoAnswer when it did not answer, TokenExpiredError on 401."""
     if resp.status_code == 401:
         raise TokenExpiredError(f"{what}: HTTP 401 — token expired during attachment sync")
     if not resp.ok:
         logger.warning(f"{what} HTTP {resp.status_code}: {resp.text[:150]}")
-        return None
+        raise _NoAnswer(what)
     try:
         payload = resp.json()
     except ValueError:
         logger.warning(f"{what} non-JSON response: {resp.text[:150]}")
-        return None
+        raise _NoAnswer(what) from None
+    if not isinstance(payload, dict):
+        logger.warning(f"{what} unexpected response: {resp.text[:150]}")
+        raise _NoAnswer(what)
     if payload.get("code") == 401:
         raise TokenExpiredError(f"{what}: code=401 — token expired during attachment sync")
     if payload.get("code") not in (200, 0):
-        logger.warning(f"{what} API code={payload.get('code')}: {payload.get('message', '')[:100]}")
-        return None
+        logger.warning(f"{what} API code={payload.get('code')}: {str(payload.get('message') or '')[:100]}")
+        raise _NoAnswer(what)
     return payload.get("data")
 
 
-def _fetch_notifications(session: requests.Session, base_url: str, reg_no: str) -> list[dict]:
-    """Return [{type, url, id}, ...] for a record's 通知书 list."""
+def _fetch_notifications(session: requests.Session, base_url: str, reg_no: str) -> list[dict] | None:
+    """Return [{type, url, id}, ...] for a record's 通知书 list, or None when
+    the platform did not answer."""
     resp = session.get(
         f"{base_url}/v1/datareg/getNotification",
         params={"dataRegNo": reg_no},
         timeout=attachment_settings().request_timeout_seconds,
     )
-    data = _api_data(resp, f"getNotification[{reg_no}]")
+    try:
+        data = _api_data(resp, f"getNotification[{reg_no}]")
+    except _NoAnswer:
+        return None
     if not isinstance(data, list):
         return []
     out = []
@@ -170,15 +187,19 @@ def _fetch_notifications(session: requests.Session, base_url: str, reg_no: str) 
     return out
 
 
-def _fetch_certificates(session: requests.Session, base_url: str, reg_no: str) -> list[dict]:
-    """Return [{type, url}, ...] for a record's 证书 (省 + 国家局)."""
+def _fetch_certificates(session: requests.Session, base_url: str, reg_no: str) -> list[dict] | None:
+    """Return [{type, url}, ...] for a record's 证书 (省 + 国家局), or None
+    when the platform did not answer."""
     resp = session.post(
         f"{base_url}/v1/datareg/confirmation",
         params={"dataRegNo": reg_no},
         json={},
         timeout=attachment_settings().request_timeout_seconds,
     )
-    data = _api_data(resp, f"confirmation[{reg_no}]")
+    try:
+        data = _api_data(resp, f"confirmation[{reg_no}]")
+    except _NoAnswer:
+        return None
     if not isinstance(data, dict):
         return []
     out = []
@@ -400,11 +421,17 @@ def sync_attachments(
             ):
                 continue  # synced at this status, nothing moved on the platform since
 
+            # None = the platform did not answer (HTTP or API error). That is
+            # not "no documents": this pass is the record's one chance at its
+            # documents until its status or updateTime moves again, so it is
+            # left unsynced (no manifest below) and the next scan asks again.
             wanted = _fetch_notifications(session, base_url, reg_no)
-            if code in CERT_STATUSES and certificates_enabled:
-                wanted += _fetch_certificates(session, base_url, reg_no)
+            if wanted is not None and code in CERT_STATUSES and certificates_enabled:
+                certificates = _fetch_certificates(session, base_url, reg_no)
+                wanted = None if certificates is None else wanted + certificates
+            ok = wanted is not None
+            wanted = wanted or []
 
-            ok = True
             files: list[str] = manifest.get("files", []) if manifest else []
             # file name → _identity() of the document stored under it
             sources: dict[str, str] = dict(manifest.get("sources") or {}) if manifest else {}
