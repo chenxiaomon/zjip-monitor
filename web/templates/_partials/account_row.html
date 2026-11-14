@@ -3,13 +3,14 @@
 {% set scan_task = row.scan_task %}
 {% set ss = row.scan_status %}
 {% set plan = row.plan %}
-<tr id="row-{{ u }}"
+{% set sweep_text %}{% if row.sweep_days %}每 {{ row.sweep_days }} 天顺带抽查一次{% else %}不再抽查（抽查间隔为 0）{% endif %}{% endset %}
+<tr id="row-{{ u }}"{% if row.dormant %} class="row-dormant"{% endif %}
     {% if task.status == 'pending' %}
     hx-get="/accounts/{{ u }}/token-status"
     hx-trigger="every 2s"
     hx-swap="outerHTML"
     {% elif scan_task == 'running' %}
-    hx-get="/accounts/{{ u }}/scan-status"
+    hx-get="/accounts/{{ u }}/scan-status{% if row.dormant %}?was=dormant{% endif %}"
     hx-trigger="every 3s"
     hx-swap="outerHTML"
     {% endif %}>
@@ -18,6 +19,14 @@
     <span class="medium">{{ row.account.company }}</span>
     {% if row.account.contact %}
     <div class="xs faint">{{ row.account.contact }}</div>
+    {% endif %}
+    {% if row.dormant %}
+    <div class="mt-1">
+      <span class="pill pill-xs pill-neutral"
+            title="停巡：不参加每轮批量巡检，{{ sweep_text }}；发现新申请、有人点「去平台办理」或证书进入续展期时自动恢复。">
+        {{ icon('player-pause') }}已停巡
+      </span>
+    </div>
     {% endif %}
   </td>
   <!-- 分组 -->
@@ -109,15 +118,12 @@
     </div>
     {% endif %}
     {% endif %}
-    {# 停巡 (src/scan_plan.py): the state, what the system suggests, and — for
-       admins — the switch right beside it, so the actions column stays as wide as it was #}
-    {% set sweep_text %}{% if row.sweep_days %}每 {{ row.sweep_days }} 天顺带抽查一次{% else %}不再抽查（抽查间隔为 0）{% endif %}{% endset %}
+    {# 停巡 (src/scan_plan.py): since when, what the system suggests, and — for
+       admins — the switch right beside it, so the actions column stays as wide as it was.
+       The 已停巡 badge itself sits beside the company name. #}
     <div class="mt-1" style="white-space:normal;font-family:var(--font)">
       {% if row.dormant %}
-      <span class="pill pill-xs pill-neutral"
-            title="停巡：不参加每轮批量巡检，{{ sweep_text }}；发现新申请、有人点「去平台办理」或证书进入续展期时自动恢复。{% if ss.dormant_by %}由 {{ ss.dormant_by }} 设置。{% endif %}">
-        {{ icon('player-pause') }}已停巡 · {{ ss.dormant_since | fmt_time }}
-      </span>
+      <div class="xs faint"{% if ss.dormant_by %} title="由 {{ ss.dormant_by }} 设置"{% endif %}>停巡于 {{ ss.dormant_since | fmt_time }}</div>
       {% if plan.reasons %}
       <div class="xs warn mt-1 max-w-64 break">建议恢复：{{ plan.reasons | join('；') }}</div>
       {% endif %}

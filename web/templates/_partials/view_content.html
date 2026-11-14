@@ -48,7 +48,8 @@
       {% else %}
       <div class="xs faint">暂无数据</div>
       {% endif %}
-      <div class="acc-foot">最后巡检：{{ card.last_check | fmt_time }}</div>
+      {# 停巡: an old time here is on purpose, not a broken monitor #}
+      <div class="acc-foot">{% if card.dormant %}已停巡 · 数据截至 {{ card.last_check | fmt_time }}{% else %}最后巡检：{{ card.last_check | fmt_time }}{% endif %}</div>
     </div>
     {% else %}
     <div class="card empty" style="grid-column:1/-1">{{ icon('inbox') }}暂无数据</div>

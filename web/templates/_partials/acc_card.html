@@ -1,0 +1,75 @@
+{#
+  One company card on the dashboard (account_grid.html includes it per `snap`).
+  停巡 cards come in two kinds (web/routes/dashboard.py):
+  - folded (`snap.dormant and not snap.resume`): everything finished — a grey
+    dot and a muted card, inside the 已停巡 fold;
+  - `snap.resume`: stopped, but records still in review — it stays up top
+    with its real dot and says 建议恢复.
+#}
+{% set folded = snap.dormant and not snap.resume %}
+<div class="card acc{% if folded %} acc-dormant{% endif %}">
+  <div class="acc-head">
+    <div class="grow">
+      <!-- Company & account: the name opens this company's records -->
+      <a href="{{ records_link(account=snap.account.username) }}" class="acc-name truncate">{{ snap.account.company }}</a>
+      <div class="acc-user">
+        {{ snap.account.username }}
+        {% if snap.account.owner %}
+        <span class="xs faint">· {{ owner_label(snap.account.owner, snap.account.group) }}</span>
+        {% endif %}
+        {% if show_group %}
+        <span class="pill pill-xs {% if snap.account.group %}pill-accent{% else %}pill-neutral{% endif %}">{{ snap.account.group | group_label }}</span>
+        {% endif %}
+      </div>
+    </div>
+    {# Status dot: red = needs urgent action, amber = has corrections, green = fine; grey ring = last scan failed or data stale.
+       A folded 停巡 card is grey: all its records are finished, an old 不予登记 is no call to act. #}
+    {% if folded %}
+    <span class="dot dot-grey" title="已停巡：记录都已结束"></span>
+    {% else %}
+    <span class="dot dot-{{ snap.dot }}{% if snap.scan_failed or snap.stale %} ring{% endif %}"
+          title="{% if snap.dot == 'red' %}有需紧急处理的记录{% elif snap.dot == 'amber' %}有待补正的记录{% else %}无需处理{% endif %}{% if snap.scan_failed or snap.stale %} · 数据可能过期{% endif %}"></span>
+    {% endif %}
+  </div>
+  <!-- Status pills: every status actually present; each opens the filtered records -->
+  {% if snap.status_counts %}
+  <div class="acc-pills">
+    {% for code in snap.status_counts.keys()|sort %}
+    <a href="{{ records_link(account=snap.account.username, status=code) }}"
+       class="pill s-pill-{{ code if code in AUDIT_STATUS else 'x' }}">
+      {{ AUDIT_STATUS.get(code, '状态' ~ code) }}×{{ snap.status_counts[code] }}
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="xs faint">暂无数据</div>
+  {% endif %}
+  <!-- Scan health: the reason is visible, not hidden in a tooltip -->
+  {% if snap.resume %}
+  <div class="acc-health warn" title="这家已停巡，但还有记录在审：新的待补正最晚要到下次抽查才发现。管理员可在「账号」页恢复巡检。">
+    {{ icon('player-pause') }}<span>已停巡 · 建议恢复：{{ snap.open_records }} 条在审
+    {%- if snap.sweep_failed %} · 上次抽查失败{% endif %}</span>
+  </div>
+  {% elif snap.dormant %}
+  <div class="acc-health faint" title="停巡的账号不参加每轮巡检，{% if sweep_days %}每 {{ sweep_days }} 天顺带抽查一次{% else %}也不抽查{% endif %}；发现新申请会自动恢复">
+    {{ icon('player-pause') }}<span>已停巡 · 数据截至 {{ snap.last_check | fmt_time }}
+    {%- if snap.sweep_failed %} · <span class="warn">上次抽查失败</span>{% endif %}</span>
+  </div>
+  {% elif snap.scan_failed %}
+  <div class="acc-health danger" {% if snap.scan_status and snap.scan_status.error %}title="{{ snap.scan_status.error }}"{% endif %}>
+    {{ icon('alert-circle') }}<span>上次巡检失败，数据为旧快照
+    {%- if snap.scan_status and snap.scan_status.error %}：{{ snap.scan_status.error[:100] }}{% if snap.scan_status.error|length > 100 %}…{% endif %}{% endif %}</span>
+  </div>
+  {% elif snap.scan_partial %}
+  <div class="acc-health warn">
+    {{ icon('alert-triangle') }}<span>部分抓取
+    {%- if snap.scan_status %} {{ snap.scan_status.fetched }}{% if snap.scan_status.reported_total %}/{{ snap.scan_status.reported_total }}{% endif %}{% endif %}</span>
+  </div>
+  {% elif snap.stale %}
+  <div class="acc-health faint">
+    {{ icon('clock-exclamation') }}<span>超过 {{ "%g"|format(stale_hours) }} 小时未巡检成功，数据可能过期</span>
+  </div>
+  {% endif %}
+  <!-- Last successful scan of this account (falls back to the snapshot time) -->
+  <div class="acc-foot">最后巡检：{{ snap.last_success | fmt_time }}</div>
+</div>
