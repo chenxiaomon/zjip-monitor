@@ -565,3 +565,60 @@ def test_refresh_and_log_never_raises(monkeypatch):
         ops_alerts, "collect_alerts", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("坏了")),
     )
     assert ops_alerts.refresh_and_log() == []
+
+
+# ---------------------------------------------------------------------------
+# 停巡 accounts (src/scan_plan.py)
+# ---------------------------------------------------------------------------
+
+def _stopped(entry: dict, *, since_days_ago: float = 30, **over) -> dict:
+    since = datetime.now(timezone.utc) - timedelta(days=since_days_ago)
+    return {**entry, "dormant": True, "dormant_since": _iso(since), **over}
+
+
+def test_stopped_accounts_are_not_counted_as_failed():
+    write_status({
+        "ua1": _stopped(account_entry("甲 公司", status="login_failed", success_hours_ago=None)),
+        "ua2": _stopped(account_entry("乙·公司", status="scrape_failed", success_hours_ago=None)),
+        "ub1": account_entry("丙公司", status="timeout", success_hours_ago=None),
+    })
+    assert "failed_accounts" not in by_key(ops_alerts.collect_alerts())
+
+
+def test_all_stopped_waits_for_two_sweeps_before_calling_it_stalled():
+    # Every account is stopped and swept weekly: 3 days without a success is normal.
+    write_status({u: _stopped(account_entry(c, success_hours_ago=72))
+                  for u, c in (("ua1", "甲 公司"), ("ua2", "乙·公司"), ("ub1", "丙公司"))})
+    assert "no_recent_success" not in by_key(ops_alerts.collect_alerts())
+    write_status({u: _stopped(account_entry(c, success_hours_ago=24 * 16))
+                  for u, c in (("ua1", "甲 公司"), ("ua2", "乙·公司"), ("ub1", "丙公司"))})
+    assert "no_recent_success" in by_key(ops_alerts.collect_alerts())
+
+
+def test_a_stopped_account_the_sweep_cannot_reach_is_named():
+    write_status({
+        "ua1": _stopped(account_entry("甲 公司", status="login_failed", success_hours_ago=24 * 20),
+                        login_paused=True),
+        "ua2": _stopped(account_entry("乙·公司", success_hours_ago=24 * 3)),           # swept recently
+        "ub1": _stopped(account_entry("丙公司", success_hours_ago=24 * 20), since_days_ago=2),  # just stopped
+    })
+    alert = by_key(ops_alerts.collect_alerts())["dormant_overdue"]
+    assert alert.level == "warning" and alert.accounts == ["ua1"]
+    assert "1 家停巡账号超过 14 天没有抽查成功" == alert.title and "甲 公司" in alert.detail
+    assert "已暂停" in alert.detail
+    # A group user only hears about their own group's accounts.
+    assert "dormant_overdue" not in by_key(ops_alerts.collect_alerts({"ub1"}))
+
+
+def test_no_sweep_means_no_overdue_alert(isolated_settings):
+    isolated_settings.write({**isolated_settings.read(), "run": {"dormant_sweep_days": 0}})
+    write_status({"ua1": _stopped(account_entry("甲 公司", success_hours_ago=24 * 60))})
+    alerts = by_key(ops_alerts.collect_alerts())
+    assert "dormant_overdue" not in alerts and "no_recent_success" not in alerts
+
+
+def test_stamps_from_the_future_do_not_hide_an_overdue_account():
+    future = datetime.now(timezone.utc) + timedelta(days=30)
+    write_status({"ua1": _stopped(account_entry("甲 公司", success_hours_ago=None),
+                                  last_success_at=_iso(future), dormant_since=_iso(future))})
+    assert by_key(ops_alerts.collect_alerts())["dormant_overdue"].accounts == ["ua1"]

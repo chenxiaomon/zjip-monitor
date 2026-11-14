@@ -142,6 +142,7 @@ _TEMPLATE = """<!doctype html>
 
 <h4>浙江省数据知识产权登记平台 — 状态报表</h4>
 <p>生成时间：{{ report_time }}（北京时间）</p>
+{% if dormant %}<p>另有 {{ dormant }} 家停巡账号本轮未巡检（每周顺带抽查一次，最新数据见控制台）。</p>{% endif %}
 
 <!-- ── Overview ─────────────────────────────────────────────────── -->
 <div class="card">
@@ -160,7 +161,7 @@ _TEMPLATE = """<!doctype html>
     <tbody>
     {% for item in companies %}
     <tr>
-      <td><a href="#company-{{ loop.index }}">{{ item.company }}</a></td>
+      <td><a href="#company-{{ loop.index }}">{{ item.company }}</a>{% if item.swept %}（停巡抽查）{% endif %}</td>
       <td class="num">{{ item.total }}</td>
       <td class="num c-success">{{ item.registered }}</td>
       <td class="num c-primary">{{ item.pending }}</td>
@@ -234,6 +235,8 @@ def generate_report(
     run_results: list[dict],
     diffs: dict[str, DiffResult],
     report_time: Optional[datetime] = None,
+    *,
+    dormant: int = 0,
 ) -> Path:
     """Render a self-contained HTML report and write it to data/reports/.
 
@@ -241,6 +244,8 @@ def generate_report(
         run_results: List of per-account result dicts from main.run_all().
         diffs:       {company: DiffResult} map built during the same run.
         report_time: Timestamp to show (defaults to now).
+        dormant:     停巡 accounts this round left out — said in the header,
+                     so a shorter company list does not read as lost data.
 
     Returns:
         Path to the written HTML file.
@@ -327,11 +332,12 @@ def generate_report(
             "removed":     len(diff.removed) if diff else 0,
             "records":     rendered_records,
             "error":       error,
+            "swept":       bool(res.get("swept")),
         })
 
     env = Environment(loader=BaseLoader(), autoescape=True)
     tmpl = env.from_string(_TEMPLATE)
-    html = tmpl.render(report_time=ts_str, companies=companies)
+    html = tmpl.render(report_time=ts_str, companies=companies, dormant=dormant)
 
     out_path = _REPORTS_DIR / filename
     atomic_write_text(out_path, html)

@@ -7,6 +7,15 @@ filelock around every read-modify-write. Readers get an mtime-cached view.
 
 Every public function swallows its own errors: status bookkeeping must never
 break a scan or a web request.
+
+It also holds the one per-account scan switch an administrator sets: 停巡
+(`dormant`, see src/scan_plan.py). It lives here rather than in
+accounts.enc because the daemon has to be able to switch an account back on
+(a sweep found a new application) and accounts.enc has no cross-process
+lock — a daemon write there could undo a password a colleague just saved.
+Losing this file loses the flags, and every account is scanned again: the
+safe direction. A file that cannot be parsed is moved aside on the next
+write so the administrators' choices can be recovered by hand.
 """
 
 from __future__ import annotations
@@ -46,16 +55,43 @@ def _lock() -> FileLock:
     return FileLock(str(_STATUS_FILE) + ".lock", timeout=_LOCK_TIMEOUT_SECONDS)
 
 
-def _load_unlocked() -> dict:
+def _fresh() -> dict:
+    return {"version": 1, "accounts": {}}
+
+
+def _load_unlocked(*, set_aside: bool = False) -> dict:
+    """The file's content, or a fresh store. With `set_aside` (writers only,
+    under the lock) an unparseable file is renamed to *.bad-<UTC stamp> first,
+    so the write that follows cannot erase what the administrators had set."""
     try:
-        data = json.loads(_STATUS_FILE.read_text(encoding="utf-8"))
-        if isinstance(data, dict) and isinstance(data.get("accounts"), dict):
-            return data
+        text = _STATUS_FILE.read_text(encoding="utf-8")
     except FileNotFoundError:
-        pass
+        return _fresh()
     except Exception as exc:
         logger.warning(f"accounts_status.json unreadable ({exc!r}) — starting fresh")
-    return {"version": 1, "accounts": {}}
+        return _fresh()
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict) and isinstance(data.get("accounts"), dict):
+            return data
+        problem = f"unexpected shape {type(data).__name__}"
+    except ValueError as exc:
+        problem = repr(exc)
+    if set_aside:
+        aside = _STATUS_FILE.with_name(
+            f"{_STATUS_FILE.name}.bad-{datetime.now(timezone.utc):%Y%m%d%H%M%S}"
+        )
+        try:
+            _STATUS_FILE.replace(aside)
+            logger.error(
+                f"accounts_status.json 无法解析（{problem}），已另存为 {aside.name}；"
+                "停巡设置与登录暂停从空白开始——全部账号恢复每轮巡检"
+            )
+        except OSError as exc:
+            logger.error(f"accounts_status.json 无法解析（{problem}），且另存失败: {exc!r}")
+    else:
+        logger.warning(f"accounts_status.json unreadable ({problem}) — starting fresh")
+    return _fresh()
 
 
 def _mutate(fn):
@@ -64,7 +100,7 @@ def _mutate(fn):
     notification — so the flags must describe durable state, not intent)."""
     global _read_cache
     with _lock():
-        data = _load_unlocked()
+        data = _load_unlocked(set_aside=True)
         out = fn(data)
         atomic_write_text(_STATUS_FILE, json.dumps(data, ensure_ascii=False, indent=2))
     with _read_lock:
@@ -205,6 +241,88 @@ def forget_account(username: str) -> None:
         logger.warning(f"[{username}] forget_account failed (non-fatal): {exc!r}")
 
 
+def is_dormant(entry: Any) -> bool:
+    """Is this status entry an account an administrator set to 停巡?"""
+    return isinstance(entry, dict) and entry.get("dormant") is True
+
+
+def set_scan_mode(
+    username: str,
+    company: str = "",
+    *,
+    dormant: bool,
+    by: str,
+    reason: str = "",
+) -> dict[str, bool]:
+    """Switch an account between every-round scanning and 停巡.
+
+    Stopping an account that is already stopped keeps its dormant_since (the
+    renewal-window rule in src/scan_plan.py measures from it). Resuming
+    records who did it and, for an automatic resume, why. Returns
+    {"ok": persisted, "changed": the state actually flipped}."""
+    out = set_scan_modes([(username, company, dormant)], by=by, reason=reason)
+    return {"ok": out is not None, "changed": bool(out and out.get(username))}
+
+
+def set_scan_modes(
+    items: list[tuple[str, str, bool]],
+    *,
+    by: str,
+    reason: str = "",
+) -> dict[str, bool] | None:
+    """set_scan_mode for several accounts in one locked write — the console's
+    bulk 按在审情况设置. `items` are (username, company, dormant); returns
+    {username: changed}, or None when nothing could be persisted."""
+    try:
+        def fn(data: dict) -> dict[str, bool]:
+            now = _now_iso()
+            changed: dict[str, bool] = {}
+            for username, company, dormant in items:
+                e = _entry(data, username, company)
+                was = is_dormant(e)
+                if dormant and not was:
+                    e["dormant"] = True
+                    e["dormant_since"] = now
+                    e["dormant_by"] = by
+                elif not dormant and was:
+                    e["dormant"] = False
+                    e["resumed_at"] = now
+                    e["resumed_by"] = by
+                    e["resumed_reason"] = reason or None
+                changed[username] = was != dormant
+            return changed
+
+        return _mutate(fn)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"set_scan_modes failed (non-fatal): {exc!r}")
+        return None
+
+
+def resume_if_dormant(username: str, company: str = "", *, by: str, reason: str) -> bool:
+    """Put a 停巡 account back on every round; True only if it was stopped.
+
+    Check and write happen in one locked read-modify-write, so two processes
+    resuming the same account at once log one resume, not two. Never creates
+    an entry for an account the store does not know (it cannot be stopped)."""
+    try:
+        def fn(data: dict) -> bool:
+            e = data["accounts"].get(username)
+            if not is_dormant(e):
+                return False
+            if company:
+                e["company"] = company
+            e["dormant"] = False
+            e["resumed_at"] = _now_iso()
+            e["resumed_by"] = by
+            e["resumed_reason"] = reason or None
+            return True
+
+        return bool(_mutate(fn))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[{username}] resume_if_dormant failed (non-fatal): {exc!r}")
+        return False
+
+
 def get_all() -> dict[str, dict[str, Any]]:
     """stat-cached read of every account's status ({} on any problem).
 
@@ -233,3 +351,7 @@ def get_status(username: str) -> dict[str, Any] | None:
 def is_login_paused(username: str) -> bool:
     entry = get_all().get(username)
     return bool(entry and entry.get("login_paused"))
+
+
+def dormant_usernames() -> set[str]:
+    return {u for u, e in get_all().items() if is_dormant(e)}

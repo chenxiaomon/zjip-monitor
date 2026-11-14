@@ -4,6 +4,7 @@
 Usage:
     python run_once.py              # normal run, reuse cached tokens
     python run_once.py --force-login  # force fresh browser login for every account
+    python run_once.py --all        # also every 停巡 account (normally swept weekly)
 """
 
 from __future__ import annotations
@@ -32,6 +33,11 @@ def main() -> int:
         help="Bypass token cache and do a fresh browser login for every account",
     )
     parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Also scan every 停巡 (dormant) account, not just the ones due for their weekly sweep",
+    )
+    parser.add_argument(
         "--stop",
         action="store_true",
         help="Ask the currently running scan (web/daemon/CLI) to stop, then exit",
@@ -50,7 +56,7 @@ def main() -> int:
             logger.info("当前没有正在运行的巡检")
         return 0
 
-    output = run_all(force_login=args.force_login, trigger="cli")
+    output = run_all(force_login=args.force_login, trigger="cli", include_dormant=args.all)
     if output.get("skipped"):
         holder = control.read_state() or {}
         logger.error(

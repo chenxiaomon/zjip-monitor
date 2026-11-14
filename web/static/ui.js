@@ -98,6 +98,11 @@ function togglePassword(btn) {
   });
   document.addEventListener('htmx:sendError', function () { showToast('网络错误，请稍后重试', 'danger'); });
   document.addEventListener('accountSaved', function () { showToast('账号已保存', 'success'); });
+  // HX-Trigger: {"toast": {"msg": "…", "kind": "success|danger"}} — a route's own message.
+  document.addEventListener('toast', function (e) {
+    var d = e.detail || {};
+    if (d.msg) showToast(d.msg, d.kind || '');
+  });
   document.addEventListener('userSaved', function () { showToast('用户已保存', 'success'); });
 
   document.addEventListener('keydown', function (e) {

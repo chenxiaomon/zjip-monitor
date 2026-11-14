@@ -39,9 +39,11 @@ from typing import Any, Callable
 
 from loguru import logger
 
-from . import control, diskstat, status_store
+from . import control, diskstat, scan_plan, status_store
 from .config_loader import load_accounts
-from .runtime_settings import DiskSettings, OpsAlertSettings, disk_settings, ops_alert_settings
+from .runtime_settings import (
+    DiskSettings, OpsAlertSettings, RunSettings, disk_settings, ops_alert_settings, run_settings,
+)
 
 _ROOT = Path(__file__).parent.parent
 
@@ -115,6 +117,15 @@ def _stale_hours() -> float:
         return OpsAlertSettings().stale_hours
 
 
+def _sweep_days() -> int:
+    """run.dormant_sweep_days, falling back to its default if settings break."""
+    try:
+        return run_settings().dormant_sweep_days
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"/health: 读取 run.dormant_sweep_days 失败，使用默认值: {exc!r}")
+        return RunSettings().dormant_sweep_days
+
+
 def _min_free_mb() -> float:
     try:
         return disk_settings().min_free_mb
@@ -186,8 +197,14 @@ def _collect_run() -> dict[str, Any] | None:
     }
 
 
-def _collect_scans(errors: dict[str, str]) -> dict[str, Any]:
-    """Aggregate per-account status into counts only — never per-account rows."""
+def _collect_scans(errors: dict[str, str], stale_hours: float | None = None,
+                   sweep_days: int | None = None) -> dict[str, Any]:
+    """Aggregate per-account status into counts only — never per-account rows.
+
+    `dormant` counts 停巡 accounts; `success_threshold_hours` is how old the
+    newest success may be (ops_alerts.stale_hours while any account is
+    scanned every round, longer when all are stopped, None when nothing is
+    expected to run — src/scan_plan.success_threshold_hours)."""
     accounts: int | None = None
     try:
         accounts = len(load_accounts())
@@ -204,6 +221,7 @@ def _collect_scans(errors: dict[str, str]) -> dict[str, Any]:
 
     counts: dict[str, int] = {}
     paused = 0
+    dormant = 0
     latest: datetime | None = None
     for entry in entries.values():
         if not isinstance(entry, dict):
@@ -212,6 +230,8 @@ def _collect_scans(errors: dict[str, str]) -> dict[str, Any]:
         counts[key] = counts.get(key, 0) + 1
         if entry.get("login_paused"):
             paused += 1
+        if status_store.is_dormant(entry):
+            dormant += 1
         dt = _parse_iso(entry.get("last_success_at"))
         if dt is not None and (latest is None or dt > latest):
             latest = dt
@@ -229,6 +249,12 @@ def _collect_scans(errors: dict[str, str]) -> dict[str, Any]:
         "hours_since_success": hours,
         "status_counts": dict(sorted(counts.items())),
         "paused": paused,
+        "dormant": dormant,
+        "success_threshold_hours": scan_plan.success_threshold_hours(
+            entries,
+            _stale_hours() if stale_hours is None else stale_hours,
+            _sweep_days() if sweep_days is None else sweep_days,
+        ),
     }
 
 
@@ -306,6 +332,10 @@ def _recent_success_check(
         return _check("recent_success", False, f"账号状态读取失败（{errors.get('scans') or '未知错误'}）")
     if "status_store" in errors:
         return _check("recent_success", False, f"账号状态读取失败（{errors['status_store']}）")
+    if "success_threshold_hours" in scans:
+        if scans["success_threshold_hours"] is None:
+            return _check("recent_success", True, "所有账号都已停巡且不抽查，不检查巡检时效")
+        stale_hours = scans["success_threshold_hours"]
     hours = scans.get("hours_since_success")
     if hours is None:
         return _check("recent_success", False, "尚无任何账号巡检成功的记录")
@@ -374,9 +404,9 @@ def collect_health() -> dict[str, Any]:
     errors: dict[str, str] = {}
     version = _safe("version", errors, _collect_version)
     run = _safe("run", errors, _collect_run)
-    scans = _safe("scans", errors, lambda: _collect_scans(errors))
-    disk = _safe("disk", errors, lambda: _collect_disk(errors))
     stale_hours = _stale_hours()
+    scans = _safe("scans", errors, lambda: _collect_scans(errors, stale_hours, _sweep_days()))
+    disk = _safe("disk", errors, lambda: _collect_disk(errors))
 
     checks = [
         _accounts_check(scans, errors),

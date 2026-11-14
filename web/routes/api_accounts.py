@@ -87,6 +87,8 @@ def api_company(request: Request, company: str | None = Query(None)) -> JSONResp
             "label": scan_kind_label(ss.get("status")) if health["scan_failed"] or health["scan_partial"] else "",
             "error": _scrub(ss.get("error") or "", acc)[:160] if health["scan_failed"] else "",
         },
+        # 停巡 (src/scan_plan.py): left out of the rounds, swept weekly.
+        "dormant": health["dormant"],
         "scan_wait": accounts_routes.scan_wait(request, acc.username),
         "can": _can(request),
     })

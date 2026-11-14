@@ -2,6 +2,7 @@
 {% set task = row.task %}
 {% set scan_task = row.scan_task %}
 {% set ss = row.scan_status %}
+{% set plan = row.plan %}
 <tr id="row-{{ u }}"
     {% if task.status == 'pending' %}
     hx-get="/accounts/{{ u }}/token-status"
@@ -108,6 +109,52 @@
     </div>
     {% endif %}
     {% endif %}
+    {# 停巡 (src/scan_plan.py): the state, what the system suggests, and — for
+       admins — the switch right beside it, so the actions column stays as wide as it was #}
+    {% set sweep_text %}{% if row.sweep_days %}每 {{ row.sweep_days }} 天顺带抽查一次{% else %}不再抽查（抽查间隔为 0）{% endif %}{% endset %}
+    <div class="mt-1" style="white-space:normal;font-family:var(--font)">
+      {% if row.dormant %}
+      <span class="pill pill-xs pill-neutral"
+            title="停巡：不参加每轮批量巡检，{{ sweep_text }}；发现新申请、有人点「去平台办理」或证书进入续展期时自动恢复。{% if ss.dormant_by %}由 {{ ss.dormant_by }} 设置。{% endif %}">
+        {{ icon('player-pause') }}已停巡 · {{ ss.dormant_since | fmt_time }}
+      </span>
+      {% if plan.reasons %}
+      <div class="xs warn mt-1 max-w-64 break">建议恢复：{{ plan.reasons | join('；') }}</div>
+      {% endif %}
+      {% if is_admin %}
+      <div class="mt-1">
+        <button hx-post="/accounts/{{ u }}/scan-mode"
+                hx-vals='{"on": "1"}'
+                hx-target="#row-{{ u }}"
+                hx-swap="outerHTML"
+                title="恢复每轮批量巡检"
+                class="btn btn-xs">
+          {{ icon('player-play') }}恢复巡检
+        </button>
+      </div>
+      {% endif %}
+      {% else %}
+      {% if ss and ss.resumed_reason %}
+      <div class="xs muted max-w-64 break" title="{{ ss.resumed_at | fmt_time }}{% if ss.resumed_by %} · {{ ss.resumed_by }}{% endif %}">已自动恢复每轮巡检：{{ ss.resumed_reason }}</div>
+      {% endif %}
+      {% if plan.done %}
+      <div class="xs good max-w-64 break" title="记录全部办结、文件已下载完、证书不在续展期{% if plan.notes %}；{{ plan.notes | join('；') }}{% endif %}">可停巡：全部办结</div>
+      {% endif %}
+      {% if is_admin and row.last_check %}
+      <div class="mt-1">
+        <button hx-post="/accounts/{{ u }}/scan-mode"
+                hx-vals='{"on": "0", "seen": "{{ row.plan_key }}"{% if not plan.done %}, "force": "1"{% endif %}}'
+                {% if not plan.done %}hx-confirm="这家还没有办结：{{ plan.reasons | join('；') }}。停巡后它不参加每轮巡检，{{ sweep_text }}：新的待补正最晚要到下次抽查才发现，会占用补正期限。确定停巡？"{% endif %}
+                hx-target="#row-{{ u }}"
+                hx-swap="outerHTML"
+                title="停止每轮巡检，{{ sweep_text }}"
+                class="btn btn-xs{% if not plan.done %} btn-link{% endif %}">
+          {% if plan.done %}{{ icon('player-pause') }}停巡{% else %}停巡…{% endif %}
+        </button>
+      </div>
+      {% endif %}
+      {% endif %}
+    </div>
   </td>
   <!-- 操作 -->
   <td>

@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse
 
 from src import control, focus
 from src.login import DEFAULT_LOGIN_METHOD, LOGIN_METHODS
-from src.runtime_settings import attachment_settings, disk_settings, ops_alert_settings
+from src.runtime_settings import attachment_settings, disk_settings, ops_alert_settings, run_settings
 from src.scraper import AUDIT_STATUS
 from src.status_store import _max_failures
 from web.deps import STATUS_COLORS, templates
@@ -103,7 +103,7 @@ THRESHOLDS = (
     ("ops_alerts", "min_failed_accounts", "失败账号告警", "int", 1, False, 100, "家",
      "本轮巡检失败的账号达到这个数就在横幅告警"),
     ("ops_alerts", "stale_hours", "无成功巡检告警", "num", 0, True, 720, "小时",
-     "所有账号都超过这么久没有成功巡检就告警；应不短于两次定时巡检的最长间隔"),
+     "每轮巡检的账号都超过这么久没有成功巡检就告警；应不短于两次定时巡检的最长间隔"),
     ("ops_alerts", "correction_warn_days", "补正到期提醒", "int", 0, False, 60, "天",
      "补正截止日期不足这么多天时在横幅提醒"),
     ("login", "max_consecutive_failures", "连续登录失败暂停", "int", 0, False, 20, "次",
@@ -112,11 +112,13 @@ THRESHOLDS = (
      "剩余空间低于这个值时停止下载附件；横幅在下一轮巡检后更新"),
     ("attachments", "max_total_mb", "附件目录上限", "num", 0, True, 102400, "MB",
      "附件目录超过这个大小时告警，不会自动删除；横幅在下一轮巡检后更新"),
+    ("run", "dormant_sweep_days", "停巡账号抽查间隔", "int", 0, False, 90, "天",
+     "停巡的账号上次成功巡检超过这么多天后，由定时巡检顺带抽查一次；0 表示从不抽查"),
 )
 
 
 def _effective_thresholds() -> dict[str, float | int]:
-    ops, disk, att = ops_alert_settings(), disk_settings(), attachment_settings()
+    ops, disk, att, run = ops_alert_settings(), disk_settings(), attachment_settings(), run_settings()
     return {
         "min_failed_accounts": ops.min_failed_accounts,
         "stale_hours": ops.stale_hours,
@@ -124,6 +126,7 @@ def _effective_thresholds() -> dict[str, float | int]:
         "max_consecutive_failures": _max_failures(),
         "min_free_mb": disk.min_free_mb,
         "max_total_mb": att.max_total_mb,
+        "dormant_sweep_days": run.dormant_sweep_days,
     }
 
 

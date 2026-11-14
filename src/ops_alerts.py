@@ -7,7 +7,7 @@ suspicious never opens them). This module turns facts the scan has already
 written down into a short list of 中文 alerts the dashboard shows at the top
 of every page:
 
-    accounts_status.json  → 本轮失败账号过多 / 长时间没有成功巡检
+    accounts_status.json  → 本轮失败账号过多 / 长时间没有成功巡检 / 停巡账号抽查不上
     disk_stats.json       → 磁盘告急 / 附件目录超量
     state.json            → 巡检进程卡死（2026-09-04 真实卡了 28 小时）
     pause.flag            → 定时巡检已暂停
@@ -39,10 +39,12 @@ from typing import Any, Callable
 
 from loguru import logger
 
-from . import control, diskstat, notifier, status_store, todo
+from . import control, diskstat, notifier, scan_plan, status_store, todo
 from .config_loader import Account, ConfigError, load_accounts
 from .fsutil import atomic_write_text
-from .runtime_settings import OpsAlertSettings, attachment_settings, disk_settings, ops_alert_settings
+from .runtime_settings import (
+    OpsAlertSettings, RunSettings, attachment_settings, disk_settings, ops_alert_settings, run_settings,
+)
 
 _ROOT = Path(__file__).parent.parent
 # Module constant so tests can point the bookkeeping at a temp file.
@@ -147,8 +149,15 @@ def _safe_read(read: Callable[[], Any], fallback: Any, what: str) -> Any:
 # ---------------------------------------------------------------------------
 
 def _check_failed_accounts(entries: dict[str, dict], limit: int) -> Alert | None:
-    """1. 本轮失败账号过多 — settings.yaml → ops_alerts.min_failed_accounts."""
-    failed = [(u, e) for u, e in entries.items() if e.get("status") not in _HEALTHY_STATUSES]
+    """1. 本轮失败账号过多 — settings.yaml → ops_alerts.min_failed_accounts.
+
+    停巡 accounts are not part of a round, so a failure they last had (or a
+    failed weekly sweep) is not this round's; _check_dormant_overdue is the
+    alert that speaks for them."""
+    failed = [
+        (u, e) for u, e in entries.items()
+        if e.get("status") not in _HEALTHY_STATUSES and not status_store.is_dormant(e)
+    ]
     # `not failed` is not redundant: a settings.yaml that somehow yields a
     # limit of 0 must not raise a banner saying "0 个账号失败".
     if not failed or len(failed) < limit:
@@ -167,12 +176,23 @@ def _check_failed_accounts(entries: dict[str, dict], limit: int) -> Alert | None
     )
 
 
-def _check_no_recent_success(entries: dict[str, dict], stale_hours: float) -> Alert | None:
-    """2. 长时间没有成功巡检 — 整体停摆，不是单个账号的「数据可能过期」。"""
+def _check_no_recent_success(entries: dict[str, dict], stale_hours: float,
+                             sweep_days: int = 0) -> Alert | None:
+    """2. 长时间没有成功巡检 — 整体停摆，不是单个账号的「数据可能过期」。
+
+    Measured on the newest success of any account in view (a successful
+    weekly sweep proves scanning still runs). While some of them are scanned
+    every round the bar is stale_hours; when all are 停巡 it is two sweep
+    intervals more, and with no sweep at all there is nothing to expect
+    (src/scan_plan.success_threshold_hours)."""
     if not entries:
         # Nothing has ever been scanned in this deployment: a fresh install,
         # not a stalled one. The account cards already say 尚未巡检.
         return None
+    threshold = scan_plan.success_threshold_hours(entries, stale_hours, sweep_days)
+    if threshold is None:
+        return None
+    stale_hours = threshold
     times = [t for t in (_parse_iso(e.get("last_success_at")) for e in entries.values()) if t]
     hint = (
         "请确认 daemon 在运行（systemctl status zjip-daemon），"
@@ -202,6 +222,49 @@ def _check_no_recent_success(entries: dict[str, dict], stale_hours: float) -> Al
             f"超过 ops_alerts.stale_hours={stale_hours:g} 小时 — 整体巡检可能已停摆。"
         ),
         hint=hint,
+    )
+
+
+def _check_dormant_overdue(entries: dict[str, dict], accounts: list[Account],
+                           sweep_days: int) -> Alert | None:
+    """9. 停巡账号抽查不上 — a stopped account the weekly sweep has not got
+    through for two intervals. Typically the client changed the platform
+    password: every sweep fails, the account is auto-paused after
+    login.max_consecutive_failures, and from then on it is never swept again
+    — so a new application there could not resume it. Measured from the later
+    of its last success and the day it was stopped, so stopping an account
+    does not raise this at once. Only accounts still configured count."""
+    if sweep_days <= 0:
+        return None
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=2 * sweep_days)
+    overdue: list[tuple[str, dict]] = []
+    for acc in accounts:
+        e = entries.get(acc.username)
+        if not status_store.is_dormant(e):
+            continue
+        # A stamp from the future (a clock that stepped back) proves nothing.
+        stamps = [t for t in (_parse_iso(e.get("last_success_at")), _parse_iso(e.get("dormant_since")))
+                  if t and t <= now + timedelta(hours=1)]
+        if not stamps or max(stamps) < cutoff:
+            overdue.append((acc.username, e))
+    if not overdue:
+        return None
+    names = [
+        f"{_display_name(u, e)}（上次成功 {_fmt_local(_parse_iso(e.get('last_success_at')))}"
+        + ("，已暂停" if e.get("login_paused") else "") + "）"
+        for u, e in overdue
+    ]
+    return Alert(
+        key="dormant_overdue",
+        level="warning",
+        title=f"{len(overdue)} 家停巡账号超过 {2 * sweep_days} 天没有抽查成功",
+        detail=(
+            f"停巡账号每 {sweep_days} 天顺带抽查一次（run.dormant_sweep_days），以下账号已连续抽查不上："
+            f"{_join_names(names)} — 它们上面的新申请不会被发现。"
+        ),
+        hint="请到「账号」页查看这些账号的登录状态：多半是企业改了平台口令，更新密码后会恢复抽查；也可以点「巡检」手动试一次。",
+        accounts=[u for u, _ in overdue],
     )
 
 
@@ -384,6 +447,7 @@ def collect_alerts(usernames: set[str] | None = None) -> list[Alert]:
     """
     entries = _safe_read(lambda: _visible_entries(usernames), {}, "账号状态")
     settings = _safe_read(ops_alert_settings, OpsAlertSettings(), "ops_alerts 配置")
+    run = _safe_read(run_settings, RunSettings(), "run 配置")
     stats = _safe_read(diskstat.read_stats, None, "disk_stats.json")
     accounts = _safe_read(
         lambda: [a for a in load_accounts() if usernames is None or a.username in usernames],
@@ -392,7 +456,8 @@ def collect_alerts(usernames: set[str] | None = None) -> list[Alert]:
 
     checks: tuple[Callable[[], Alert | None], ...] = (
         lambda: _check_failed_accounts(entries, settings.min_failed_accounts),
-        lambda: _check_no_recent_success(entries, settings.stale_hours),
+        lambda: _check_no_recent_success(entries, settings.stale_hours, run.dormant_sweep_days),
+        lambda: _check_dormant_overdue(entries, accounts, run.dormant_sweep_days),
         lambda: _check_correction_due(accounts, settings.correction_warn_days),
         lambda: _check_disk_low(stats),
         lambda: _check_attachments_over_limit(stats),

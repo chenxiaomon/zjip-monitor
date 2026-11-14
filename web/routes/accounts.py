@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import threading
 import time
@@ -19,11 +20,13 @@ from loguru import logger
 import html as _html
 import re
 
-from src import control, status_store
+from src import control, diskstat, scan_plan, status_store
+from src.attachments import enabled as attachments_enabled
 from src.config_loader import Account, ConfigError, load_accounts, save_accounts
 from src.exceptions import CredentialsRejectedError
 from src.login import _save_token, verify_credentials
 from src.main import run_all, run_single
+from src.runtime_settings import run_settings
 from web.auth import (
     can_edit_accounts, current_user, editable_account, is_admin, require_admin, visible_accounts,
 )
@@ -135,6 +138,7 @@ class ActionResult:
     retry_after: int = 0
     already_running: bool = False
     reg_no: str = ""
+    scan_resumed: bool = False  # 去平台办理 put a 停巡 account back on every round
 
 
 _READ_ONLY = ActionResult(ok=False, status=403, error="只读账号不能操作企业")
@@ -180,16 +184,62 @@ def _row(acc: Account, *, task: dict | None = None, scan_task: str | None = None
     re-renders a row goes through here so the durable scan_status badge never
     disappears after a partial swap."""
     snap = get_latest_snapshot(acc.company)
+    ss = status_store.get_status(acc.username)
+    dormant = status_store.is_dormant(ss)
+    plan = scan_plan.assess(acc, snap, ss, docs_check=attachments_enabled())
+    token = token_status(get_session(acc.username))
+    if dormant and token["state"] == "expired":
+        # A 停巡 account is no longer logged into twice a day; its token
+        # running out is expected, not something to paint red.
+        token = {**token, "css": "pill-neutral"}
     return {
         "account": acc,
-        "token_status": token_status(get_session(acc.username)),
+        "token_status": token,
         "record_count": snap.get("record_count", 0) if snap else 0,
         "last_check": snap.get("snapshot_time") if snap else None,
         "task": task if task is not None else _tasks.get(acc.username, {}),
         "scan_task": scan_task if scan_task is not None else _scan_tasks.get(acc.username, "idle"),
-        "scan_status": status_store.get_status(acc.username),
+        "scan_status": ss,
         "snap_fetch": snap.get("fetch") if snap else None,
+        # 停巡: the switch, what the system thinks of it (src/scan_plan.py)
+        "dormant": dormant,
+        "plan": plan,
+        "plan_key": _plan_key(plan, ss),
+        "sweep_days": run_settings().dormant_sweep_days,
     }
+
+
+def _plan_key(plan: scan_plan.Assessment, ss: dict | None) -> str:
+    """A short fingerprint of what a row showed about 停巡: the reasons and
+    the last resume. The stop button sends it back, and a stop clicked on a
+    page that no longer matches — a new application arrived, the account
+    was resumed meanwhile — is refused instead of undoing that."""
+    raw = json.dumps([plan.reasons, (ss or {}).get("resumed_at")], ensure_ascii=False)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def _toast_headers(msg: str, kind: str = "", **events) -> dict[str, str]:
+    """HX-Trigger for a toast (web/static/ui.js) plus any refresh events.
+    ASCII-escaped JSON: a header value must be latin-1."""
+    payload = {**{k: True for k, v in events.items() if v}, "toast": {"msg": msg, "kind": kind}}
+    return {"HX-Trigger": json.dumps(payload, ensure_ascii=True)}
+
+
+def round_preview() -> dict | None:
+    """What 立即巡检全部 would scan right now — the button says how many.
+    Never raises: the page must render even if the planner cannot."""
+    try:
+        plan = scan_plan.plan_round(
+            load_accounts(), status_store.get_all(), get_latest_snapshot,
+            sweep_days=run_settings().dormant_sweep_days,
+            docs_check=attachments_enabled(),
+            disk_low=diskstat.check_free().low,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"巡检名单预览失败: {exc!r}")
+        return None
+    return {"targets": len(plan.targets), "dormant": plan.dormant_total,
+            "swept": len(plan.swept) + len(plan.retry)}
 
 
 def _row_error(username: str, msg: str = "账号不存在") -> HTMLResponse:
@@ -317,7 +367,9 @@ def accounts_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "accounts.html",
-        {"rows": rows, "run_once": run_state_ctx()},
+        {"rows": rows, "run_once": run_state_ctx(),
+         "round": round_preview() if is_admin(request) else None,
+         "sweep_days": run_settings().dormant_sweep_days},
     )
 
 
@@ -896,9 +948,19 @@ def reveal_account(request: Request, username: str, reg_no: str = "") -> ActionR
     if acc is None:
         return _NO_SUCH
     reg_no = reg_no.strip() if _REG_NO_RE.match(reg_no.strip()) else ""
+    # Someone is about to file or correct something on the platform: a 停巡
+    # account goes back on every round so the result is seen (src/scan_plan.py).
+    # Automatic, so an operator's click does it too — they cannot switch it.
+    resumed = False
+    if status_store.is_dormant(status_store.get_status(username)):
+        who = (current_user(request) or {}).get("username", "")
+        resumed = status_store.resume_if_dormant(username, acc.company, by=who, reason="去平台办理")
+    detail: dict = {"reg_no": reg_no} if reg_no else {}
+    if resumed:
+        detail["scan_resumed"] = True
     audit_log.record_request(request, "account.reveal", company=acc.company, target=username,
-                             detail={"reg_no": reg_no} if reg_no else None)
-    return ActionResult(acc=acc, reg_no=reg_no)
+                             detail=detail or None)
+    return ActionResult(acc=acc, reg_no=reg_no, scan_resumed=resumed)
 
 
 @router.post("/accounts/{username}/platform-access", response_class=HTMLResponse)
@@ -910,13 +972,159 @@ def platform_access(
         require_admin(request)
     if result.status == 404:
         return PlainTextResponse("账号不存在", status_code=404)
+    headers = {"Cache-Control": "no-store"}
+    if result.scan_resumed:
+        # The accounts table (if that is where this came from) shows the change.
+        headers["HX-Trigger"] = json.dumps({"accountsRefresh": True})
     return templates.TemplateResponse(
         request,
         "_partials/platform_access.html",
         {"acc": result.acc, "reg_no": result.reg_no, "modal": inline != "1",
-         "login_url": platform_login_url()},
-        headers={"Cache-Control": "no-store"},
+         "login_url": platform_login_url(), "scan_resumed": result.scan_resumed},
+        headers=headers,
     )
+
+
+# ---------------------------------------------------------------------------
+# 停巡 (src/scan_plan.py) — administrators only
+# ---------------------------------------------------------------------------
+
+def _admin_account(request: Request, username: str) -> Account | None:
+    return next((a for a in visible_accounts(request) if a.username == username), None)
+
+
+@router.post("/accounts/{username}/scan-mode", response_class=HTMLResponse)
+def set_account_scan_mode(
+    request: Request, username: str, on: str = Form(""), force: str = Form(""),
+    seen: str = Form(""),
+) -> HTMLResponse:
+    """停巡 (on=0) or back on every round (on=1). Stopping needs a baseline,
+    and an account the system does not consider 办结 needs force=1 — which
+    only the confirm dialog sends, after showing why. The button also sends
+    `seen`, the fingerprint of what its row showed (_plan_key): when the
+    account has changed since — a new application, a resume meanwhile — the
+    stop is refused and the row re-rendered with the reasons as they are
+    now, whatever the page said."""
+    require_admin(request)
+    acc = _admin_account(request, username)
+    if acc is None:
+        return _row_error_on(request, username)
+    ss = status_store.get_status(username)
+    was = status_store.is_dormant(ss)
+    stop = on != "1"
+    forced = False
+    if stop and not was:
+        plan = scan_plan.assess(acc, get_latest_snapshot(acc.company), ss, docs_check=attachments_enabled())
+        refusal = ""
+        if not plan.has_baseline:
+            refusal = "这家还没有巡检过，先巡检一次再停巡"
+        elif seen and seen != _plan_key(plan, ss):
+            now_says = "；".join(plan.reasons) or "全部办结"
+            refusal = f"这家的情况变了（现在：{now_says}），请看过后再操作，没有停巡"
+        elif not plan.done and force != "1":
+            refusal = "这家还没有办结（" + "；".join(plan.reasons) + "），没有停巡"
+        if refusal:
+            audit_log.nothing_changed(request)
+            return templates.TemplateResponse(
+                request, "_partials/account_row.html", {"row": _row(acc)},
+                headers=_toast_headers(refusal, "danger"),
+            )
+        forced = not plan.done
+    who = (current_user(request) or {}).get("username", "")
+    result = status_store.set_scan_mode(username, acc.company, dormant=stop, by=who)
+    labels = {False: "每轮巡检", True: "停巡"}
+    detail: dict = {"scan": [labels[was], labels[stop]]}
+    if forced:
+        detail["force"] = True
+    if not result["ok"]:
+        audit_log.record_request(request, "account.scan_mode", ok=False, company=acc.company,
+                                 target=username, detail=detail)
+        return PlainTextResponse("保存失败，请查看服务器日志", status_code=500)
+    audit_log.record_request(request, "account.scan_mode", company=acc.company, target=username,
+                             detail=detail)
+    msg = ("已停巡：不再参加每轮巡检" if stop else "已恢复每轮巡检") if result["changed"] else (
+        "本来就是停巡" if stop else "本来就在每轮巡检")
+    return templates.TemplateResponse(
+        request, "_partials/account_row.html", {"row": _row(acc)},
+        headers=_toast_headers(msg, "success" if result["changed"] else ""),
+    )
+
+
+def _scan_plan_rows(request: Request) -> tuple[list[dict], list[dict]]:
+    """(suggested stops, suggested resumes): every-round accounts that are
+    办结, and 停巡 accounts that are not."""
+    statuses = status_store.get_all()
+    docs = attachments_enabled()
+    stop: list[dict] = []
+    resume: list[dict] = []
+    for acc in visible_accounts(request):
+        ss = statuses.get(acc.username)
+        plan = scan_plan.assess(acc, get_latest_snapshot(acc.company), ss, docs_check=docs)
+        row = {"account": acc, "plan": plan, "scan_status": ss}
+        if status_store.is_dormant(ss):
+            if not plan.done:
+                resume.append(row)
+        elif plan.done:
+            stop.append(row)
+    return stop, resume
+
+
+@router.get("/accounts/scan-plan", response_class=HTMLResponse)
+def scan_plan_form(request: Request) -> HTMLResponse:
+    """按在审情况设置: the suggestions with their reasons, all ticked."""
+    require_admin(request)
+    stop, resume = _scan_plan_rows(request)
+    statuses = status_store.get_all()
+    accounts = visible_accounts(request)
+    dormant = sum(1 for a in accounts if status_store.is_dormant(statuses.get(a.username)))
+    return templates.TemplateResponse(request, "_partials/scan_plan.html", {
+        "stop": stop, "resume": resume, "total": len(accounts), "dormant": dormant,
+        "sweep_days": run_settings().dormant_sweep_days,
+    })
+
+
+@router.post("/accounts/scan-plan", response_class=HTMLResponse)
+def apply_scan_plan(
+    request: Request, stop: list[str] = Form(default=[]), resume: list[str] = Form(default=[]),
+) -> HTMLResponse:
+    """Apply the ticked suggestions. Each one is assessed again first: one
+    that no longer holds (a new application arrived, a resume happened) is
+    left alone and named in the log and the toast."""
+    require_admin(request)
+    by_name = {a.username: a for a in visible_accounts(request)}
+    statuses = status_store.get_all()
+    docs = attachments_enabled()
+    items: list[tuple[str, str, bool]] = []
+    skipped: list[str] = []
+    for username, want_dormant in [*((u, True) for u in stop), *((u, False) for u in resume)]:
+        acc = by_name.get(username)
+        if acc is None:
+            continue
+        ss = statuses.get(username)
+        plan = scan_plan.assess(acc, get_latest_snapshot(acc.company), ss, docs_check=docs)
+        still = (not status_store.is_dormant(ss) and plan.done) if want_dormant else (
+            status_store.is_dormant(ss) and not plan.done)
+        if still:
+            items.append((username, acc.company, want_dormant))
+        else:
+            skipped.append(acc.company)
+    who = (current_user(request) or {}).get("username", "")
+    changed = status_store.set_scan_modes(items, by=who) if items else {}
+    if changed is None:
+        audit_log.record_request(request, "account.scan_plan", ok=False,
+                                 detail={"error": "写入账号状态失败"})
+        return PlainTextResponse("保存失败，请查看服务器日志", status_code=500)
+    stopped = [by_name[u].company for u, _, d in items if d and changed.get(u)]
+    resumed = [by_name[u].company for u, _, d in items if not d and changed.get(u)]
+    # One line per apply, even an empty one — like 停巡 on a single row, it
+    # is an administrator's explicit decision about what gets scanned.
+    detail = {k: v for k, v in (("stopped", stopped), ("resumed", resumed), ("skipped", skipped)) if v}
+    audit_log.record_request(request, "account.scan_plan", detail=detail or None)
+    msg = f"已停巡 {len(stopped)} 家，恢复每轮巡检 {len(resumed)} 家"
+    if skipped:
+        msg += f"；{len(skipped)} 家情况有变，没有改动"
+    # An empty body closes the modal; the table and the toast follow.
+    return HTMLResponse("", headers=_toast_headers(msg, "success", accountsRefresh=True))
 
 
 @router.post("/accounts/{username}/delete", response_class=HTMLResponse)

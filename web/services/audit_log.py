@@ -116,6 +116,9 @@ ACTION_LABELS: dict[str, str] = {
     "account.verify": "测试登录",
     "account.relogin": "重登",
     "account.scan": "单账号巡检",
+    "account.scan_mode": "停巡 / 恢复巡检",
+    "account.scan_plan": "按在审情况设置巡检",
+    "account.scan_resume": "自动恢复每轮巡检",
     "scan.start": "立即巡检全部",
     "scan.stop": "停止巡检",
     "settings.pause": "暂停 / 恢复定时巡检",
@@ -149,8 +152,8 @@ CATEGORIES: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 
 # Detail keys whose value is a [before, after] pair, by the actions that write them.
-_CHANGE_ACTIONS = ("account.edit", "account.group", "account.owner", "user.update", "group.rename",
-                   "settings.", "notify.")
+_CHANGE_ACTIONS = ("account.edit", "account.group", "account.owner", "account.scan_mode",
+                   "user.update", "group.rename", "settings.", "notify.")
 _FLAG_TEXT = {
     "password_changed": ("改了密码", ""),
     "stored_password": ("用已保存的密码", "用填写的密码"),
@@ -158,6 +161,8 @@ _FLAG_TEXT = {
     "already_running": ("已在运行", ""),
     "verify_skipped": ("验证过于频繁，未验证", ""),
     "must_change": ("要求下次登录改口令", ""),
+    "force": ("尚未办结，确认后停巡", ""),
+    "scan_resumed": ("已恢复每轮巡检", ""),
 }
 _KEY_LABELS = {
     "contact": "联系人", "group": "分组", "groups": "分组", "role": "角色", "display_name": "显示名",
@@ -168,6 +173,7 @@ _KEY_LABELS = {
     "q": "关键字", "files": "文件数", "bytes": "字节", "users": "用户", "via": "方式",
     "minutes": "锁定分钟", "status": "状态码", "http_method": "请求",
     "label": "名称", "for_user": "给用户",
+    "scan": "巡检", "stopped": "停巡", "resumed": "恢复每轮巡检", "skipped": "情况有变未改",
 }
 
 

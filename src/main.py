@@ -7,6 +7,10 @@ Delays, timeouts and retention limits live in src/runtime_settings.py.
 All entry points (web console, daemon, CLI) serialize through the global
 run lock in src/control.py; a CancelToken threads checkpoints through the
 pipeline so a run can be stopped between accounts/pages.
+
+A batch round scans the accounts src/scan_plan.py picks: everything not set
+to 停巡, plus stopped accounts due for their weekly sweep or still owed
+documents. A per-account scan (run_single) scans whatever it is given.
 """
 
 from __future__ import annotations
@@ -24,7 +28,8 @@ from typing import Any
 
 from loguru import logger
 
-from . import control, daily_stats, diskstat, status_store
+from . import audit, control, daily_stats, diskstat, scan_plan, status_store
+from .attachments import enabled as attachments_enabled
 from .attachments import sync_attachments
 from .config_loader import Account, ConfigError, load_accounts
 from .control import CancelToken
@@ -67,6 +72,11 @@ _SNAPSHOT_NAME_RE = re.compile(r"^(?P<prefix>.+)_(\d{4}-\d{2}-\d{2}-\d{4})$")
 # A .part older than this cannot be a download in progress (the per-file
 # timeout is seconds, not hours) — it is what a killed process left behind.
 _PART_STALE_SECONDS = 3600
+
+# Operation-log actor for what the scan does on its own (resuming a 停巡
+# account). Not a valid console login name (users.py allows [a-z0-9._-]),
+# so it can never be mistaken for a person; the same as the WEB_USERS import.
+_SYSTEM_ACTOR = "系统"
 
 
 def _prune_stale_parts() -> None:
@@ -559,6 +569,17 @@ def scan_account_and_notify(
     result["fetch_time"] = fetch_time
     status_store.record_scan(account.username, account.company, ok=True, fetch_meta=fetch_meta)
 
+    # ── A 停巡 account that turned up something new goes back on every
+    # round (weekly sweep or a manual scan alike). Non-fatal: the snapshot
+    # is saved and the change will be in the event log either way. ─────────
+    try:
+        if status_store.is_dormant(status_store.get_status(account.username)):
+            cause = scan_plan.resume_cause(diff, records, had_baseline=bool(prev_records))
+            if cause:
+                _auto_resume(account, cause)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[{account.company}] 停巡自动恢复检查失败（非致命）: {exc!r}")
+
     # ── Notify if there are changes (non-fatal) ────────────────────────────
     notified: dict[str, bool] | None = None
     if diff.has_changes and notify_inline:
@@ -613,6 +634,42 @@ def scan_account_and_notify(
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
+
+def _auto_resume(account: Account, reason: str) -> bool:
+    """Put a 停巡 account back on every round and say why in the operation
+    log. The log line is written after status_store's lock is released."""
+    if not status_store.resume_if_dormant(
+        account.username, account.company, by=_SYSTEM_ACTOR, reason=reason,
+    ):
+        return False
+    audit.record(_SYSTEM_ACTOR, "account.scan_resume", via="system", company=account.company,
+                 target=account.username, detail={"reason": reason})
+    logger.info(f"[{account.company}] 已自动恢复每轮巡检：{reason}")
+    return True
+
+
+def _plan_round(accounts: list[Account], *, include_dormant: bool) -> scan_plan.RoundPlan:
+    """This round's accounts (src/scan_plan.py), with any renewal-window
+    resumes persisted and logged. If the planner itself fails, everyone is
+    scanned — the behaviour before 停巡 existed — rather than no one."""
+    try:
+        plan = scan_plan.plan_round(
+            accounts, status_store.get_all(), load_latest_snapshot,
+            sweep_days=run_settings().dormant_sweep_days,
+            docs_check=attachments_enabled(),
+            disk_low=diskstat.check_free().low,
+            include_dormant=include_dormant,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"停巡名单计算失败，本轮巡检全部账号: {exc!r}")
+        return scan_plan.RoundPlan(order=list(accounts), active=list(accounts))
+    for acc, reason in plan.resumes:
+        try:
+            _auto_resume(acc, reason)
+        except Exception as exc:  # noqa: BLE001 — it is scanned this round regardless
+            logger.warning(f"[{acc.company}] 续展期自动恢复失败（非致命）: {exc!r}")
+    return plan
+
 
 def _error_result(account: Account, error: str) -> dict:
     return {
@@ -747,16 +804,21 @@ async def _run_concurrent(
     return results
 
 
-def run_all(*, force_login: bool = False, trigger: str = "cli") -> dict[str, Any]:
-    """Process all accounts. Serial up to run.serial_max_accounts; asyncio
-    concurrent beyond that (both from settings.yaml, defaults 10 / 3 workers).
+def run_all(
+    *, force_login: bool = False, trigger: str = "cli", include_dormant: bool = False,
+) -> dict[str, Any]:
+    """Process this round's accounts (src/scan_plan.py: everything not 停巡,
+    plus stopped accounts due for a sweep or still owed documents). Serial
+    up to run.serial_max_accounts of them; asyncio concurrent beyond that
+    (both from settings.yaml, defaults 10 / 3 workers).
 
     Takes the global run lock; if another run (any process) holds it, returns
     immediately with skipped="already_running".
 
     Args:
-        force_login: Bypass token cache for every account.
-        trigger:     Who started this run ("web" | "daemon" | "cli") — shown in the UI.
+        force_login:     Bypass token cache for every account.
+        trigger:         Who started this run ("web" | "daemon" | "cli") — shown in the UI.
+        include_dormant: Scan every 停巡 account too (run_once.py --all).
 
     Returns:
         Dict with keys: results (list of per-account dicts), report_path (str | None).
@@ -784,23 +846,38 @@ def run_all(*, force_login: bool = False, trigger: str = "cli") -> dict[str, Any
             _finalize_run(ctx, "error", error=f"config: {exc}"[:200])
             return {"results": [], "report_path": None}
 
+        plan = _plan_round(accounts, include_dormant=include_dormant)
+        targets = plan.targets
+        if plan.dormant_total or plan.resumes:
+            logger.info(
+                f"本轮巡检 {len(targets)} 家：每轮巡检 {len(plan.active)} 家；"
+                f"停巡 {plan.dormant_total} 家，其中抽查 {len(plan.swept)}、补抓文件 {len(plan.retry)}"
+                + (f"；续展期自动恢复 {len(plan.resumes)} 家" if plan.resumes else "")
+            )
+
         run_time = datetime.now(timezone.utc)
         rs = run_settings()
-        if len(accounts) <= rs.serial_max_accounts:
-            results, cancelled = _run_serial(accounts, ctx.cancel, force_login=force_login)
+        # Serial vs. pool by what this round actually scans: 30 accounts of
+        # which 6 are due must run serially, with the run bar's progress.
+        if len(targets) <= rs.serial_max_accounts:
+            results, cancelled = _run_serial(targets, ctx.cancel, force_login=force_login)
         else:
             logger.info(
-                f"{len(accounts)} accounts (> run.serial_max_accounts={rs.serial_max_accounts}) "
+                f"{len(targets)} accounts (> run.serial_max_accounts={rs.serial_max_accounts}) "
                 f"— using asyncio concurrency (max {rs.max_workers})"
             )
             results = asyncio.run(
                 _run_concurrent(
-                    accounts, ctx.cancel, force_login=force_login,
+                    targets, ctx.cancel, force_login=force_login,
                     max_workers=rs.max_workers,
                     account_timeout=rs.account_timeout_seconds,
                 )
             )
             cancelled = ctx.cancel.should_stop()
+        swept = {a.username for a in (*plan.swept, *plan.retry)}
+        for r in results:
+            if r.get("account") in swept:
+                r["swept"] = True
     except Exception as exc:
         _finalize_run(ctx, "error", error=f"{type(exc).__name__}: {exc}"[:200])
         raise
@@ -824,9 +901,11 @@ def run_all(*, force_login: bool = False, trigger: str = "cli") -> dict[str, Any
     # ── Generate HTML report (skipped when stopping — exit fast; pruning is
     # sub-second and still runs, in _finalize_run) ───────────────────────────
     report_path = None
-    if not cancelled:
+    # A round with nothing to scan (every account 停巡, none due) writes no
+    # report: twice a day an empty page on the 报表 list says nothing.
+    if not cancelled and targets:
         try:
-            report_path = generate_report(results, diffs, report_time=run_time)
+            report_path = generate_report(results, diffs, report_time=run_time, dormant=plan.skipped)
         except Exception as exc:
             logger.warning(f"Report generation failed (non-fatal): {exc}")
 

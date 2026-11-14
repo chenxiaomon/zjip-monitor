@@ -60,6 +60,11 @@ class RunSettings:
     # the second line of defence that guarantees run_all() reaches
     # ctx.finish() and releases the global run lock.
     account_timeout_seconds: float = 600
+    # A dormant (停巡) account is swept by a batch round once its last
+    # successful scan is this many days old (src/scan_plan.py); 0 = never.
+    # Weekly is what the operators chose: new applications on a finished
+    # client surface within a week, at a handful of extra logins per round.
+    dormant_sweep_days: int = 7
 
 
 @dataclass(frozen=True)
@@ -181,6 +186,8 @@ _RULES: dict[str, dict[str, _Rule]] = {
         "account_delay_max_seconds": (_NUM, 0, False),
         # asyncio.wait_for(timeout=0) would time every account out instantly.
         "account_timeout_seconds": (_NUM, 0, True),
+        # 0 is meaningful: dormant accounts are never swept.
+        "dormant_sweep_days": (_INT, 0, False),
     },
     "retention": {
         # Keep-counts must be ≥ 1: `files[:-0]` is `files[:0]`, so 0 would
