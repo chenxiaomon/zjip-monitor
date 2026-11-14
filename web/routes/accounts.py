@@ -11,7 +11,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from fastapi import Form
@@ -188,9 +188,10 @@ def _row(acc: Account, *, task: dict | None = None, scan_task: str | None = None
     dormant = status_store.is_dormant(ss)
     plan = scan_plan.assess(acc, snap, ss, docs_check=attachments_enabled())
     token = token_status(get_session(acc.username))
-    if dormant and token["state"] == "expired":
-        # A 停巡 account is no longer logged into twice a day; its token
-        # running out is expected, not something to paint red.
+    if dormant:
+        # A 停巡 account is no longer logged into twice a day: whether its
+        # token is still good, about to run out or gone is expected, not
+        # something to paint green, amber or red. The label stays factual.
         token = {**token, "css": "pill-neutral"}
     return {
         "account": acc,
@@ -282,7 +283,11 @@ def _public_error(exc: Exception, context: str, *, username: str = "") -> str:
 
 
 def _build_rows(accounts_list) -> list[dict]:
-    return [_row(acc) for acc in accounts_list]
+    """Every-round accounts first, in their usual order; then 停巡 ones,
+    those the system would put back on every round (建议恢复) at the head
+    of that group. accounts_rows.html draws the two groups apart."""
+    rows = [_row(acc) for acc in accounts_list]
+    return sorted(rows, key=lambda r: (r["dormant"], r["dormant"] and not r["plan"].reasons))
 
 
 # ---------------------------------------------------------------------------
@@ -475,14 +480,20 @@ async def scan_account(request: Request, username: str) -> HTMLResponse:
 
 
 @router.get("/accounts/{username}/scan-status", response_class=HTMLResponse)
-def scan_status_poll(request: Request, username: str) -> HTMLResponse:
+def scan_status_poll(request: Request, username: str, was: str = Query("")) -> HTMLResponse:
+    """`was=dormant`: the polling row was drawn as 停巡. When the scan put it
+    back on every round (a new application turned up), the whole table is
+    redrawn so the row moves out of the 已停巡 group."""
     accounts_list = visible_accounts(request)
     acc = next((a for a in accounts_list if a.username == username), None)
     if acc is None:
         return _row_empty(username)
 
+    row = _row(acc)
+    headers = ({"HX-Trigger": json.dumps({"accountsRefresh": True})}
+               if was == "dormant" and not row["dormant"] else None)
     return templates.TemplateResponse(
-        request, "_partials/account_row.html", {"row": _row(acc)}
+        request, "_partials/account_row.html", {"row": row}, headers=headers
     )
 
 
@@ -1044,9 +1055,11 @@ def set_account_scan_mode(
                              detail=detail)
     msg = ("已停巡：不再参加每轮巡检" if stop else "已恢复每轮巡检") if result["changed"] else (
         "本来就是停巡" if stop else "本来就在每轮巡检")
+    # A change moves the row to the other group: the table is redrawn.
     return templates.TemplateResponse(
         request, "_partials/account_row.html", {"row": _row(acc)},
-        headers=_toast_headers(msg, "success" if result["changed"] else ""),
+        headers=_toast_headers(msg, "success" if result["changed"] else "",
+                               accountsRefresh=result["changed"]),
     )
 
 

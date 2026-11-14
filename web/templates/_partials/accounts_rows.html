@@ -1,7 +1,24 @@
-{% for row in rows %}
+{# Rows come sorted by _build_rows (web/routes/accounts.py): every-round
+   accounts first, then 停巡. With any 停巡 account the two groups get a
+   heading row each; without one the table looks as it always did. #}
+{% set stopped = rows | selectattr('dormant') | list %}
+{% set every = rows | rejectattr('dormant') | list %}
+{% if stopped and every %}
+<tr class="tbl-group"><td colspan="8">每轮巡检 · {{ every | length }} 家</td></tr>
+{% endif %}
+{% for row in every %}
 {% include "_partials/account_row.html" %}
-{% else %}
+{% endfor %}
+{% if stopped %}
+{% set days = stopped[0].sweep_days %}
+<tr class="tbl-group"><td colspan="8">{{ icon('player-pause') }}已停巡 · {{ stopped | length }} 家
+  <span class="tbl-group-note">不参加每轮巡检，{% if days %}每 {{ days }} 天顺带抽查一次{% else %}也不抽查（抽查间隔为 0）{% endif %}；发现新申请自动恢复</span></td></tr>
+{% for row in stopped %}
+{% include "_partials/account_row.html" %}
+{% endfor %}
+{% endif %}
+{% if not rows %}
 <tr>
   <td colspan="8" class="empty">{{ icon('inbox') }}暂无账号数据</td>
 </tr>
-{% endfor %}
+{% endif %}

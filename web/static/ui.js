@@ -114,6 +114,29 @@ function togglePassword(btn) {
   });
 })();
 
+/* 折叠区记住开合（<details data-keep-open id=…>）：仪表盘每次刷新都整块重画，
+   开着的折叠区不能因此自己合上。只记在这个标签页里，新打开的页面照样默认收起。 */
+(function () {
+  var SEL = 'details[data-keep-open][id]';
+  function key(el) { return 'open:' + el.id; }
+  function restore(root) {
+    var scope = root && root.querySelectorAll ? root : document;
+    var list = Array.prototype.slice.call(scope.querySelectorAll(SEL));
+    if (scope.matches && scope.matches(SEL)) list.push(scope);
+    list.forEach(function (el) {
+      try { if (sessionStorage.getItem(key(el)) === '1') el.open = true; } catch (e) { /* 存储不可用：保持默认收起 */ }
+    });
+  }
+  // toggle 不冒泡，在捕获阶段统一接住
+  document.addEventListener('toggle', function (e) {
+    var el = e.target;
+    if (!el || !el.matches || !el.matches(SEL)) return;
+    try { sessionStorage.setItem(key(el), el.open ? '1' : '0'); } catch (err) { /* 忽略 */ }
+  }, true);
+  if (window.htmx) htmx.onLoad(restore);
+  document.addEventListener('DOMContentLoaded', function () { restore(document); });
+})();
+
 /* 趋势折线的悬停读数：数据在 .chart 的 data-chart 里（服务端算好的绘图坐标 0–1000）。 */
 (function () {
   function setup(el) {

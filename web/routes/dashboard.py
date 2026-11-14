@@ -18,8 +18,8 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from src import ops_alerts, status_store, todo
-from src.runtime_settings import ops_alert_settings
+from src import ops_alerts, scan_plan, status_store, todo
+from src.runtime_settings import ops_alert_settings, run_settings
 from src.scraper import AUDIT_STATUS
 from web.auth import (
     SCOPE_COOKIE, allowed_usernames, is_admin, shown_accounts, shown_usernames, visible_accounts,
@@ -143,10 +143,13 @@ def _dashboard_ctx(request: Request, year: str | None = None, range_days: int = 
         snap = get_latest_snapshot(acc.company)
         status_counts: dict[int, int] = {}
         last_check = None
+        open_records = 0  # every year, not just the chosen ones: what 停巡 is about
         if snap:
             for r in snap.get("records", []):
                 if (y := _apply_year(r.get("dataRegApplyTime"))) is not None:
                     years.add(y)
+                if isinstance(r, dict) and scan_plan.is_open(r):
+                    open_records += 1
                 if not scope.matches(r):
                     continue
                 code = int_or_none(r.get("dataRegAuditStatus"))
@@ -185,6 +188,10 @@ def _dashboard_ctx(request: Request, year: str | None = None, range_days: int = 
             "stale": not health["dormant"] and _is_stale(last_check, stale_hours),
             "dormant": health["dormant"],
             "sweep_failed": health["sweep_failed"],
+            # Stopped, yet something is still in review (a stop that was
+            # forced): the card stays up top and says 建议恢复.
+            "open_records": open_records,
+            "resume": health["dormant"] and open_records > 0,
         })
 
     total_records = sum(s["total"] for s in account_snapshots)
@@ -210,6 +217,13 @@ def _dashboard_ctx(request: Request, year: str | None = None, range_days: int = 
         "dash_url": _dash_url_factory(scope, range_days),
         "records_link": records_link_factory(scope),
         "account_snapshots": account_snapshots,
+        # The account grid in two parts: the cards to watch (停巡 ones that
+        # should be resumed first), and the 停巡 ones whose work is done,
+        # folded away below.
+        "grid_main": [s for s in account_snapshots if s["resume"]]
+                     + [s for s in account_snapshots if not s["dormant"]],
+        "grid_dormant": [s for s in account_snapshots if s["dormant"] and not s["resume"]],
+        "sweep_days": run_settings().dormant_sweep_days,
         "login_alerts": login_alerts,
         # Scoped to what this user may see: a group user must never learn from
         # the banner that another group's company is failing.

@@ -34,7 +34,7 @@
     {% include "_partials/trend.html" %}
   </div>
   {% include "_partials/todo.html" %}
-  <div class="section-title">账号状态 <span class="count">{{ account_snapshots|length }} 家</span></div>
+  <div class="section-title">账号状态 <span class="count">{{ account_snapshots|length }} 家{% if grid_dormant %} · {{ grid_dormant|length }} 家停巡，收在下方{% endif %}</span></div>
   {% include "_partials/account_grid.html" %}
   {% include "_partials/timeline.html" %}
 </div>

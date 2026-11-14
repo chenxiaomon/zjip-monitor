@@ -192,3 +192,100 @@ def test_a_stop_after_a_resume_meanwhile_is_refused(admin, world):
     status_store.resume_if_dormant("ua1", "甲 公司", by="opa", reason="去平台办理")
     resp = admin.post("/accounts/ua1/scan-mode", data={"on": "0", "seen": seen})
     assert not _dormant("ua1") and "情况变了" in _toast(resp)
+
+
+# --- telling the two kinds apart -----------------------------------------------------------
+
+def _row_html(html, u):
+    return re.search(rf'<tr id="row-{u}".*?</tr>', html, re.S).group(0)
+
+
+def test_accounts_page_lists_every_round_first_then_stopped(admin):
+    html = admin.get("/accounts").text
+    assert "tbl-group" not in html and "row-dormant" not in html   # nothing stopped: the table as it was
+    status_store.set_scan_mode("ua1", "甲 公司", dormant=True, by="admin")   # 办结
+    status_store.set_scan_mode("ua2", "乙·公司", dormant=True, by="admin")   # forced: 1 条在审
+    html = admin.get("/accounts").text
+    order = [html.index(s) for s in ("每轮巡检 · 1 家", 'id="row-ub1"', "已停巡 · 2 家",
+                                     'id="row-ua2"', 'id="row-ua1"')]
+    assert order == sorted(order)          # 建议恢复 heads the 停巡 group
+    assert 'class="row-dormant"' in _row_html(html, "ua1") and "row-dormant" not in _row_html(html, "ub1")
+    assert "每 7 天顺带抽查一次" in html
+    assert "建议恢复：1 条在审" in _row_html(html, "ua2")
+    # The same grouping when only the rows are fetched (after a save or a switch).
+    rows = admin.get("/accounts/rows").text
+    assert rows.index('id="row-ub1"') < rows.index("已停巡 · 2 家") < rows.index('id="row-ua2"')
+
+
+def test_a_stopped_accounts_token_is_grey_even_while_valid(admin, monkeypatch):
+    valid = {"expires_at": (datetime.now(timezone.utc) + timedelta(hours=5)).isoformat()}
+    monkeypatch.setattr(accounts_routes, "get_session", lambda u: valid)
+    status_store.set_scan_mode("ua1", "甲 公司", dormant=True, by="admin")
+    html = admin.get("/accounts").text
+    assert 'pill pill-neutral">有效' in _row_html(html, "ua1")
+    assert 'pill pill-good">有效' in _row_html(html, "ua2")
+
+
+def test_switching_redraws_the_table_so_the_row_changes_group(admin):
+    resp = admin.post("/accounts/ua1/scan-mode", data={"on": "0"})
+    assert json.loads(resp.headers["hx-trigger"]).get("accountsRefresh") is True
+    resp = admin.post("/accounts/ua1/scan-mode", data={"on": "0"})          # nothing changed
+    assert "accountsRefresh" not in json.loads(resp.headers["hx-trigger"])
+    resp = admin.post("/accounts/ua1/scan-mode", data={"on": "1"})
+    assert json.loads(resp.headers["hx-trigger"]).get("accountsRefresh") is True
+
+
+def test_a_manual_scan_that_resumes_redraws_the_table(admin, monkeypatch):
+    status_store.set_scan_mode("ua1", "甲 公司", dormant=True, by="admin")
+    monkeypatch.setitem(accounts_routes._scan_tasks, "ua1", "running")
+    row = _row_html(admin.get("/accounts").text, "ua1")
+    assert 'hx-get="/accounts/ua1/scan-status?was=dormant"' in row
+    # Still stopped while polling: just the row.
+    assert "hx-trigger" not in admin.get("/accounts/ua1/scan-status?was=dormant").headers
+    # The scan found a new application and switched it back on.
+    status_store.resume_if_dormant("ua1", "甲 公司", by="scan", reason="新申请 A2")
+    accounts_routes._scan_tasks["ua1"] = "done"
+    resp = admin.get("/accounts/ua1/scan-status?was=dormant")
+    assert json.loads(resp.headers["hx-trigger"]) == {"accountsRefresh": True}
+    assert "hx-trigger" not in admin.get("/accounts/ua1/scan-status").headers
+
+
+def _name(company):
+    return f'class="acc-name truncate">{company}</a>'
+
+
+def _card(html, company):
+    start = html.rindex('<div class="card acc', 0, html.index(_name(company)))
+    return html[start:html.index("最后巡检", start)]
+
+
+def test_dashboard_folds_finished_stopped_accounts_away(admin):
+    assert 'id="dormant-cards"' not in admin.get("/").text
+    status_store.set_scan_mode("ua1", "甲 公司", dormant=True, by="admin")   # 办结
+    status_store.record_scan("ua1", "甲 公司", ok=False, error="平台 502", kind="scrape_failed")
+    status_store.set_scan_mode("ua2", "乙·公司", dormant=True, by="admin")   # forced: 1 条在审
+    dash = admin.get("/").text
+    fold = dash[dash.index('id="dormant-cards"'):dash.index("</details>")]
+    assert _name("甲 公司") in fold and _name("乙·公司") not in fold and _name("丙公司") not in fold
+    assert "已停巡 1 家" in fold and "1 家上次抽查失败" in fold and "每 7 天顺带抽查一次" in fold
+    assert "<details" in dash and " open" not in dash[dash.index("<details"):dash.index("<summary")]
+    assert "3 家 · 1 家停巡，收在下方" in dash
+    # Stopped with something still in review: up top, its real dot, 建议恢复.
+    assert dash.index(_name("乙·公司")) < dash.index('id="dormant-cards"')
+    yi = _card(dash, "乙·公司")
+    assert "已停巡 · 建议恢复：1 条在审" in yi and "dot-grey" not in yi and "acc-dormant" not in yi
+    jia = _card(dash, "甲 公司")
+    assert "dot-grey" in jia and "acc-dormant" in jia and "已停巡 · 数据截至" in jia
+    # The standalone partial draws the same two parts.
+    part = admin.get("/partials/account-grid").text
+    assert 'id="dormant-cards"' in part and part.index(_name("乙·公司")) < part.index('id="dormant-cards"')
+
+
+def test_view_board_says_stopped_and_puts_it_last(admin):
+    status_store.set_scan_mode("ua1", "甲 公司", dormant=True, by="admin")
+    body = admin.get("/view/").text
+    assert body.index("乙·公司") < body.index("甲 公司")
+    jia = body[body.index("甲 公司"):]
+    assert "已停巡 · 数据截至" in jia[:jia.index("acc-foot") + 60]
+    yi = body[body.index("乙·公司"):body.index("甲 公司")]
+    assert "最后巡检：" in yi and "已停巡" not in yi

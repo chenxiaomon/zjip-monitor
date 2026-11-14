@@ -395,6 +395,17 @@ a.stat:hover { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-s
 .tbl .cell-actions { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
 .tbl-compact td { padding: 7px 14px; }
 .row-click { cursor: pointer; }
+/* 账号页按「每轮巡检 / 已停巡」分组：组标题行 + 停巡行浅底（按钮照常） */
+.tbl tbody tr.tbl-group td {
+  padding: 14px 14px 6px; background: var(--surface);
+  font-size: 11.5px; font-weight: 600; color: var(--muted); letter-spacing: .02em;
+}
+.tbl tbody tr.tbl-group:first-child td { padding-top: 8px; }
+.tbl tbody tr.tbl-group:hover td { background: var(--surface); }
+.tbl-group .ic { width: 13px; height: 13px; vertical-align: -2px; margin-right: 4px; }
+.tbl-group-note { font-weight: 400; color: var(--faint); margin-left: 6px; letter-spacing: 0; }
+.tbl tbody tr.row-dormant td, .tbl tbody tr.row-dormant:hover td { background: var(--bg); }
+.tbl tbody tr.row-dormant .pill-neutral { background: var(--surface); }
 tr.expand td { background: var(--surface-2); padding: 10px 14px; }
 tr.expand:hover td { background: var(--surface-2); }
 .raw {
@@ -445,6 +456,22 @@ a.acc-name:hover { color: var(--accent-text); }
 .acc-health { font-size: 12px; display: flex; gap: 5px; align-items: flex-start; line-height: 1.4; }
 .acc-health .ic { width: 14px; height: 14px; margin-top: 2px; }
 .acc-foot { font-size: 11.5px; color: var(--faint); margin-top: auto; }
+/* 停巡：记录都已结束的账号收进折叠区，卡片虚线浅底、灰点 */
+.dot-grey { background: var(--faint); }
+.acc.acc-dormant { background: var(--surface-2); border-style: dashed; border-color: var(--border-2); box-shadow: none; }
+.acc-fold { margin-bottom: 20px; }
+.acc-fold .acc-grid { margin-bottom: 0; }
+.acc-fold > summary {
+  list-style: none; cursor: pointer;
+  display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap;
+  padding: 10px 14px; font-size: 12.5px; color: var(--text-2);
+  background: var(--surface-2); border: 1px dashed var(--border-2); border-radius: var(--radius);
+}
+.acc-fold > summary::-webkit-details-marker { display: none; }
+.acc-fold > summary:hover { background: var(--surface-3); }
+.acc-fold[open] > summary { margin-bottom: 14px; }
+.acc-fold-chev { width: 14px; height: 14px; color: var(--muted); transition: transform .15s; }
+.acc-fold[open] .acc-fold-chev { transform: rotate(90deg); }
 
 /* ---------- 弹窗 ---------- */
 .modal-backdrop {

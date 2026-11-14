@@ -12,6 +12,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 
+from src import status_store
 from src.focus import focus_default, this_year
 from src.scraper import AUDIT_STATUS
 from web.auth import visible_accounts
@@ -38,6 +39,7 @@ def _build_ctx(request: Request, year: str | None = None) -> dict:
     success_count = 0
     pending_correction = 0
 
+    statuses = status_store.get_all()
     for acc in visible_accounts(request):
         snap = get_latest_snapshot(acc.company)
         if snap is None:
@@ -57,10 +59,14 @@ def _build_ctx(request: Request, year: str | None = None) -> dict:
             "last_check": snap.get("snapshot_time"),
             "dot": account_dot(status_counts),
             "total": total,
+            # 停巡 (src/scan_plan.py): its data stops at the last sweep on
+            # purpose — the card says so, and it goes to the end.
+            "dormant": status_store.is_dormant(statuses.get(acc.username)),
         })
         total_records += total
         success_count += status_counts.get(7, 0)
         pending_correction += status_counts.get(2, 0)
+    account_cards.sort(key=lambda c: c["dormant"])  # stable: each group keeps its order
 
     return {
         "account_cards": account_cards,
