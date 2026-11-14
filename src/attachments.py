@@ -353,6 +353,42 @@ def _refresh_document(url: str, dest: Path) -> tuple[bool, Path | None]:
         incoming.unlink(missing_ok=True)
 
 
+def is_synced(manifest: dict | None, record: dict) -> bool:
+    """Has this record's documents pass already succeeded at its current
+    status, with nothing moved on the platform since? sync_attachments skips
+    exactly these records; everything else is retried on the next scan."""
+    return bool(
+        manifest
+        and manifest.get("status") == int_or_none(record.get("dataRegAuditStatus"))
+        and not _touched_since(record, manifest.get("synced_at"))
+    )
+
+
+def enabled() -> bool:
+    """settings.yaml → attachments.enabled (default on). The one definition:
+    sync_attachments and src/scan_plan.py (documents still owed) must agree,
+    or a dormant account would be retried for downloads that never run. An
+    empty `attachments:` section means the defaults, as everywhere else."""
+    settings = _load_settings()
+    att = settings.get("attachments") if isinstance(settings, dict) else None
+    return bool(att.get("enabled", True)) if isinstance(att, dict) else True
+
+
+def docs_pending(company: str, record: dict) -> bool:
+    """A record that should have 通知书/证书 and whose sync has not succeeded
+    at its current status — what the next scan of its account would fetch.
+
+    Only whether the pass ran is checked, never which documents came back:
+    the platform stopped issuing 浙江省证书 in 2024, so a missing provincial
+    certificate is the normal case, not a gap."""
+    reg_no = record.get("dataRegNo")
+    code = int_or_none(record.get("dataRegAuditStatus"))
+    if not reg_no or code is None or code not in NOTIFY_STATUSES:
+        return False
+    rec_dir = _ATTACHMENTS_DIR / _safe_name(company) / _safe_name(str(reg_no))
+    return not is_synced(load_manifest_cached(rec_dir), record)
+
+
 def sync_attachments(
     token: str,
     company: str,
@@ -376,8 +412,9 @@ def sync_attachments(
         List of newly downloaded file paths.
     """
     settings = _load_settings()
-    att_cfg = settings.get("attachments", {})
-    if not att_cfg.get("enabled", True):
+    att_cfg = settings.get("attachments")
+    att_cfg = att_cfg if isinstance(att_cfg, dict) else {}  # an empty section means the defaults
+    if not enabled():
         return []
     disk = diskstat.check_free()
     if disk.low:
@@ -414,11 +451,7 @@ def sync_attachments(
 
             rec_dir = _ATTACHMENTS_DIR / _safe_name(company) / _safe_name(reg_no)
             manifest = _load_manifest(rec_dir)
-            if (
-                manifest
-                and manifest.get("status") == code
-                and not _touched_since(r, manifest.get("synced_at"))
-            ):
+            if is_synced(manifest, r):
                 continue  # synced at this status, nothing moved on the platform since
 
             # None = the platform did not answer (HTTP or API error). That is

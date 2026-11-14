@@ -25,12 +25,20 @@
       {{ icon('plus') }}新增账号
     </button>
     {% if is_admin %}
+    <button hx-get="/accounts/scan-plan"
+            hx-target="#modal-container"
+            hx-swap="innerHTML"
+            title="办结的账号停巡、停巡中又有事的恢复：先看建议和原因，再勾选应用"
+            class="btn">
+      {{ icon('player-pause') }}按在审情况设置…
+    </button>
     <button hx-post="/run-once"
             hx-target="#run-once-status"
             hx-swap="outerHTML"
             {% if run_once.status in ('running', 'stopping') %}disabled{% endif %}
+            {% if round and round.dormant %}title="停巡的 {{ round.dormant }} 家不在内{% if round.swept %}（本轮顺带抽查 {{ round.swept }} 家）{% endif %}；停巡账号{% if sweep_days %}每 {{ sweep_days }} 天抽查一次{% else %}不抽查{% endif %}，单家可在行内点「巡检」"{% endif %}
             class="btn btn-primary">
-      {{ icon('player-play') }}立即巡检全部
+      {{ icon('player-play') }}{% if round and round.dormant %}立即巡检（{{ round.targets }} 家）{% else %}立即巡检全部{% endif %}
     </button>
     {% endif %}
   </div>
@@ -55,7 +63,7 @@
       </thead>
       <tbody id="account-tbody"
              hx-get="/accounts/rows"
-             hx-trigger="accountSaved from:body"
+             hx-trigger="accountSaved from:body, accountsRefresh from:body"
              hx-swap="innerHTML">
         {% include "_partials/accounts_rows.html" %}
       </tbody>

@@ -144,3 +144,40 @@ def test_an_empty_login_section_falls_back_to_the_default_limit(isolated_setting
 
     isolated_settings.write({"login": None})
     assert ss._max_failures() == 3
+
+
+# --- 停巡 -------------------------------------------------------------------------
+
+def test_scan_mode_round_trip_keeps_the_first_stop_time():
+    assert status_store.set_scan_mode("u1", "甲", dormant=True, by="admin") == {"ok": True, "changed": True}
+    since = status_store.get_status("u1")["dormant_since"]
+    assert status_store.set_scan_mode("u1", "甲", dormant=True, by="other") == {"ok": True, "changed": False}
+    entry = status_store.get_status("u1")
+    assert entry["dormant_since"] == since and entry["dormant_by"] == "admin"
+    assert status_store.dormant_usernames() == {"u1"}
+    assert status_store.resume_if_dormant("u1", by="系统", reason="新申请 N1") is True
+    assert status_store.resume_if_dormant("u1", by="系统", reason="新申请 N1") is False   # once
+    entry = status_store.get_status("u1")
+    assert (entry["dormant"], entry["resumed_by"], entry["resumed_reason"]) == (False, "系统", "新申请 N1")
+    assert status_store.resume_if_dormant("ghost", by="系统", reason="x") is False
+    assert "ghost" not in status_store.get_all()             # never creates an entry
+
+
+def test_bulk_scan_modes_in_one_write():
+    status_store.set_scan_mode("u2", dormant=True, by="admin")
+    out = status_store.set_scan_modes([("u1", "甲", True), ("u2", "乙", False), ("u3", "丙", False)], by="admin")
+    assert out == {"u1": True, "u2": True, "u3": False}
+    assert status_store.dormant_usernames() == {"u1"}
+
+
+def test_an_unparseable_file_is_set_aside_before_the_next_write():
+    path = status_store._STATUS_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not json", encoding="utf-8")
+    status_store._read_cache = None
+    assert status_store.get_all() == {}                       # readers never move it
+    assert path.read_text(encoding="utf-8") == "{not json"
+    status_store.record_scan("u1", "甲", ok=True)
+    (aside,) = list(path.parent.glob(path.name + ".bad-*"))
+    assert aside.read_text(encoding="utf-8") == "{not json"
+    assert set(status_store.get_all()) == {"u1"}

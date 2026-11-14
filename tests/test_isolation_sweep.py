@@ -82,6 +82,7 @@ PAGES = [
     f"/partials/record?account={OWNER_LOGIN}&reg_no=RBOSS1",
     f"/attachments/{OWNER_COMPANY}/RBOSS1/notice.pdf",
     f"/records/ledger.xlsx?account={OWNER_LOGIN}",
+    "/accounts/scan-plan",
 ]
 
 
@@ -128,6 +129,7 @@ def test_the_ledger_export_never_carries_the_owners_company(world, web_client, l
     ("post", "/accounts/{acct}/relogin", {}),
     ("post", "/accounts/{acct}/scan", {}),
     ("post", "/accounts/{acct}/delete", {}),
+    ("post", "/accounts/{acct}/scan-mode", {"on": "0"}),
 ])
 def test_the_owners_account_is_indistinguishable_from_none(world, web_client, login_as,
                                                            method, path, data, monkeypatch):

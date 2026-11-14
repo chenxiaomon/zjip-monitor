@@ -8,6 +8,9 @@
 {% set user_id = 'pa-user-' ~ ('m' if modal else 'd') %}
 {% set panel %}
 <div class="stack">
+  {% if scan_resumed %}
+  <div class="alert alert-info alert-inline">{{ icon('player-play') }}<div>这家企业原来是停巡状态，已恢复每轮巡检，办理结果会在下一轮巡检里看到。</div></div>
+  {% endif %}
   <div class="alert alert-info alert-inline">{{ icon('info-circle') }}<div>
     用这家企业的平台账号登录 zjip.org.cn 办理，提交仍在平台上由你本人完成，本系统不代为操作。查看口令会记入操作日志。
   </div></div>

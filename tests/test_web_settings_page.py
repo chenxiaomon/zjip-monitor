@@ -54,7 +54,8 @@ def test_a_broken_settings_file_is_never_overwritten(admin, isolated_settings):
                       ("/settings/schedule", {"crons": ["0 9 * * *"]}),
                       ("/notify/wechat", {}),
                       ("/settings/thresholds", {"min_failed_accounts": "3", "stale_hours": "36", "correction_warn_days": "5",
-                                                "max_consecutive_failures": "3", "min_free_mb": "500", "max_total_mb": "1024"})):
+                                                "max_consecutive_failures": "3", "min_free_mb": "500", "max_total_mb": "1024",
+                                                "dormant_sweep_days": "7"})):
         html = admin.post(url, data=data).text
         assert "格式错误" in html and "本次没有保存" in html, url
     assert isolated_settings.path.read_text(encoding="utf-8") == before
@@ -133,7 +134,8 @@ def test_next_runs_expose_apscheduler_weekday_numbering():
 # --- thresholds -----------------------------------------------------------------
 
 GOOD = {"min_failed_accounts": "05", "stale_hours": "48.5", "correction_warn_days": "7",
-        "max_consecutive_failures": "0", "min_free_mb": "800", "max_total_mb": "2048"}
+        "max_consecutive_failures": "0", "min_free_mb": "800", "max_total_mb": "2048",
+        "dormant_sweep_days": "3"}
 
 
 def test_thresholds_save_into_their_sections(admin, isolated_settings):
@@ -143,6 +145,7 @@ def test_thresholds_save_into_their_sections(admin, isolated_settings):
     assert saved["ops_alerts"] == {"min_failed_accounts": 5, "stale_hours": 48.5, "correction_warn_days": 7}
     assert saved["login"]["max_consecutive_failures"] == 0 and saved["login"]["method"] == "auto"
     assert saved["disk"] == {"min_free_mb": 800} and saved["attachments"] == {"max_total_mb": 2048}
+    assert saved["run"] == {"dormant_sweep_days": 3}
     assert 'value="48.5"' in html and 'value="5"' in html
 
 
@@ -154,6 +157,8 @@ def test_thresholds_save_into_their_sections(admin, isolated_settings):
     ("stale_hours", "inf", "请填写数字"),
     ("min_free_mb", "999999", "不能超过 51200"),
     ("max_total_mb", "", "不能为空"),
+    ("dormant_sweep_days", "-1", "不小于 0"),
+    ("dormant_sweep_days", "91", "不能超过 90"),
 ])
 def test_bad_thresholds_are_refused_field_by_field(admin, isolated_settings, field, value, message):
     before = isolated_settings.read()

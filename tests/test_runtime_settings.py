@@ -82,6 +82,7 @@ def test_defaults_are_the_original_literals():
     assert run.account_delay_min_seconds == 2.0   # random.uniform(2.0, 5.0)
     assert run.account_delay_max_seconds == 5.0
     assert run.account_timeout_seconds == 600     # ACCOUNT_HARD_TIMEOUT_SECONDS
+    assert run.dormant_sweep_days == 7            # added with 停巡: weekly, as the operators chose
 
     ret = rs.RetentionSettings()
     assert ret.snapshots_keep_per_company == 30   # _SNAPSHOTS_KEEP_PER_COMPANY

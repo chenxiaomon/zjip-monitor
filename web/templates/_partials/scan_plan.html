@@ -1,0 +1,58 @@
+{#
+  按在审情况设置（web/routes/accounts.py scan_plan_form / apply_scan_plan）：
+  办结的账号建议停巡，停巡中又有事的建议恢复。默认全选；应用前服务器会逐家重新评估，
+  情况有变的不改。规则见 src/scan_plan.py。
+#}
+{% macro plan_row(item, name) %}
+{% set a = item.account %}{% set p = item.plan %}
+<label class="check" style="display:flex;align-items:flex-start;gap:8px;padding:6px 0">
+  <input type="checkbox" name="{{ name }}" value="{{ a.username }}" checked style="margin-top:2px">
+  <span>
+    <span class="medium">{{ a.company }}</span>
+    {% if name == 'stop' %}
+    <span class="xs muted">· {{ p.record_count }} 条记录全部办结，文件已下载完{% if p.notes %}；{{ p.notes | join('；') }}{% endif %}</span>
+    {% else %}
+    <span class="xs warn">· {{ p.reasons | join('；') }}</span>
+    {% endif %}
+  </span>
+</label>
+{% endmacro %}
+<div class="modal-backdrop"
+     onclick="if(event.target===this)document.getElementById('modal-container').innerHTML=''">
+  <div class="modal" role="dialog" aria-modal="true" onclick="event.stopPropagation()">
+    <div class="modal-head">
+      <h2 class="modal-title">按在审情况设置巡检</h2>
+      <button type="button" class="icon-btn" title="关闭" onclick="document.getElementById('modal-container').innerHTML=''">{{ icon('x') }}</button>
+    </div>
+    <form class="modal-body stack" hx-post="/accounts/scan-plan" hx-target="#modal-container" hx-swap="innerHTML">
+      <p class="xs muted">
+        现在 {{ total }} 家中 {{ total - dormant }} 家每轮巡检、{{ dormant }} 家停巡。
+        停巡的账号不参加每轮巡检，{% if sweep_days %}每 {{ sweep_days }} 天顺带抽查一次{% else %}也不抽查（抽查间隔为 0）{% endif %}；
+        发现新申请、有人点「去平台办理」或证书进入续展期时自动恢复。
+      </p>
+      {% if stop %}
+      <section>
+        <h3 class="sm medium">建议停巡（{{ stop | length }} 家）</h3>
+        <p class="xs faint">记录全部办结、上次巡检成功、文件已下载完、证书不在续展期。</p>
+        {% for item in stop %}{{ plan_row(item, 'stop') }}{% endfor %}
+      </section>
+      {% endif %}
+      {% if resume %}
+      <section>
+        <h3 class="sm medium">建议恢复每轮巡检（{{ resume | length }} 家）</h3>
+        <p class="xs faint">停巡中，但还有需要盯的事。</p>
+        {% for item in resume %}{{ plan_row(item, 'resume') }}{% endfor %}
+      </section>
+      {% endif %}
+      {% if not stop and not resume %}
+      <div class="alert alert-neutral alert-inline">{{ icon('circle-check') }}<div>现在没有需要调整的账号：每轮巡检的都还有事要盯，停巡的都已办结。</div></div>
+      {% endif %}
+      <div class="row gap-2" style="justify-content:flex-end">
+        <button type="button" class="btn" onclick="document.getElementById('modal-container').innerHTML=''">取消</button>
+        {% if stop or resume %}
+        <button type="submit" class="btn btn-primary">应用勾选的</button>
+        {% endif %}
+      </div>
+    </form>
+  </div>
+</div>

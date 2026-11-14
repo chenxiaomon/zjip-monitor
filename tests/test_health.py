@@ -468,3 +468,28 @@ def test_endpoint_answers_even_if_the_whole_collector_explodes(
     assert resp.json()["status"] == "degraded"
     assert _check(resp.json(), "health_collect")["ok"] is False
     assert web_client.get("/health?strict=1").status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# 停巡 accounts (src/scan_plan.py)
+# ---------------------------------------------------------------------------
+
+def test_stopped_accounts_are_counted_and_do_not_degrade(web_client, health_env):
+    _write_status({
+        "ua1": _entry(company="甲 公司"),
+        "ua2": {**_entry(company="乙·公司", status="login_failed", hours_ago=24 * 5), "dormant": True},
+    })
+    body = web_client.get("/health").json()
+    assert body["scans"]["dormant"] == 1
+    assert body["scans"]["status_counts"] == {"login_failed": 1, "ok": 1}   # still every account
+    assert body["scans"]["success_threshold_hours"] == 36
+    assert body["status"] == "ok"
+
+
+def test_all_stopped_uses_the_sweep_interval(web_client, health_env):
+    _write_status({"ua1": {**_entry(company="甲 公司", hours_ago=72), "dormant": True}})
+    body = web_client.get("/health").json()
+    assert body["scans"]["success_threshold_hours"] == 2 * 7 * 24 + 36
+    assert _check(body, "recent_success")["ok"] is True and body["status"] == "ok"
+    _write_status({"ua1": {**_entry(company="甲 公司", hours_ago=24 * 16), "dormant": True}})
+    assert _check(web_client.get("/health").json(), "recent_success")["ok"] is False

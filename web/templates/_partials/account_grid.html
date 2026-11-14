@@ -43,7 +43,12 @@
     <div class="xs faint">暂无数据</div>
     {% endif %}
     <!-- Scan health: the reason is visible, not hidden in a tooltip -->
-    {% if snap.scan_failed %}
+    {% if snap.dormant %}
+    <div class="acc-health faint" title="停巡的账号不参加每轮巡检，每周顺带抽查一次；发现新申请会自动恢复">
+      {{ icon('player-pause') }}<span>已停巡 · 数据截至 {{ snap.last_check | fmt_time }}
+      {%- if snap.sweep_failed %} · 上次抽查失败{% endif %}</span>
+    </div>
+    {% elif snap.scan_failed %}
     <div class="acc-health danger" {% if snap.scan_status and snap.scan_status.error %}title="{{ snap.scan_status.error }}"{% endif %}>
       {{ icon('alert-circle') }}<span>上次巡检失败，数据为旧快照
       {%- if snap.scan_status and snap.scan_status.error %}：{{ snap.scan_status.error[:100] }}{% if snap.scan_status.error|length > 100 %}…{% endif %}{% endif %}</span>

@@ -53,11 +53,21 @@ def _is_stale(snapshot_time: str | None, stale_hours: float) -> bool:
 
 def scan_health(ss: dict | None) -> dict:
     """An account's durable scan status (src/status_store) as the company
-    card shows it — the dashboard's and the mini program's alike."""
+    card shows it — the dashboard's and the mini program's alike.
+
+    A 停巡 account is not part of the rounds, so what its last scan or
+    weekly sweep did is not "上次巡检失败" for the card or for the phone
+    (which is not being updated and cannot say 停巡): scan_failed and
+    scan_partial stay false, and `sweep_failed` carries a failed sweep for
+    whoever knows the word. The accounts page still shows the raw status."""
+    dormant = status_store.is_dormant(ss)
+    failed = bool(ss and ss.get("status") not in (None, "ok", "partial"))
     return {
-        "scan_failed": bool(ss and ss.get("status") not in (None, "ok", "partial")),
-        "scan_partial": bool(ss and ss.get("status") == "partial"),
+        "scan_failed": failed and not dormant,
+        "scan_partial": bool(ss and ss.get("status") == "partial") and not dormant,
         "login_paused": bool(ss and ss.get("login_paused")),
+        "dormant": dormant,
+        "sweep_failed": failed and dormant,
     }
 
 
@@ -146,7 +156,7 @@ def _dashboard_ctx(request: Request, year: str | None = None, range_days: int = 
 
         ss = all_status.get(acc.username)
         health = scan_health(ss)
-        if ss and (
+        if ss and not health["dormant"] and (
             ss.get("login_paused")
             or ss.get("status") in ("login_failed", "platform_error", "captcha_required")
         ):
@@ -171,7 +181,10 @@ def _dashboard_ctx(request: Request, year: str | None = None, range_days: int = 
             "scan_status": ss,
             "scan_failed": health["scan_failed"],
             "scan_partial": health["scan_partial"],
-            "stale": _is_stale(last_check, stale_hours),
+            # 停巡 data is old on purpose; the card says so instead.
+            "stale": not health["dormant"] and _is_stale(last_check, stale_hours),
+            "dormant": health["dormant"],
+            "sweep_failed": health["sweep_failed"],
         })
 
     total_records = sum(s["total"] for s in account_snapshots)
@@ -186,6 +199,7 @@ def _dashboard_ctx(request: Request, year: str | None = None, range_days: int = 
 
     return {
         "account_count": len(accounts),
+        "dormant_count": sum(1 for s in account_snapshots if s["dormant"]),
         "total_records": total_records,
         "success_count": success_count,
         "pending_correction": pending_correction,

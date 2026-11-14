@@ -19,6 +19,9 @@
       {% else %}
       <div class="stat-note good">{{ icon('circle-check') }}巡检全部正常</div>
       {% endif %}
+      {% if dormant_count %}
+      <div class="stat-note" title="停巡的账号不参加每轮巡检，每周顺带抽查一次">每轮巡检 {{ account_count - dormant_count }} 家 · 停巡 {{ dormant_count }} 家</div>
+      {% endif %}
     </div>
     <span class="stat-icon neutral">{{ icon('users') }}</span>
   </a>

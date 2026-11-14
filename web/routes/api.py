@@ -264,7 +264,8 @@ def api_status(request: Request, year: str | None = Query(None)) -> JSONResponse
             **health,
             "scan_label": scan_kind_label(ss.get("status")) if health["scan_failed"] or health["scan_partial"] else "",
             "scan_error": (ss.get("error") or "")[:100] if health["scan_failed"] else "",
-            "stale": _is_stale(last_check, stale_hours),
+            # 停巡 data is old on purpose: never "数据可能过期" (old builds included).
+            "stale": not health["dormant"] and _is_stale(last_check, stale_hours),
             # The durable record beats the snapshot's time: a failed scan
             # leaves the old snapshot in place (as the dashboard card).
             "last_success": _fmt_time(ss.get("last_success_at") or last_check),
