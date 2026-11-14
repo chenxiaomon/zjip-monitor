@@ -122,6 +122,7 @@ ACTION_LABELS: dict[str, str] = {
     "settings.schedule": "修改巡检计划",
     "settings.login": "修改登录参数",
     "settings.thresholds": "修改告警阈值",
+    "settings.focus": "开关默认关注范围",
     "notify.dingtalk": "修改钉钉通知",
     "notify.wechat": "修改企业微信通知",
     "notify.email": "修改邮件通知",

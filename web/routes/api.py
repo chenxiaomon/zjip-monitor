@@ -10,7 +10,9 @@ own sign-in only (_personal_only): old mini program builds shipped that key.
 
 ?scope=mine|all is the console's 我负责的 / 全部 (web.auth.use_query_scope).
 Without it every endpoint answers for everything the caller may see, as it
-always did. A company is named by its name; its platform login never goes
+always did. Likewise ?year= on /status and /records: absent means 全部年份,
+as old builds expect; a year, "all" or "focus" picks one, and "default" is
+whatever the console opens on (settings.yaml → display.focus_default). A company is named by its name; its platform login never goes
 to the phone.
 """
 
@@ -30,14 +32,14 @@ from web import auth, login_guard
 from web.auth import can_edit_accounts, current_user, shown_accounts, use_query_scope, view_scope
 from web.deps import (
     NOTICE_KIND_LABELS, _fmt_datetime, _fmt_time, account_dot, cert_label, detail_url, due_label,
-    in_year, int_or_none, owner_label, scan_kind_label,
+    int_or_none, owner_label, scan_kind_label,
 )
 from web.routes.attachments import attachment_response
 from web.routes.dashboard import _apply_year, _is_stale, scan_health
 from web.routes.records import (
     PAGE_SIZE, _page_number, _statuses, find_visible_record, record_detail_data, record_matches,
 )
-from web.services import audit_log
+from web.services import audit_log, year_scope
 from web.services.events import read_change_rows
 from web.services.snapshot import get_latest_snapshot
 
@@ -215,12 +217,13 @@ def _shown_pairs(request: Request) -> list[tuple]:
 
 
 @router.get("/status")
-def api_status(request: Request, year: int | None = Query(None)) -> JSONResponse:
-    """Every shown company's latest status (optionally one application year),
-    and around it what the phone's overview needs: the scan health of each
-    company, the year picker, the 待办 counts, the 我负责的 / 全部 switch,
-    and the companies not scanned yet (apart, so `accounts` stays as old
-    builds know it)."""
+def api_status(request: Request, year: str | None = Query(None)) -> JSONResponse:
+    """Every shown company's latest status (optionally one application year,
+    or 关注范围), and around it what the phone's overview needs: the scan
+    health of each company, the year picker, the 待办 counts, the 我负责的 /
+    全部 switch, and the companies not scanned yet (apart, so `accounts`
+    stays as old builds know it)."""
+    years_shown = year_scope.resolve(year, default=year_scope.ALL)
     accounts = []
     unscanned = []
     total_records = 0
@@ -240,7 +243,7 @@ def api_status(request: Request, year: int | None = Query(None)) -> JSONResponse
         for r in snap.get("records", []):
             if (y := _apply_year(r.get("dataRegApplyTime"))) is not None:
                 years.add(y)
-            if not in_year(r.get("dataRegApplyTime"), year):
+            if not years_shown.matches(r):
                 continue
             code = int_or_none(r.get("dataRegAuditStatus"))
             if code is not None:
@@ -280,6 +283,11 @@ def api_status(request: Request, year: int | None = Query(None)) -> JSONResponse
         "status_labels": {str(k): v for k, v in AUDIT_STATUS.items()},
         "unscanned": unscanned,
         "years": sorted(years, reverse=True),
+        # The years these numbers are for: "all", "focus" or a year — what
+        # ?year=default resolved to — and what 关注范围 means this year.
+        "year": years_shown.year if years_shown.year is not None else years_shown.kind,
+        "focus_default": year_scope.default_kind() == year_scope.FOCUS,
+        "focus_note": years_shown.describe,
         "todo": {
             "corrections": len(todo_data["corrections"]),
             "urgent": sum(1 for c in todo_data["corrections"] if c["urgency"] in ("overdue", "red")),
@@ -293,15 +301,18 @@ def api_status(request: Request, year: int | None = Query(None)) -> JSONResponse
 def api_records(
     request: Request,
     company: str | None = Query(None),
-    year: int | None = Query(None),
+    year: str | None = Query(None),
     q: str | None = Query(None),
     page: str | None = Query(None),
 ) -> JSONResponse:
     """Registration records by company, status (?status=2,7 or repeated, as
-    the console), application year and keyword — the records page's own
-    filters (records.record_matches), so a search finds the same rows on
-    both. Without ?page= every row, as old builds expect; with it, pages of 50."""
+    the console), application year (or 关注范围) and keyword — the records
+    page's own filters (records.record_matches), so a search finds the same
+    rows on both. Without ?page= every row, as old builds expect; with it,
+    pages of 50. `outside` counts the rows the chosen years left out."""
     statuses = _statuses(request)
+    years_shown = year_scope.resolve(year, default=year_scope.ALL)
+    outside = 0
     needle = (q or "").strip().lower()
     me = _me(request)
     rows: list[dict] = []
@@ -313,9 +324,10 @@ def api_records(
         if company and snap_company != company:
             continue
         for r in snap.get("records", []):
-            if not in_year(r.get("dataRegApplyTime"), year):
-                continue
             if not record_matches(acc, r, statuses, needle=needle):
+                continue
+            if not years_shown.matches(r):
+                outside += 1
                 continue
             code = int_or_none(r.get("dataRegAuditStatus"))
             reg_no = r.get("dataRegNo", "")
@@ -334,13 +346,15 @@ def api_records(
             })
 
     rows.sort(key=lambda r: r["apply_date"], reverse=True)
+    # Only when years are being left out: the plain call keeps its old shape.
+    years = {} if years_shown.is_all else {"outside": outside, "year_label": years_shown.label}
     if page is None:
-        return JSONResponse({"records": rows, "total": len(rows)})
+        return JSONResponse({"records": rows, "total": len(rows), **years})
     pages = max(1, (len(rows) + PAGE_SIZE - 1) // PAGE_SIZE)
     current = min(_page_number(page), pages)
     return JSONResponse({
         "records": rows[(current - 1) * PAGE_SIZE: current * PAGE_SIZE],
-        "total": len(rows), "page": current, "pages": pages,
+        "total": len(rows), "page": current, "pages": pages, **years,
     })
 
 

@@ -150,7 +150,7 @@ def delta(points: list[dict[str, Any]], key: str, days: int = 7) -> int | None:
     return None
 
 
-def trend_ctx(companies: Iterable[str], year: int | None, range_days: int,
+def trend_ctx(companies: Iterable[str], year: int | str | None, range_days: int,
               *, today: date | None = None) -> dict[str, Any]:
     companies = set(companies)
     range_days = range_days if range_days in RANGES else RANGES[0]

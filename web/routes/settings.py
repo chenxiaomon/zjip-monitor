@@ -1,5 +1,5 @@
 """Settings page: pause, cron schedule (hot-reloaded by the daemon), login
-params, alert/disk thresholds, status code map."""
+params, the default 关注范围, alert/disk thresholds, status code map."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from apscheduler.triggers.cron import CronTrigger
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 
-from src import control
+from src import control, focus
 from src.login import DEFAULT_LOGIN_METHOD, LOGIN_METHODS
 from src.runtime_settings import attachment_settings, disk_settings, ops_alert_settings
 from src.scraper import AUDIT_STATUS
@@ -171,6 +171,11 @@ def _thresholds_ctx(values: dict | None = None, errors: dict | None = None, *, s
     return {"fields": fields, "saved": saved, "error": error}
 
 
+def _focus_ctx(*, error: str = "") -> dict:
+    return {"focus_on": focus.focus_default(), "focus_note": focus.describe(focus.this_year()),
+            "error": error}
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -189,6 +194,7 @@ def settings_page(request: Request) -> HTMLResponse:
             "login": login,
             "scraper": scraper,
             "thresholds": _thresholds_ctx(),
+            **_focus_ctx(),
             "AUDIT_STATUS": AUDIT_STATUS,
             "STATUS_COLORS": STATUS_COLORS,
             "paused": control.is_daemon_paused(),
@@ -208,6 +214,31 @@ def toggle_pause(request: Request) -> HTMLResponse:
         "_partials/settings_pause.html",
         {"paused": control.is_daemon_paused()},
     )
+
+
+@router.post("/settings/focus", response_class=HTMLResponse)
+def save_focus(request: Request, on: str = Form("")) -> HTMLResponse:
+    """settings.yaml → display.focus_default. The form says which way to go
+    (on=1 / on=0) rather than "toggle", so a double click cannot undo itself."""
+    wanted = on == "1"
+
+    def page(**kw) -> HTMLResponse:
+        return templates.TemplateResponse(request, "_partials/settings_focus.html", _focus_ctx(**kw))
+
+    try:
+        with settings_svc.editing() as data:
+            display = settings_svc.section(data, "display")
+            before = display.get("focus_default") is True
+            if before == wanted:
+                audit_log.nothing_changed(request)
+                return page()
+            display["focus_default"] = wanted
+            save_settings(data)
+    except SettingsUnreadable as exc:
+        audit_log.record_request(request, "settings.focus", ok=False, detail={"error": str(exc)})
+        return page(error=f"{exc}。{REFUSED_HINT}")
+    audit_log.record_request(request, "settings.focus", detail={"focus_default": [before, wanted]})
+    return page()
 
 
 @router.post("/settings/schedule", response_class=HTMLResponse)

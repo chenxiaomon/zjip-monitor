@@ -70,7 +70,7 @@ def test_failure_reason_is_visible_and_cards_link_to_records(board, web_client, 
     html = login_as(web_client, *ADMIN).get("/").text
     assert "上次巡检失败，数据为旧快照：平台返回 502" in html and "…" in html
     assert 'href="/records?account=ua1"' in html
-    assert 'href="/records?account=ua1&status=2"' in html
+    assert 'href="/records?account=ua1&amp;status=2"' in html
     assert 'href="/records?status=2"' in html and 'href="/records?status=7"' in html
     assert "最后巡检：09-20 09:00" in html  # last_success_at, not the snapshot time
 

@@ -5,7 +5,7 @@
 <div id="metrics-section"
      class="stats"
      {% if standalone is not defined or standalone %}
-     hx-get="/partials/metrics{% if filter_year %}?year={{ filter_year }}{% endif %}"
+     hx-get="/partials/metrics{% if year_scope.query %}?year={{ year_scope.query }}{% endif %}"
      hx-trigger="sse:update"
      hx-swap="outerHTML"
      {% endif %}>
@@ -23,11 +23,11 @@
     <span class="stat-icon neutral">{{ icon('users') }}</span>
   </a>
   <!-- 登记总数 -->
-  <a href="/records" class="card stat">
+  <a href="{{ records_link() }}" class="card stat">
     <div class="grow">
       <div class="stat-label">登记总数</div>
       <div class="stat-value">{{ total_records }}</div>
-      <div class="stat-note">{% if filter_year %}{{ filter_year }} 年申请{% else %}全部年份{% endif %}</div>
+      <div class="stat-note">{{ year_scope.label }}</div>
       {{ delta_note(trend.delta.total) }}
     </div>
     <div class="stat-side">
@@ -36,7 +36,7 @@
     </div>
   </a>
   <!-- 登记成功 -->
-  <a href="/records?status=7" class="card stat">
+  <a href="{{ records_link(status=7) }}" class="card stat">
     <div class="grow">
       <div class="stat-label">登记成功</div>
       <div class="stat-value">{{ success_count }}</div>
@@ -49,7 +49,7 @@
     </div>
   </a>
   <!-- 待补正（需要动作） -->
-  <a href="/records?status=2" class="card stat">
+  <a href="{{ records_link(status=2) }}" class="card stat">
     <div class="grow">
       <div class="stat-label">待补正</div>
       <div class="stat-value">{{ pending_correction }}</div>

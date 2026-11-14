@@ -5,7 +5,7 @@
 <div id="account-grid-section"
      class="acc-grid"
      {% if standalone is not defined or standalone %}
-     hx-get="/partials/account-grid{% if filter_year %}?year={{ filter_year }}{% endif %}"
+     hx-get="/partials/account-grid{% if year_scope.query %}?year={{ year_scope.query }}{% endif %}"
      hx-trigger="sse:update"
      hx-swap="outerHTML"
      {% endif %}>
@@ -14,7 +14,7 @@
     <div class="acc-head">
       <div class="grow">
         <!-- Company & account: the name opens this company's records -->
-        <a href="/records?account={{ snap.account.username | urlencode }}" class="acc-name truncate">{{ snap.account.company }}</a>
+        <a href="{{ records_link(account=snap.account.username) }}" class="acc-name truncate">{{ snap.account.company }}</a>
         <div class="acc-user">
           {{ snap.account.username }}
           {% if snap.account.owner %}
@@ -33,7 +33,7 @@
     {% if snap.status_counts %}
     <div class="acc-pills">
       {% for code in snap.status_counts.keys()|sort %}
-      <a href="/records?account={{ snap.account.username | urlencode }}&status={{ code }}"
+      <a href="{{ records_link(account=snap.account.username, status=code) }}"
          class="pill s-pill-{{ code if code in AUDIT_STATUS else 'x' }}">
         {{ AUDIT_STATUS.get(code, '状态' ~ code) }}×{{ snap.status_counts[code] }}
       </a>

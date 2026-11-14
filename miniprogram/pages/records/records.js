@@ -17,7 +17,9 @@ const POLL_MS = 3000
 Page({
   data: {
     company: '', // 从企业卡片进来：只看这家企业
-    year: '', // 概览选了年份时跟过来
+    year: '', // 概览选了年份（或「关注中」= focus）时跟过来
+    yearLabel: '', // 服务器说的「2025 年申请」「关注范围（…）」
+    outside: 0, // 年份筛掉、其余条件都符合的条数
     q: '',
     status: '',
     groups: STATUS_GROUPS,
@@ -150,6 +152,8 @@ Page({
           total: d.total || 0,
           page: d.page || 1,
           pages: d.pages || 1,
+          yearLabel: d.year_label || '',
+          outside: d.outside || 0,
         })
       },
       fail: (err) => {

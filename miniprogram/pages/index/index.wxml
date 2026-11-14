@@ -12,10 +12,11 @@
   <!-- Search (opens the records page) and year -->
   <view class="toolbar">
     <input class="search" confirm-type="search" placeholder="搜索登记号、数据名称、企业" bindconfirm="onSearch" />
-    <picker wx:if="{{years.length > 0}}" range="{{yearOptions}}" value="{{yearIndex}}" bindchange="onYear">
+    <picker range="{{yearOptions}}" value="{{yearIndex}}" bindchange="onYear">
       <view class="year">{{yearOptions[yearIndex]}} ▾</view>
     </picker>
   </view>
+  <view wx:if="{{yearValue === 'focus' && focusNote}}" class="focus-note">关注中：{{focusNote}}</view>
 
   <!-- Loading -->
   <view wx:if="{{loading}}" class="loading">

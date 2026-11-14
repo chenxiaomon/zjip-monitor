@@ -17,7 +17,7 @@
     {% set peak = status_dist.segments | map(attribute='count') | max %}
     <div class="dist-list">
       {% for s in status_dist.segments %}
-      <a class="dist-row" href="/records?status={{ s.code }}" title="查看{{ s.label }}的记录"><span class="sw sf-{{ s.family }}"></span>{{ s.label }}<b>{{ s.count }}</b><span class="pct">{{ s.pct }}%</span><span class="dist-meter" aria-hidden="true"><i class="sf-{{ s.family }}" style="width:{{ (s.count * 100 / peak) | round(1) }}%"></i></span></a>
+      <a class="dist-row" href="{{ records_link(status=s.code) }}" title="查看{{ s.label }}的记录"><span class="sw sf-{{ s.family }}"></span>{{ s.label }}<b>{{ s.count }}</b><span class="pct">{{ s.pct }}%</span><span class="dist-meter" aria-hidden="true"><i class="sf-{{ s.family }}" style="width:{{ (s.count * 100 / peak) | round(1) }}%"></i></span></a>
       {% endfor %}
     </div>
   </div>

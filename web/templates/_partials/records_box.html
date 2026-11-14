@@ -2,9 +2,12 @@
      the chips' links can go stale after an HTMX refresh. Chips and sortable
      headers are plain links (a full page load keeps the form's hidden inputs
      in step); the pager and typing swap only this box. -->
+{% from "_partials/_year_chips.html" import year_chips %}
+{% macro rec_year(v) %}{{ records_url(year=v, page=1) }}{% endmacro %}
 <div id="records-table-box" class="stack" style="gap:12px">
   <div class="card">
     <div class="card-body filters" style="margin-bottom:0">
+      {{ year_chips(year_scope, years, rec_year) }}
       <div class="chips" id="filter-bar">
         <a href="{{ records_url(account='', page=1) }}" class="chip{% if not filter_account %} active{% endif %}">全部账号</a>
         {% for acc in accounts_list %}
@@ -25,7 +28,7 @@
 
   <div class="card">
     <div class="card-head">
-      <span class="card-sub">共 {{ total }} 条记录{% if pages > 1 %} · 第 {{ page }}/{{ pages }} 页{% endif %}（点击行查看详情）</span>
+      <span class="card-sub">共 {{ total }} 条记录{% if pages > 1 %} · 第 {{ page }}/{{ pages }} 页{% endif %}（点击行查看详情）{% if outside %}<span> · 只看{{ year_scope.label }}，另有 {{ outside }} 条符合条件的未显示，<a class="link" href="{{ records_url(year='all', page=1) }}">看全部年份</a></span>{% endif %}</span>
       <span class="pager">
         {% if page > 1 %}
         <a href="{{ records_url(page=page-1) }}" hx-get="{{ records_url(partial=True, page=page-1) }}" hx-target="#records-table-box" hx-swap="outerHTML" class="btn btn-xs">{{ icon('chevron-left') }}上一页</a>

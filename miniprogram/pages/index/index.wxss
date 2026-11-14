@@ -173,6 +173,12 @@
   white-space: nowrap;
 }
 
+.focus-note {
+  font-size: 22rpx;
+  color: #6b7280;
+  margin: -12rpx 0 24rpx;
+}
+
 /* 待办 summary */
 .todo-card {
   background: #fff;

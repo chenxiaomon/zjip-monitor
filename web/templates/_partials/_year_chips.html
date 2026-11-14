@@ -1,0 +1,13 @@
+{# The year picker of the counting and listing pages: 关注中, 全部年份, then each
+   year present in the data. `link(value)` builds the page's own URL for a
+   ?year= value ("focus" / "all" / a year); scope is web/services/year_scope. #}
+{% macro year_chips(scope, years, link) -%}
+<div class="chips" aria-label="按申请年份">
+  <a href="{{ link('focus') }}" class="chip{% if scope.kind == 'focus' %} active{% endif %}"
+     title="{{ scope.describe }}（在审：待审核、待补正、公示中、异议、待发证等还没有结果的）">关注中</a>
+  <a href="{{ link('all') }}" class="chip{% if scope.kind == 'all' %} active{% endif %}">全部年份</a>
+  {% for y in years %}
+  <a href="{{ link(y) }}" class="chip{% if scope.year == y %} active{% endif %}">{{ y }}</a>
+  {% endfor %}
+</div>
+{%- endmacro %}
