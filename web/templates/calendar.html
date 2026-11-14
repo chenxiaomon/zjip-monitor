@@ -4,7 +4,7 @@
 {% block page_title %}期限日历{% endblock %}
 
 {% macro item_link(it, cls) -%}
-<a class="{{ cls }}" href="/records?q={{ it.reg_no | urlencode }}"
+<a class="{{ cls }}" href="/records?q={{ it.reg_no | urlencode }}&year=all"
    hx-get="{{ record_url(it.username, it.reg_no) }}" hx-target="#drawer" hx-swap="innerHTML"
    title="{{ '补正截止' if it.kind == 'correction' else '证书到期' }} · {{ it.company }} · {{ it.name }}">{{ caller() }}</a>
 {%- endmacro %}

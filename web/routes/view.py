@@ -12,9 +12,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 
+from src.focus import focus_default, this_year
 from src.scraper import AUDIT_STATUS
 from web.auth import visible_accounts
-from web.deps import STATUS_COLORS, account_dot, current_year, in_year, int_or_none, templates
+from web.deps import STATUS_COLORS, account_dot, int_or_none, templates
+from web.services import year_scope
 from web.services.snapshot import get_latest_snapshot
 
 router = APIRouter(prefix="/view")
@@ -23,11 +25,13 @@ router = APIRouter(prefix="/view")
 _NOINDEX = {"X-Robots-Tag": "noindex, nofollow", "Cache-Control": "no-store"}
 
 
-def _build_ctx(request: Request, year: int | None = None) -> dict:
-    # Default to the current application year (was hard-coded 2026, which
-    # would have silently zeroed the page on 2027-01-01).
-    if year is None:
-        year = current_year()
+def _build_ctx(request: Request, year: str | None = None) -> dict:
+    # Without ?year=: 关注范围 when the console defaults to it, otherwise the
+    # current application year (was hard-coded 2026, which would have
+    # silently zeroed the page on 2027-01-01).
+    if not (year or "").strip() and not focus_default():
+        year = str(this_year())
+    scope = year_scope.resolve(year)
 
     account_cards: list[dict] = []
     total_records = 0
@@ -40,7 +44,7 @@ def _build_ctx(request: Request, year: int | None = None) -> dict:
             continue
         status_counts: dict[int, int] = {}
         for r in snap.get("records", []):
-            if not in_year(r.get("dataRegApplyTime"), year):
+            if not scope.matches(r):
                 continue
             code = int_or_none(r.get("dataRegAuditStatus"))
             if code is not None:
@@ -63,19 +67,19 @@ def _build_ctx(request: Request, year: int | None = None) -> dict:
         "total_records": total_records,
         "success_count": success_count,
         "pending_correction": pending_correction,
-        "filter_year": year,
+        "year_scope": scope,
         "STATUS_COLORS": STATUS_COLORS,
         "AUDIT_STATUS": AUDIT_STATUS,
     }
 
 
 @router.get("/", response_class=HTMLResponse)
-def view_page(request: Request, year: int | None = Query(None)) -> HTMLResponse:
+def view_page(request: Request, year: str | None = Query(None)) -> HTMLResponse:
     return templates.TemplateResponse(request, "view.html", _build_ctx(request, year), headers=dict(_NOINDEX))
 
 
 @router.get("/partial", response_class=HTMLResponse)
-def view_partial(request: Request, year: int | None = Query(None)) -> HTMLResponse:
+def view_partial(request: Request, year: str | None = Query(None)) -> HTMLResponse:
     """HTMX polling target — returns only the dynamic content region."""
     return templates.TemplateResponse(
         request, "_partials/view_content.html", _build_ctx(request, year), headers=dict(_NOINDEX)

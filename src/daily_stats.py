@@ -35,6 +35,7 @@ from typing import Any, Callable, Iterable
 
 from loguru import logger
 
+from .focus import in_focus
 from .fsutil import atomic_write_text
 from .scraper import int_or_none
 
@@ -216,21 +217,36 @@ def merge_days(new_days: dict[str, dict], *, dry_run: bool = False, today: date 
 # Readers for the dashboard
 # ---------------------------------------------------------------------------
 
+def _bucket_filter(year: int | str | None, current: int) -> Callable[[str, str], bool]:
+    """(year_key, status_code) → counted? for one year, 全部年份 (None) or
+    "focus" — the same rule as src/focus.in_focus, applied with the year it
+    is `today` to every day of the series."""
+    if year is None:
+        return lambda ykey, code: True
+    if year == "focus":
+        def keep(ykey: str, code: str) -> bool:
+            return in_focus(None if ykey == NO_YEAR else int_or_none(ykey), int_or_none(code), current)
+        return keep
+    year_key = str(year)
+    return lambda ykey, code: ykey == year_key
+
+
 def series(
     companies: Iterable[str],
-    year: int | None,
+    year: int | str | None,
     days: int,
     *,
     today: date | None = None,
 ) -> list[dict[str, Any]]:
     """Daily 登记总数 / 登记成功 (7) / 待补正 (2) over the last `days` days,
     summed over `companies`, ascending by date; days without an entry are
-    simply absent."""
+    simply absent. `year` is one application year, None for all of them,
+    or "focus" for 关注范围 as of `today`."""
     wanted = set(companies)
     today = today or local_date()
     start = (today - timedelta(days=max(1, days) - 1)).isoformat()
     end = today.isoformat()
-    year_key = None if year is None else str(year)
+    keep = _bucket_filter(year, today.year)
     out = []
     for k, entry in sorted(read_days().items()):
         if not (start <= k <= end):
@@ -240,11 +256,11 @@ def series(
             if company not in wanted or not isinstance(buckets, dict):
                 continue
             for ykey, codes in buckets.items():
-                if year_key is not None and ykey != year_key:
-                    continue
                 if not isinstance(codes, dict):
                     continue
                 for code, n in codes.items():
+                    if not keep(ykey, code):
+                        continue
                     n = int_or_none(n) or 0
                     total += n
                     if code == "7":

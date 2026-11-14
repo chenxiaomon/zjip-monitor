@@ -22,9 +22,13 @@ Page({
     unscanned: [], // 还没巡检过的企业：没有快照，不能和「0 条记录」混为一谈
     todo: null, // { corrections, urgent, renewals }
     scope: null, // app.scopeView()
-    years: [],
-    yearOptions: ['全部年份'],
-    yearIndex: 0, // 0 = 全部年份，其余对应 years[yearIndex - 1]
+    // 年份选择：'focus'（关注范围）、'all'（全部年份）或某一年；'default' = 控制台设置的默认
+    // （设置页「默认关注范围」），服务器回答时告诉我们实际是哪个
+    yearValue: 'default',
+    yearValues: ['focus', 'all'],
+    yearOptions: ['关注中', '全部年份'],
+    yearIndex: 0,
+    focusNote: '', // 关注范围今年的意思，如「2026 年申请的全部，加 2025 年申请、还在审的」
     canAdd: false, // 管理员和经办人能新增企业
   },
 
@@ -66,7 +70,7 @@ Page({
   fetchStatus(done) {
     this._viewVersion = app.globalData.viewVersion
     this._fetchedAt = Date.now()
-    const year = this.data.yearIndex > 0 ? this.data.years[this.data.yearIndex - 1] : null
+    const year = this.data.yearValue
     app.get('/api/status', { year: year }, {
       success: (res) => {
         const d = res.data
@@ -76,13 +80,16 @@ Page({
           pills: this._buildPills(acc.status_counts, d.status_labels),
         }))
         const years = d.years || []
-        if (year && years.indexOf(year) < 0) {
-          // 选的年份在新范围里没有记录（比如切到「我负责的」）：回到全部年份重新拉，
-          // 免得选择器写着「全部年份」、数字却是按那一年筛的
-          this.setData({ years, yearIndex: 0 })
+        if (typeof year === 'number' && years.indexOf(year) < 0) {
+          // 选的年份在新范围里没有记录（比如切到「我负责的」）：回到默认重新拉，
+          // 免得选择器写着别的、数字却是按那一年筛的
+          this.setData({ yearValue: 'default' })
           this.fetchStatus(done)
           return
         }
+        // 服务器说这次数字是按什么筛的（旧服务器不说，就是全部年份）
+        const shown = d.year === undefined ? 'all' : d.year
+        const yearValues = ['focus', 'all'].concat(years)
         this.setData({
           loading: false,
           totalRecords: d.total_records,
@@ -92,9 +99,11 @@ Page({
           unscanned: d.unscanned || [],
           todo: d.todo || null,
           scope: app.scopeView(),
-          years,
-          yearOptions: ['全部年份'].concat(years.map(y => y + ' 年')),
-          yearIndex: year ? years.indexOf(year) + 1 : 0,
+          yearValue: shown,
+          yearValues,
+          yearOptions: ['关注中', '全部年份'].concat(years.map(y => y + ' 年')),
+          yearIndex: Math.max(0, yearValues.indexOf(shown)),
+          focusNote: d.focus_note || '',
         })
         if (d.todo) app.setTodoBadge(d.todo.urgent)
       },
@@ -124,7 +133,8 @@ Page({
   },
 
   onYear(e) {
-    this.setData({ yearIndex: Number(e.detail.value) })
+    const i = Number(e.detail.value)
+    this.setData({ yearIndex: i, yearValue: this.data.yearValues[i] })
     this.fetchStatus()
   },
 
@@ -187,7 +197,7 @@ Page({
   // 看这家企业的全部记录（不受「我负责的」影响），年份跟着概览走
   onTapAccount(e) {
     const company = e.currentTarget.dataset.company
-    const year = this.data.yearIndex > 0 ? this.data.years[this.data.yearIndex - 1] : ''
+    const year = this.data.yearValue === 'all' || this.data.yearValue === 'default' ? '' : this.data.yearValue
     wx.navigateTo({
       url: '/pages/records/records?company=' + encodeURIComponent(company) + (year ? '&year=' + year : ''),
     })

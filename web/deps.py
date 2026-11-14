@@ -150,19 +150,6 @@ def account_dot(status_counts: dict[int, int]) -> str:
     return "green"
 
 
-def in_year(ms: int | None, year: int | None) -> bool:
-    """True if the ms-timestamp falls in `year` (Asia/Shanghai); no filter when None."""
-    if year is None:
-        return True
-    if not ms:
-        return False
-    return datetime.fromtimestamp(ms / 1000, tz=_SHANGHAI_TZ).year == year
-
-
-def current_year() -> int:
-    return datetime.now(_SHANGHAI_TZ).year
-
-
 def _fmt_time(ts_str: str | None) -> str:
     """Format ISO timestamp as 'MM-DD HH:MM' in Asia/Shanghai (UTC+8)."""
     if not ts_str:

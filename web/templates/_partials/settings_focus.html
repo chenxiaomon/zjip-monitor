@@ -1,0 +1,26 @@
+<div id="focus-section" class="card">
+  <div class="card-body row between gap-3 row-wrap">
+    <div class="grow" style="min-width:16rem">
+      <div class="card-title">{{ icon('filter') }}默认关注范围
+        {% if focus_on %}<span class="pill pill-good">已开启</span>{% else %}<span class="pill pill-neutral">未开启</span>{% endif %}
+      </div>
+      <p class="xs muted mt-1">
+        关注范围 = {{ focus_note }}（待审核、待补正、公示中、异议、待发证等还没有结果的）。
+        {% if focus_on %}
+        仪表盘、登记记录、只读看板和小程序打开时只看这些；年份栏点「全部年份」随时可看全部。
+        {% else %}
+        开启后，仪表盘、登记记录、只读看板和小程序打开时只看这些；现在默认看全部年份，年份栏的「关注中」可以临时切换。
+        {% endif %}
+      </p>
+      <p class="xs faint mt-1">待办、期限日历、变更历史、运维提醒和台账导出始终看全部记录；巡检照常抓取全部记录。</p>
+      {% if error %}<p class="xs danger mt-1">{{ error }}</p>{% endif %}
+    </div>
+    <button hx-post="/settings/focus"
+            hx-vals='{"on": "{{ '0' if focus_on else '1' }}"}'
+            hx-target="#focus-section"
+            hx-swap="outerHTML"
+            class="btn{% if not focus_on %} btn-primary{% endif %}">
+      {% if focus_on %}关闭，默认看全部年份{% else %}开启{% endif %}
+    </button>
+  </div>
+</div>

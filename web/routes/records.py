@@ -1,4 +1,10 @@
-"""Records page: full registration record table with filtering and keyword search."""
+"""Records page: full registration record table with filtering and keyword search.
+
+The application-year chips (关注中 / 全部年份 / each year, web/services/
+year_scope.py) narrow the table and the CSV export; the count line says how
+many rows the chosen years leave out, so a search never comes up empty
+without saying where the matches went. Links from 待办, the calendar and the
+timeline ask for 全部年份: an old record named there must open."""
 
 from __future__ import annotations
 
@@ -13,11 +19,13 @@ from fastapi.responses import HTMLResponse, Response
 from src import todo
 from src.scraper import AUDIT_STATUS, decode_status
 from web.auth import allowed_usernames, shown_accounts, visible_accounts
+from src.focus import apply_year
 from web.deps import STATUS_COLORS, attachment_disposition, int_or_none, templates
-from web.services import audit_log, ledger
+from web.services import audit_log, ledger, year_scope
 from web.services.attachments_svc import archived_attachments, list_attachments
 from web.services.events import read_change_rows
 from web.services.snapshot import get_latest_snapshot
+from web.services.year_scope import YearScope
 
 router = APIRouter()
 
@@ -144,16 +152,25 @@ def _build_records(
     end_ms: int | None = None,
     q: str | None = None,
     sort: str = "",
+    *,
+    scope: YearScope | None = None,
+    tally: dict | None = None,
 ) -> tuple[list[dict], list, list[dict]]:
     """Returns (rows, accounts_without_snapshot, fetch_warnings).
 
-    status_filter: one code, a set of codes, or None for all."""
+    status_filter: one code, a set of codes, or None for all. `scope` keeps
+    only the chosen application years (None: all). When `tally` is given it
+    receives "years" (every application year in these accounts, newest
+    first) and "outside" (rows that matched every other filter but not the
+    years)."""
     if isinstance(status_filter, int):
         status_filter = frozenset({status_filter})
     rows: list[dict] = []
     missing_accounts: list = []
     fetch_warnings: list[dict] = []
     needle = (q or "").strip().lower()
+    years: set[int] = set()
+    outside = 0
 
     for acc in accounts:
         snap = get_latest_snapshot(acc.company)
@@ -186,11 +203,18 @@ def _build_records(
                     "error": None,
                 })
 
+        for r in snap.get("records", []):
+            if (y := apply_year(r.get("dataRegApplyTime"))) is not None:
+                years.add(y)
+
         if account_filter and acc.username != account_filter:
             continue
 
         for r in snap.get("records", []):
             if not record_matches(acc, r, status_filter, start_ms, end_ms, needle):
+                continue
+            if scope is not None and not scope.matches(r):
+                outside += 1
                 continue
             code = int_or_none(r.get("dataRegAuditStatus"))
             reg_no = r.get("dataRegNo", "")
@@ -214,17 +238,21 @@ def _build_records(
             })
 
     _sort_rows(rows, sort)
+    if tally is not None:
+        tally["years"] = sorted(years, reverse=True)
+        tally["outside"] = outside
     return rows, missing_accounts, fetch_warnings
 
 
 def _all_rows(request: Request, account: str | None, statuses: frozenset[int] | None,
-              start_date: str | None, end_date: str | None, q: str | None, sort: str = ""):
+              start_date: str | None, end_date: str | None, q: str | None, sort: str = "",
+              scope: YearScope | None = None, tally: dict | None = None):
     start_ms = _date_to_ms(start_date) if start_date else None
     end_ms = _date_to_ms(end_date, end_of_day=True) if end_date else None
     # 我负责的 when on; the record drawer below still checks visible_accounts.
     accounts_list = shown_accounts(request)
     rows, missing_accounts, fetch_warnings = _build_records(
-        accounts_list, account, statuses, start_ms, end_ms, q, sort
+        accounts_list, account, statuses, start_ms, end_ms, q, sort, scope=scope, tally=tally,
     )
     return accounts_list, rows, missing_accounts, fetch_warnings
 
@@ -242,9 +270,12 @@ def _ctx(
     q: str | None = None,
     page: str | None = None,
     sort: str = "",
+    year: str | None = None,
 ) -> dict:
+    scope = year_scope.resolve(year)
+    tally: dict = {}
     accounts_list, rows, missing_accounts, fetch_warnings = _all_rows(
-        request, account, statuses, start_date, end_date, q, sort
+        request, account, statuses, start_date, end_date, q, sort, scope, tally
     )
     total = len(rows)
     pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
@@ -255,7 +286,8 @@ def _ctx(
         "q": (q or "").strip(),
         "start_date": start_date or "",
         "end_date": end_date or "",
-        "sort": sort,  # last, so URLs without a sort read exactly as before
+        "sort": sort,  # after the older filters, so their URLs read exactly as before
+        "year": scope.query or "",  # blank = the default scope
     }
 
     def records_url(partial: bool = False, csv: bool = False, **overrides) -> str:
@@ -263,6 +295,8 @@ def _ctx(
         and the export link keep the OTHER filters, so clicking a status
         never drops the dates or the keyword."""
         params = {**filters, "page": current, **overrides}
+        if "year" in overrides:
+            params["year"] = year_scope.resolve(overrides["year"], current=scope.current).query
         if csv:
             params.pop("page", None)
         query = urlencode({
@@ -306,6 +340,9 @@ def _ctx(
         "start_date": start_date or "",
         "end_date": end_date or "",
         "q": (q or "").strip(),
+        "year_scope": scope,
+        "years": tally["years"],
+        "outside": tally["outside"],
         "STATUS_COLORS": STATUS_COLORS,
         "AUDIT_STATUS": AUDIT_STATUS,
     }
@@ -320,10 +357,11 @@ def records_page(
     q: str | None = Query(None),
     page: str | None = Query(None),
     sort: str | None = Query(None),
+    year: str | None = Query(None),
 ) -> HTMLResponse:
     return templates.TemplateResponse(
         request, "records.html",
-        _ctx(request, account or None, _statuses(request), start_date, end_date, q, page, _sort(sort)),
+        _ctx(request, account or None, _statuses(request), start_date, end_date, q, page, _sort(sort), year),
     )
 
 
@@ -336,8 +374,9 @@ def records_table_partial(
     q: str | None = Query(None),
     page: str | None = Query(None),
     sort: str | None = Query(None),
+    year: str | None = Query(None),
 ) -> HTMLResponse:
-    ctx = _ctx(request, account or None, _statuses(request), start_date, end_date, q, page, _sort(sort))
+    ctx = _ctx(request, account or None, _statuses(request), start_date, end_date, q, page, _sort(sort), year)
     # The address bar follows the table, so a reload, a bookmark or a shared
     # link shows the same filters (replace, not push: typing is not history).
     return templates.TemplateResponse(
@@ -430,11 +469,14 @@ def records_csv(
     end_date: str | None = Query(None),
     q: str | None = Query(None),
     sort: str | None = Query(None),
+    year: str | None = Query(None),
 ) -> Response:
     """The current filter's rows, all pages, in the page's order, as UTF-8 CSV
     with a BOM so Excel opens the Chinese text correctly. Same visibility
-    rules as the page."""
-    _, rows, _, _ = _all_rows(request, account or None, _statuses(request), start_date, end_date, q, _sort(sort))
+    rules and the same application years as the page."""
+    scope = year_scope.resolve(year)
+    _, rows, _, _ = _all_rows(request, account or None, _statuses(request), start_date, end_date, q, _sort(sort),
+                              scope)
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(_CSV_HEADER)
@@ -447,7 +489,7 @@ def records_csv(
             len(r["attachments"]) + len(r["archived"]),
         ])
     filters = {"account": account, "statuses": _statuses(request), "start_date": start_date,
-               "end_date": end_date, "q": q}
+               "end_date": end_date, "q": q, "year": None if scope.is_all else scope.value}
     audit_log.record_request(request, "data.records_csv", detail={
         **{k: v for k, v in filters.items() if v}, "rows": len(rows),
     })

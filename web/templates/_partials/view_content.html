@@ -1,5 +1,5 @@
 <div id="view-content"
-     hx-get="/view/partial{% if filter_year %}?year={{ filter_year }}{% endif %}"
+     hx-get="/view/partial?year={{ year_scope.value }}"
      hx-trigger="every 5m"
      hx-swap="outerHTML">
 
@@ -8,6 +8,7 @@
       <div class="grow">
         <div class="stat-label">登记总数</div>
         <div class="stat-value">{{ total_records }}</div>
+        <div class="stat-note">{{ year_scope.label }}</div>
       </div>
       <span class="stat-icon neutral">{{ icon('file-text') }}</span>
     </div>

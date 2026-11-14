@@ -21,7 +21,7 @@
       {% for s in c.series %}
       <span><i class="key key-{{ s.color }}"></i>{{ s.label }}<b>{{ s.last }}</b></span>
       {% endfor %}
-      <span class="faint">{% if filter_year %}{{ filter_year }} 年申请{% else %}全部年份{% endif %} · {{ first.date[5:] }} 至 {{ last.date[5:] }}</span>
+      <span class="faint">{{ year_scope.label }} · {{ first.date[5:] }} 至 {{ last.date[5:] }}</span>
     </div>
     <div class="chart" data-chart="{{ c.hover_json }}" role="img"
          aria-label="登记趋势：{{ first.date }} 至 {{ last.date }}，登记总数 {{ first.total }} 到 {{ last.total }}，登记成功 {{ first.success }} 到 {{ last.success }}">

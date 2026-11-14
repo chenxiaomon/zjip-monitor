@@ -4,6 +4,10 @@ One SSE event → one request: the whole body below the year chips is a single
 htmx target (/partials/dashboard). The per-section routes remain for the
 tests and for anything that wants just one piece; when a section is rendered
 inside the body it carries no refresh attributes of its own.
+
+The year chips are 关注范围, 全部年份 and each year present (web/services/
+year_scope.py); every count, the trend and the links into the records page
+follow the chosen one.
 """
 
 from __future__ import annotations
@@ -20,9 +24,10 @@ from src.scraper import AUDIT_STATUS
 from web.auth import (
     SCOPE_COOKIE, allowed_usernames, is_admin, shown_accounts, shown_usernames, visible_accounts,
 )
-from web.deps import STATUS_COLORS, account_dot, in_year, int_or_none, templates
+from web.deps import STATUS_COLORS, account_dot, int_or_none, templates
 from web.deps import status_distribution
-from web.services import trends
+from web.services import trends, year_scope
+from web.services.year_scope import YearScope
 from web.services.events import read_events
 from web.services.run_state import run_state_ctx
 from web.services.snapshot import get_latest_snapshot
@@ -84,11 +89,15 @@ def _range_days(raw: str | None) -> int:
     return value if value in trends.RANGES else trends.RANGES[0]
 
 
-def _dash_url_factory(year: int | None, range_days: int):
+def _dash_url_factory(scope: YearScope, range_days: int):
     """Links and the SSE refresh URL all carry the same year and range, and
-    the defaults (all years, 30 days) never appear in the query string."""
+    the defaults (the default year scope, 30 days) never appear in the query
+    string. A year chip passes year=<a year | "all" | "focus">; the one that
+    is the default drops out."""
     def dash_url(*, partial: bool = False, **overrides) -> str:
-        params = {"year": year, "range": range_days, **overrides}
+        params = {"year": scope.query, "range": range_days, **overrides}
+        if "year" in overrides:
+            params["year"] = year_scope.resolve(overrides["year"], current=scope.current).query
         if params.get("range") == trends.RANGES[0]:
             params["range"] = None
         query = urlencode({k: v for k, v in params.items() if v not in (None, "")})
@@ -97,7 +106,17 @@ def _dash_url_factory(year: int | None, range_days: int):
     return dash_url
 
 
-def _dashboard_ctx(request: Request, year: int | None = None, range_days: int = 30) -> dict:
+def records_link_factory(scope: YearScope):
+    """A link into the records page showing the same years as this page —
+    a count on the dashboard opens exactly the rows it counted."""
+    def records_link(**params) -> str:
+        query = urlencode({k: v for k, v in {**params, "year": scope.query}.items() if v not in (None, "")},
+                          safe=",")
+        return "/records" + (f"?{query}" if query else "")
+    return records_link
+
+
+def _dashboard_ctx(request: Request, year: str | None = None, range_days: int = 30) -> dict:
     # 我负责的 or everything visible; the ops banner below stays on the
     # full visible set — a failing scan is everyone's business.
     accounts = shown_accounts(request)
@@ -105,6 +124,7 @@ def _dashboard_ctx(request: Request, year: int | None = None, range_days: int = 
     all_status = status_store.get_all()
     # Once per request: get_settings() is mtime-cached, so this is a stat().
     stale_hours = ops_alert_settings().stale_hours
+    scope = year_scope.resolve(year)
 
     account_snapshots = []
     login_alerts = []
@@ -117,7 +137,7 @@ def _dashboard_ctx(request: Request, year: int | None = None, range_days: int = 
             for r in snap.get("records", []):
                 if (y := _apply_year(r.get("dataRegApplyTime"))) is not None:
                     years.add(y)
-                if not in_year(r.get("dataRegApplyTime"), year):
+                if not scope.matches(r):
                     continue
                 code = int_or_none(r.get("dataRegAuditStatus"))
                 if code is not None:
@@ -172,8 +192,9 @@ def _dashboard_ctx(request: Request, year: int | None = None, range_days: int = 
         "status_dist": status_distribution(account_snapshots),
         # Visible companies only: the trend file also holds deleted accounts'
         # history and other groups' companies.
-        "trend": trends.trend_ctx({a.company for a in accounts}, year, range_days),
-        "dash_url": _dash_url_factory(year, range_days),
+        "trend": trends.trend_ctx({a.company for a in accounts}, scope.stats_key, range_days),
+        "dash_url": _dash_url_factory(scope, range_days),
+        "records_link": records_link_factory(scope),
         "account_snapshots": account_snapshots,
         "login_alerts": login_alerts,
         # Scoped to what this user may see: a group user must never learn from
@@ -184,7 +205,7 @@ def _dashboard_ctx(request: Request, year: int | None = None, range_days: int = 
         "run": _run_ctx(request),
         "years": sorted(years, reverse=True),
         "last_success_at": max((s for s in successes if s), default=None),
-        "filter_year": year,
+        "year_scope": scope,
         "stale_hours": stale_hours,
         "STATUS_COLORS": STATUS_COLORS,
         "AUDIT_STATUS": AUDIT_STATUS,
@@ -209,14 +230,14 @@ def set_scope(request: Request, to: str = Query("mine"), next_: str | None = Que
 
 
 @router.get("/", response_class=HTMLResponse)
-def dashboard_page(request: Request, year: int | None = None,
+def dashboard_page(request: Request, year: str | None = None,
                    range_: str | None = Query(None, alias="range")) -> HTMLResponse:
     return templates.TemplateResponse(
         request, "dashboard.html", _dashboard_ctx(request, year, _range_days(range_)))
 
 
 @router.get("/partials/dashboard", response_class=HTMLResponse)
-def partial_dashboard(request: Request, year: int | None = None,
+def partial_dashboard(request: Request, year: str | None = None,
                       range_: str | None = Query(None, alias="range")) -> HTMLResponse:
     """Everything below the year chips, in one response — the SSE target."""
     return templates.TemplateResponse(
@@ -230,12 +251,12 @@ def partial_run_bar(request: Request) -> HTMLResponse:
 
 
 @router.get("/partials/metrics", response_class=HTMLResponse)
-def partial_metrics(request: Request, year: int | None = None) -> HTMLResponse:
+def partial_metrics(request: Request, year: str | None = None) -> HTMLResponse:
     return templates.TemplateResponse(request, "_partials/metric_cards.html", _dashboard_ctx(request, year))
 
 
 @router.get("/partials/account-grid", response_class=HTMLResponse)
-def partial_account_grid(request: Request, year: int | None = None) -> HTMLResponse:
+def partial_account_grid(request: Request, year: str | None = None) -> HTMLResponse:
     return templates.TemplateResponse(request, "_partials/account_grid.html", _dashboard_ctx(request, year))
 
 

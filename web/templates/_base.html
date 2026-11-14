@@ -84,6 +84,8 @@
       <form class="topbar-search" action="/records" method="get" role="search">
         {{ icon('search') }}
         <input type="search" name="q" placeholder="搜索登记号 / 数据名称 / 公司" aria-label="搜索登记记录">
+        {# A search from anywhere looks in every year; the records page's own chips narrow it. #}
+        <input type="hidden" name="year" value="all">
       </form>
       <button type="button" class="icon-btn" onclick="toggleDark()" title="切换明暗模式">{{ icon('sun-moon') }}</button>
     </div>

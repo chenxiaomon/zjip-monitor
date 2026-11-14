@@ -44,6 +44,7 @@
       <input type="hidden" name="account" value="{{ filter_account or '' }}">
       <input type="hidden" name="status" value="{{ status_param }}">
       <input type="hidden" name="sort" value="{{ sort }}">
+      <input type="hidden" name="year" value="{{ year_scope.query or '' }}">
       <div class="search-field">
         {{ icon('search') }}
         <input type="search" name="q" value="{{ q }}"

@@ -49,8 +49,8 @@
     >{{item.label}}</text>
   </scroll-view>
 
-  <view wx:if="{{year}}" class="year-note">
-    只看 {{year}} 年申请的 · <text class="link" bindtap="onClearYear">看全部年份</text>
+  <view wx:if="{{year && yearLabel}}" class="year-note">
+    只看：{{yearLabel}}<block wx:if="{{outside > 0}}">，另有 {{outside}} 条未显示</block> · <text class="link" bindtap="onClearYear">看全部年份</text>
   </view>
 
   <view wx:if="{{loading}}" class="loading">

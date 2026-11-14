@@ -99,6 +99,7 @@ ROUTES = {
     "/reports/generate": ("/reports/generate", {}, "report.generate", None),
     "/reports/delete/{filename}": ("/reports/delete/report_x.html", {}, "report.delete", "report_x.html"),
     "/settings/pause": ("/settings/pause", {}, "settings.pause", None),
+    "/settings/focus": ("/settings/focus", {"on": "1"}, "settings.focus", None),
     "/settings/schedule": ("/settings/schedule", {"crons": ["0 8 * * *"]}, "settings.schedule", None),
     "/settings/login": ("/settings/login", {"method": "http"}, "settings.login", None),
     "/settings/thresholds": ("/settings/thresholds", "THRESHOLDS", "settings.thresholds", None),

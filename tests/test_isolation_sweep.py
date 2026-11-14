@@ -76,7 +76,8 @@ def world(monkeypatch, tmp_path, isolated_settings, isolated_snapshots):
 PAGES = [
     "/", "/partials/dashboard", "/partials/todo", "/partials/timeline", "/partials/ops-banner",
     "/partials/account-grid", "/partials/metrics", "/accounts", "/accounts/rows",
-    "/records", "/records?q=老板", "/records.csv", "/changes", "/calendar", "/view/", "/view/partial",
+    "/records", "/records?q=老板", "/records?year=focus", "/records?q=老板&year=focus", "/records.csv",
+    "/records.csv?year=focus", "/?year=focus", "/view/?year=focus", "/changes", "/calendar", "/view/", "/view/partial",
     "/me/password", "/scope?to=all&next=/", "/",
     f"/partials/record?account={OWNER_LOGIN}&reg_no=RBOSS1",
     f"/attachments/{OWNER_COMPANY}/RBOSS1/notice.pdf",
@@ -171,6 +172,7 @@ def test_adding_the_owners_company_again_names_nothing(world, web_client, login_
 
 API_PAGES = [
     "/api/status", "/api/status?scope=all", "/api/status?scope=mine", "/api/status?year=2026",
+    "/api/status?year=default", "/api/records?year=focus", "/api/records?q=老板&year=focus",
     "/api/records", "/api/records?scope=all", f"/api/records?company={OWNER_COMPANY}",
     "/api/records?q=老板", "/api/records?q=boss", "/api/records?status=2&page=1",
     "/api/changes", "/api/changes?scope=all", "/api/me",
