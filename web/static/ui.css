@@ -395,6 +395,9 @@ a.stat:hover { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-s
 .tbl .cell-actions { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
 .tbl-compact td { padding: 7px 14px; }
 .row-click { cursor: pointer; }
+/* 登记记录页的勾选列：勾了哪几条，导出就只含哪几条（ui.js） */
+.tbl th.pick, .tbl td.pick { width: 1%; padding-right: 0; cursor: default; }
+.tbl .pick input { width: 15px; height: 15px; accent-color: var(--accent); margin: 2px 0 0; cursor: pointer; }
 /* 账号页按「每轮巡检 / 已停巡」分组：组标题行 + 停巡行浅底（按钮照常） */
 .tbl tbody tr.tbl-group td {
   padding: 14px 14px 6px; background: var(--surface);

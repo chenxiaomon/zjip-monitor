@@ -140,4 +140,4 @@ def test_a_finished_company_says_just_package(fake_accounts, isolated_snapshots,
     isolated_snapshots.write("甲 公司", [_rec("R1", 7, "甲的数据"), _rec("R9", 6, "甲不予")])
     login_as(web_client, *OPERATOR_A)
     page = web_client.get("/records?account=ua1").text
-    assert "交付包</a>" in page and "尚有" not in page.split("/records/handover.zip")[1][:300]
+    assert "交付包</span></a>" in page and "尚有" not in page.split("/records/handover.zip")[1][:300]

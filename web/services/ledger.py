@@ -6,7 +6,8 @@
   「状态变更记录」 变化概况（按变化类型计数）+ 每次变化一行，按时间倒序
 
 数据都是系统里现成的：最新快照（登记明细）和巡检变更日志
-（read_change_rows，监控开始以来的全部）。
+（read_change_rows，监控开始以来的全部）。登记记录页上筛选或勾选了一部分时，
+两张表都只含这部分（changes_of 挑出它们的变更行）。
 
 汇总格写成公式，同时写进算好的结果：在 Excel / WPS 里手动改了某条的状态，
 数量会跟着变；在微信、手机上只预览不重算时，看到的也不是空格。明细行里的
@@ -170,6 +171,20 @@ def _change_key(row: dict) -> str:
     if no and no != "(无编号)":
         return no
     return "name:" + str(row.get("name") or "")
+
+
+def changes_of(records: list[dict], change_rows: list[dict]) -> list[dict]:
+    """只留这些记录的变更行——导出的是登记记录页筛选或勾选的一部分时用。
+    变更日志里一条记录可能记的是登记编号、还没编号时的 id:<平台行号>，
+    两样都没有时只剩名称。"""
+    keys = {k for rec in records for k in _record_keys(rec)}
+    names = {str(rec.get("dataRegName") or "") for rec in records}
+    out = []
+    for row in change_rows:
+        key = _change_key(row)
+        if key in keys or (key.startswith("name:") and key[5:] in names):
+            out.append(row)
+    return out
 
 
 def _label(code, stored) -> str:

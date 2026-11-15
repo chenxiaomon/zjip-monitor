@@ -4,7 +4,7 @@
      in step); the pager and typing swap only this box. -->
 {% from "_partials/_year_chips.html" import year_chips %}
 {% macro rec_year(v) %}{{ records_url(year=v, page=1) }}{% endmacro %}
-<div id="records-table-box" class="stack" style="gap:12px">
+<div id="records-table-box" class="stack" style="gap:12px"{% if can_export %} data-pick-key="pick:{{ filter_account }}"{% endif %}>
   <div class="card">
     <div class="card-body filters" style="margin-bottom:0">
       {{ year_chips(year_scope, years, rec_year) }}
@@ -36,12 +36,19 @@
         {% if page < pages %}
         <a href="{{ records_url(page=page+1) }}" hx-get="{{ records_url(partial=True, page=page+1) }}" hx-target="#records-table-box" hx-swap="outerHTML" class="btn btn-xs">下一页{{ icon('chevron-right') }}</a>
         {% endif %}
-        {# Rendered with the table, so the link always carries the filters in effect #}
-        <a href="{{ records_url(csv=True) }}" title="导出当前筛选的全部记录（Excel 可直接打开）" class="btn btn-xs">{{ icon('download') }}导出 CSV</a>
-        {% if filter_account and accounts_list|selectattr('username', 'equalto', filter_account)|list %}
-        <a href="/records/ledger.xlsx?account={{ filter_account|urlencode }}" title="这家企业的全部登记记录和状态变更记录（xlsx），不受上面的状态、关键字筛选影响" class="btn btn-xs">{{ icon('file-download') }}导出台账</a>
-        {% if handover and handover.registered %}
-        <a href="/records/handover.zip?account={{ filter_account|urlencode }}" title="登记成功、续展登记的证书清单（xlsx）和证书文件，打成一个 zip{% if handover.open %}；还有 {{ handover.open }} 条在审，没有列入{% endif %}" class="btn btn-xs">{{ icon('certificate') }}交付包{% if handover.open %}（尚有 {{ handover.open }} 条在审）{% endif %}</a>
+        {# Rendered with the table, so the links always carry the filters in
+           effect; ui.js adds the ticked records (?reg=) to every data-export
+           link — ticked records replace the filters. #}
+        {% if can_export %}
+        <span class="xs" id="pick-note" hidden>已勾选 <b data-pick-count>0</b> 条，导出只含勾选的 · <a href="#" class="link" data-pick-clear>清除勾选</a></span>
+        {% endif %}
+        <a href="{{ records_url(csv=True) }}" data-export title="导出当前筛选的全部记录（Excel 可直接打开）；勾选了记录就只导出勾选的" class="btn btn-xs">{{ icon('download') }}导出 CSV</a>
+        {% if can_export %}
+        <a href="{{ export_url('/records/ledger.xlsx') }}" data-export title="当前筛选出的登记记录和它们的状态变更记录（xlsx）；勾选了记录就只导出勾选的" class="btn btn-xs">{{ icon('file-download') }}<span data-pick-label="导出台账">导出台账</span></a>
+        {% if handover %}
+        <a href="{{ export_url('/records/handover.zip') }}" data-export id="handover-link"
+           data-registered="{{ handover.registered }}" data-open="{{ handover.open }}"{% if not handover.registered %} hidden{% endif %}
+           title="当前筛选出的（勾选了就是勾选的）登记成功、续展登记记录：证书清单（xlsx）和证书文件，打成一个 zip；在审的不列入" class="btn btn-xs">{{ icon('certificate') }}<span data-handover-label>交付包{% if handover.open %}（尚有 {{ handover.open }} 条在审）{% endif %}</span></a>
         {% endif %}
         {% else %}
         <span class="xs faint" title="在上方选一家企业后可导出它的进度台账">选一家企业可导出台账</span>
@@ -58,6 +65,9 @@
       <table class="tbl">
         <thead>
           <tr>
+            {% if can_export %}
+            <th class="pick"><input type="checkbox" id="pick-page" aria-label="勾选本页全部记录" title="勾选本页全部记录"></th>
+            {% endif %}
             {{ th_sort('company', '公司 / 账号') }}
             <th>登记编号</th>
             {{ th_sort('name', '数据名称') }}

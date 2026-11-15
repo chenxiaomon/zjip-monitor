@@ -8,8 +8,8 @@ makes it what the counting and listing pages show when no year is chosen:
 the dashboard, the records page, the /view board and the mini program.
 
 It narrows what is shown, never what is known. The diff, notices, 待办, the
-deadline calendar, the change history, the ops banner and the ledger export
-keep seeing every record, so an old certificate's renewal or a correction
+deadline calendar, the change history and the ops banner keep seeing
+every record, so an old certificate's renewal or a correction
 deadline on an old application is never hidden. Which accounts a round
 scans is a separate setting — 停巡, src/scan_plan.py — and a scanned
 account is always fetched whole.

@@ -206,3 +206,112 @@ function togglePassword(btn) {
   if (window.htmx) htmx.onLoad(init);
   document.addEventListener('DOMContentLoaded', function () { init(document); });
 })();
+
+// 登记记录页的勾选：勾了哪几条，「导出 CSV / 导出台账 / 交付包」就只含哪几条，
+// 不勾就按当前筛选。勾选按企业记在 sessionStorage（翻页、换筛选、排序都还在，
+// 关掉标签页就清掉）；存不了时只记在这一页里。每条存「是否登记成功、是否在审」，
+// 别的页上勾的也能算进交付包按钮的条数。
+(function () {
+  var memory = {};
+  function box() { return document.getElementById('records-table-box'); }
+  function load(key) {
+    try {
+      var raw = sessionStorage.getItem(key);
+      if (raw) { var v = JSON.parse(raw); if (v && typeof v === 'object') return v; }
+    } catch (e) { /* 存储不可用：退回本页内存 */ }
+    return memory[key] || {};
+  }
+  function save(key, picked) {
+    memory[key] = picked;
+    try {
+      if (Object.keys(picked).length) sessionStorage.setItem(key, JSON.stringify(picked));
+      else sessionStorage.removeItem(key);
+    } catch (e) { /* 忽略 */ }
+  }
+  function facts(cb) { return { r: cb.dataset.reg === '1' ? 1 : 0, o: cb.dataset.open === '1' ? 1 : 0 }; }
+  function exportHref(base, regs) {
+    if (!regs.length) return base;
+    return base + (base.indexOf('?') < 0 ? '?' : '&') +
+      regs.map(function (r) { return 'reg=' + encodeURIComponent(r); }).join('&');
+  }
+  function refresh() {
+    var b = box();
+    if (!b || !b.dataset.pickKey) return;
+    var key = b.dataset.pickKey, picked = load(key);
+    var boxes = Array.prototype.slice.call(b.querySelectorAll('input.rec-pick'));
+    boxes.forEach(function (cb) {
+      cb.checked = !!picked[cb.value];
+      if (cb.checked) picked[cb.value] = facts(cb);  // 状态可能变了：以页面上的为准
+    });
+    save(key, picked);
+    var regs = Object.keys(picked).sort(), n = regs.length;
+
+    var page = document.getElementById('pick-page');
+    if (page) {
+      var on = boxes.filter(function (cb) { return cb.checked; }).length;
+      page.checked = boxes.length > 0 && on === boxes.length;
+      page.indeterminate = on > 0 && on < boxes.length;
+    }
+    var note = document.getElementById('pick-note');
+    if (note) {
+      note.hidden = !n;
+      var count = note.querySelector('[data-pick-count]');
+      if (count) count.textContent = n;
+    }
+    Array.prototype.forEach.call(b.querySelectorAll('a[data-export]'), function (a) {
+      if (!a.dataset.base) a.dataset.base = a.getAttribute('href');
+      a.setAttribute('href', exportHref(a.dataset.base, regs));
+    });
+    Array.prototype.forEach.call(b.querySelectorAll('[data-pick-label]'), function (el) {
+      el.textContent = el.dataset.pickLabel + (n ? '（勾选的 ' + n + ' 条）' : '');
+    });
+    var ho = document.getElementById('handover-link');
+    if (ho) {
+      var label = ho.querySelector('[data-handover-label]');
+      var reg, open;
+      if (n) {
+        reg = 0; open = 0;
+        regs.forEach(function (r) { reg += picked[r].r || 0; open += picked[r].o || 0; });
+      } else {
+        reg = +ho.dataset.registered || 0; open = +ho.dataset.open || 0;
+      }
+      ho.hidden = !reg;
+      if (label) {
+        label.textContent = '交付包' + (n
+          ? '（勾选的 ' + reg + ' 条登记成功' + (open ? '，' + open + ' 条在审不列入' : '') + '）'
+          : (open ? '（尚有 ' + open + ' 条在审）' : ''));
+      }
+    }
+  }
+  document.addEventListener('change', function (e) {
+    var t = e.target, b = box();
+    if (!b || !b.dataset.pickKey || !t || !t.matches) return;
+    if (t.matches('input.rec-pick')) {
+      var picked = load(b.dataset.pickKey);
+      if (t.checked) picked[t.value] = facts(t); else delete picked[t.value];
+      save(b.dataset.pickKey, picked);
+      refresh();
+    } else if (t.id === 'pick-page') {
+      var all = load(b.dataset.pickKey);
+      Array.prototype.forEach.call(b.querySelectorAll('input.rec-pick'), function (cb) {
+        if (t.checked) all[cb.value] = facts(cb); else delete all[cb.value];
+      });
+      save(b.dataset.pickKey, all);
+      refresh();
+    }
+  });
+  document.addEventListener('click', function (e) {
+    var clear = e.target && e.target.closest && e.target.closest('[data-pick-clear]');
+    var b = box();
+    if (!clear || !b || !b.dataset.pickKey) return;
+    e.preventDefault();
+    save(b.dataset.pickKey, {});
+    refresh();
+  });
+  // 翻页、输入关键字只换掉表格这一块：换完重新对上勾选。afterSwap 让勾选框立刻对上；
+  // 带 id 的元素（勾选提示、交付包按钮）在 settle 时会被 htmx 换回服务器给的属性
+  // （hidden、href），所以 afterSettle 再来一次。
+  document.addEventListener('htmx:afterSwap', refresh);
+  document.addEventListener('htmx:afterSettle', refresh);
+  document.addEventListener('DOMContentLoaded', refresh);
+})();
