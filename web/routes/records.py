@@ -1,10 +1,16 @@
 """Records page: full registration record table with filtering and keyword search.
 
 The application-year chips (关注中 / 全部年份 / each year, web/services/
-year_scope.py) narrow the table and the CSV export; the count line says how
+year_scope.py) narrow the table and its exports; the count line says how
 many rows the chosen years leave out, so a search never comes up empty
 without saying where the matches went. Links from 待办, the calendar and the
-timeline ask for 全部年份: an old record named there must open."""
+timeline ask for 全部年份: an old record named there must open.
+
+The exports — CSV, and for one picked company the 进度台账 and the 交付包 —
+cover what the filters leave, or only the records ticked in the table when
+any are (ui.js keeps the ticks per company across pages and filters and adds
+them as ?reg=). With nothing narrowing it, a company's 台账 and 交付包 are
+the whole company, as they always were."""
 
 from __future__ import annotations
 
@@ -22,6 +28,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from starlette.background import BackgroundTask
 
 from src import diskstat, todo
+from src.archive_policy import TERMINAL_STATUSES
 from src.scraper import AUDIT_STATUS, decode_status
 from web.auth import allowed_usernames, shown_accounts, visible_accounts
 from src.focus import apply_year
@@ -101,6 +108,16 @@ def _statuses(request: Request) -> frozenset[int] | None:
         if (code := int_or_none(part.strip())) is not None
     }
     return frozenset(codes) or None
+
+
+def _picked(request: Request) -> frozenset[str]:
+    """登记编号 ticked on the records page: ?reg=A&reg=B (or ?reg=A,B)."""
+    return frozenset(
+        part.strip()
+        for raw in request.query_params.getlist("reg")
+        for part in raw.split(",")
+        if part.strip()
+    )
 
 
 def _sort(raw: str | None) -> str:
@@ -315,6 +332,14 @@ def _ctx(
         base = "/partials/records-table" if partial else ("/records.csv" if csv else "/records")
         return base + (f"?{query}" if query else "")
 
+    def export_url(path: str) -> str:
+        """台账 / 交付包 link: the filters in effect, not the order or the page.
+        The page's script adds the ticked records (?reg=) on top."""
+        query = urlencode({
+            k: filters[k] for k in ("account", "status", "q", "start_date", "end_date", "year") if filters[k]
+        }, safe=",")
+        return path + (f"?{query}" if query else "")
+
     def status_toggle(code: int) -> str:
         """The status parameter after clicking this status's chip."""
         return _status_param((statuses or frozenset()) ^ {code})
@@ -352,21 +377,30 @@ def _ctx(
         "year_scope": scope,
         "years": tally["years"],
         "outside": tally["outside"],
-        "handover": _handover_counts(accounts_list, account),
+        "export_url": export_url,
+        # One visible company picked: its exports, and the tick boxes for them
+        "can_export": bool(account) and any(a.username == account for a in accounts_list),
+        "handover": _handover_counts(accounts_list, account, rows),
+        "REGISTERED_STATUSES": handover.REGISTERED_STATUSES,
+        "TERMINAL_STATUSES": TERMINAL_STATUSES,
         "STATUS_COLORS": STATUS_COLORS,
         "AUDIT_STATUS": AUDIT_STATUS,
     }
 
 
-def _handover_counts(accounts_list, account: str | None) -> dict | None:
-    """{"registered", "open"} for the 交付包 button of the company picked in
-    the chips; None when no (visible) company is picked. The status and
-    keyword filters do not matter: the package is the whole company."""
+def _handover_counts(accounts_list, account: str | None, rows: list[dict]) -> dict | None:
+    """The 交付包 button of the company picked in the chips: {"registered",
+    "open"} among the rows the filters leave — what the button downloads.
+    None, no button, when no (visible) company is picked or it has nothing
+    registered at all. A filter that leaves no registered row renders the
+    button hidden, for the page's script to show once a ticked record is."""
     acc = next((a for a in accounts_list if a.username == (account or "")), None)
     snap = get_latest_snapshot(acc.company) if acc else None
     if not snap:
         return None
-    return handover.counts([r for r in snap.get("records") or [] if isinstance(r, dict)])
+    if not handover.counts([r for r in snap.get("records") or [] if isinstance(r, dict)])["registered"]:
+        return None
+    return handover.counts([r["_raw"] for r in rows if r["username"] == acc.username])
 
 
 @router.get("/records", response_class=HTMLResponse)
@@ -496,8 +530,13 @@ def records_csv(
     with a BOM so Excel opens the Chinese text correctly. Same visibility
     rules and the same application years as the page."""
     scope = year_scope.resolve(year)
-    _, rows, _, _ = _all_rows(request, account or None, _statuses(request), start_date, end_date, q, _sort(sort),
-                              scope)
+    picked = _picked(request)
+    if picked:  # 勾选了就只要勾选的：其它筛选不再起作用（勾选时可能是别的筛选）
+        _, rows, _, _ = _all_rows(request, account or None, None, None, None, None, _sort(sort))
+        rows = [r for r in rows if r["reg_no"] in picked]
+    else:
+        _, rows, _, _ = _all_rows(request, account or None, _statuses(request), start_date, end_date, q,
+                                  _sort(sort), scope)
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(_CSV_HEADER)
@@ -509,8 +548,9 @@ def records_csv(
             r["renewal"].valid_to if r["renewal"] else "",
             len(r["attachments"]) + len(r["archived"]),
         ])
-    filters = {"account": account, "statuses": _statuses(request), "start_date": start_date,
-               "end_date": end_date, "q": q, "year": None if scope.is_all else scope.value}
+    filters = ({"account": account, "picked": len(picked)} if picked else
+               {"account": account, "statuses": _statuses(request), "start_date": start_date,
+                "end_date": end_date, "q": q, "year": None if scope.is_all else scope.value})
     audit_log.record_request(request, "data.records_csv", detail={
         **{k: v for k, v in filters.items() if v}, "rows": len(rows),
     })
@@ -522,17 +562,51 @@ def records_csv(
     )
 
 
+def _selection(request: Request, acc, snap: dict) -> tuple[list[dict], dict]:
+    """(records, how they were chosen) — what 导出台账 and 交付包 cover.
+
+    Ticked records (?reg=) win outright: they may have been ticked under
+    other filters, so the filters no longer apply. Otherwise the page's
+    filters — status, keyword, application dates and years, the same test
+    as the table. "How" is {} when nothing narrows it: the whole company,
+    exactly as before there was a choice."""
+    records = [r for r in snap.get("records") or [] if isinstance(r, dict)]
+    picked = _picked(request)
+    if picked:
+        return [r for r in records if str(r.get("dataRegNo") or "") in picked], {"picked": len(picked)}
+    qp = request.query_params
+    statuses = _statuses(request)
+    start_date, end_date = (qp.get("start_date") or "").strip(), (qp.get("end_date") or "").strip()
+    start_ms = _date_to_ms(start_date) if start_date else None
+    end_ms = _date_to_ms(end_date, end_of_day=True) if end_date else None
+    q = (qp.get("q") or "").strip()
+    scope = year_scope.resolve(qp.get("year"))
+    chosen = [r for r in records
+              if record_matches(acc, r, statuses, start_ms, end_ms, q.lower()) and scope.matches(r)]
+    how = {"statuses": sorted(statuses) if statuses else None, "q": q,
+           "start_date": start_ms and start_date, "end_date": end_ms and end_date,
+           "year": None if scope.is_all else scope.value}
+    return chosen, {k: v for k, v in how.items() if v}
+
+
+_NOTHING_CHOSEN = "没有符合当前筛选或勾选的记录（勾选的记录可能已不在最新数据里，请刷新页面重新勾选）"
+
+
 @router.get("/records/ledger.xlsx")
 def records_ledger(request: Request, account: str | None = None) -> Response:
-    """一家企业的进度台账（xlsx）：全部登记记录和开始监控以来的状态变更，
-    不受登记记录页上状态、关键字等筛选的影响。看不到的企业、不存在的企业、
-    还没有巡检数据的企业，回答都一样。"""
+    """一家企业的进度台账（xlsx）：登记记录页当前筛选出的、或勾选的记录，和
+    它们开始监控以来的状态变更（_selection）；什么都没筛选时是这家企业的全部。
+    看不到的企业、不存在的企业、还没有巡检数据的企业，回答都一样。"""
     acc = next((a for a in visible_accounts(request) if a.username == (account or "")), None)
     snap = get_latest_snapshot(acc.company) if acc else None
     if snap is None:
         return Response("没有这家企业的巡检数据", status_code=404, media_type="text/plain; charset=utf-8")
-    records = snap.get("records", [])
+    records, how = _selection(request, acc, snap)
+    if how and not records:
+        return Response(_NOTHING_CHOSEN, status_code=404, media_type="text/plain; charset=utf-8")
     changes = read_change_rows(account=acc.username, accounts=allowed_usernames(request), since=_EPOCH)
+    if how:
+        changes = ledger.changes_of(records, changes)
     noticed = {
         reg_no: sum(1 for n in todo.notices_of(acc.company, reg_no) if n["kind"] == "补正")
         for r in records if (reg_no := str(r.get("dataRegNo") or ""))
@@ -540,7 +614,7 @@ def records_ledger(request: Request, account: str | None = None) -> Response:
     body = ledger.build_ledger(acc.company, records, changes, corrections_noticed=noticed,
                                as_of=snap.get("snapshot_time"))
     audit_log.record_request(request, "data.records_ledger", company=acc.company, detail={
-        "rows": len(records), "changes": sum(1 for c in changes if c["type"] != "removed"),
+        "rows": len(records), "changes": sum(1 for c in changes if c["type"] != "removed"), **how,
     })
     name = ledger.filename(acc.company, datetime.now(_SHANGHAI_TZ).date())
     return Response(body, media_type=ledger.MEDIA_TYPE, headers={
@@ -562,15 +636,18 @@ def _sweep_handover_tmp(now: float | None = None) -> None:
 @router.get("/records/handover.zip")
 def records_handover(request: Request, account: str | None = None) -> Response:
     """一家企业的交付包（zip）：登记成功、续展登记的证书清单 xlsx 加证书文件
-    （web/services/handover.py）。和导出台账一样：看不到的企业、不存在的企业、
-    还没有巡检数据的企业，回答都一样。"""
+    （web/services/handover.py），只从当前筛选出的、或勾选的记录里取，和导出
+    台账一样（_selection）；「尚有 N 条在审」也只数这些。看不到的企业、不存在
+    的企业、还没有巡检数据的企业，回答都一样。"""
     acc = next((a for a in visible_accounts(request) if a.username == (account or "")), None)
     snap = get_latest_snapshot(acc.company) if acc else None
     if snap is None:
         return Response("没有这家企业的巡检数据", status_code=404, media_type="text/plain; charset=utf-8")
-    pkg = handover.plan(acc.company, snap, attachments_dir())
+    records, how = _selection(request, acc, snap)
+    pkg = handover.plan(acc.company, {**snap, "records": records}, attachments_dir())
     if not pkg.rows:
-        return Response("这家企业还没有登记成功的记录", status_code=404, media_type="text/plain; charset=utf-8")
+        why = "所选的记录里没有登记成功的" if how else "这家企业还没有登记成功的记录"
+        return Response(why, status_code=404, media_type="text/plain; charset=utf-8")
     disk = diskstat.check_free()
     if disk.free_mb - pkg.total_bytes / 1048576 < disk.min_free_mb:
         return Response(f"服务器磁盘空间不足（剩余 {disk.free_mb:.0f}MB），暂时打不了包",
@@ -587,7 +664,7 @@ def records_handover(request: Request, account: str | None = None) -> Response:
         raise
     audit_log.record_request(request, "data.records_handover", company=acc.company, detail={
         "rows": len(pkg.rows), "certificates": len(pkg.present), "missing": len(pkg.missing),
-        "open": pkg.open_count, "bytes": size,
+        "open": pkg.open_count, "bytes": size, **how,
     })
     return FileResponse(
         tmp, media_type=handover.MEDIA_TYPE,

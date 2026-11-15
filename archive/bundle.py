@@ -126,9 +126,12 @@ def run_bundle(cfg: ArchiveConfig, company: str, *, out: Path | None = None,
     print(f"✓ {dest}（{size / 1048576:.1f}MB）")
     print(f"  登记成功/续展 {len(pkg.rows)} 条；国家局证书 {national} 张、浙江省证书 {provincial} 张"
           + (f"；尚有 {pkg.open_count} 条在审，未列入" if pkg.open_count else ""))
-    for c in pkg.missing:
-        row = next(r for r in pkg.rows if c in r.certs)
-        print(f"  ! {row.reg_no} {c.cell}")
+    # Row by row: two missing certificates of the same kind are equal
+    # CertFiles, so looking a CertFile's row up would name the first row twice.
+    for row in pkg.rows:
+        for c in row.certs:
+            if c.missing:
+                print(f"  ! {row.reg_no} {c.cell}")
     if pkg.as_of:
         print(f"  数据截至 {pkg.as_of:%Y-%m-%d %H:%M}（北京时间，最近一次拉到本机的快照）")
     pulled = last_pull(cfg.archive_dir)

@@ -12,7 +12,7 @@
         开启后，仪表盘、登记记录、只读看板和小程序打开时只看这些；现在默认看全部年份，年份栏的「关注中」可以临时切换。
         {% endif %}
       </p>
-      <p class="xs faint mt-1">待办、期限日历、变更历史、运维提醒和台账导出始终看全部记录；巡检照常抓取全部记录。</p>
+      <p class="xs faint mt-1">待办、期限日历、变更历史和运维提醒始终看全部记录；巡检照常抓取全部记录。登记记录页的导出（CSV、台账、交付包）跟着页面上选的年份。</p>
       {% if error %}<p class="xs danger mt-1">{{ error }}</p>{% endif %}
     </div>
     <button hx-post="/settings/focus"

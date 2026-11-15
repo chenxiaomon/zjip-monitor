@@ -3,6 +3,17 @@
   {# id by row position: an empty or duplicated 登记号 must not make two rows share one #}
   <tr class="row-click" id="rec-{{ loop.index }}"
       {% if r.reg_no %}hx-get="{{ record_url(r.username, r.reg_no) }}" hx-target="#drawer" hx-swap="innerHTML"{% endif %}>
+    {% if can_export %}
+    {# A click here ticks, never opens the drawer. data-reg / data-open feed the
+       交付包 button's count for ticked records on other pages too. #}
+    <td class="pick" onclick="event.stopPropagation()">
+      {% if r.reg_no %}
+      <input type="checkbox" class="rec-pick" value="{{ r.reg_no }}" aria-label="勾选 {{ r.reg_no }}"
+             data-reg="{{ 1 if r.status_code in REGISTERED_STATUSES else 0 }}"
+             data-open="{{ 0 if r.status_code in TERMINAL_STATUSES else 1 }}">
+      {% endif %}
+    </td>
+    {% endif %}
     <td class="nowrap">
       <span class="sm text-2">{{ r.company[:8] }}{% if r.company|length > 8 %}…{% endif %}</span>
       <div class="sub">{{ r.username }}</div>
@@ -52,7 +63,7 @@
   </tr>
   {% else %}
   <tr>
-    <td colspan="7" class="empty">{{ icon('inbox') }}暂无记录数据</td>
+    <td colspan="{{ 8 if can_export else 7 }}" class="empty">{{ icon('inbox') }}暂无记录数据</td>
   </tr>
   {% endfor %}
 </tbody>
