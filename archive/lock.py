@@ -35,7 +35,7 @@ def _holder(path: Path) -> str:
         since = datetime.fromisoformat(info["since"]).astimezone().strftime("%m-%d %H:%M")
         return f"另一个归档命令正在运行：{info['what']}（进程 {info['pid']}，{since} 开始）"
     except (OSError, ValueError, KeyError, TypeError):
-        return "另一个归档命令正在运行"
+        return "另一个归档命令正在运行（可能是 bundle 在打包）"
 
 
 @contextmanager
@@ -46,6 +46,7 @@ def archive_lock(archive_dir: Path, *, what: str, shared: bool = False, wait: fl
     archive_dir.mkdir(parents=True, exist_ok=True)
     path = archive_dir / LOCK_NAME
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    held = False
     try:
         mode = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
         deadline = time.monotonic() + wait
@@ -58,6 +59,7 @@ def archive_lock(archive_dir: Path, *, what: str, shared: bool = False, wait: fl
                 if left <= 0:
                     raise ArchiveBusy(_holder(path)) from None
                 sleep(min(poll, left))
+        held = True
         if not shared:
             os.ftruncate(fd, 0)
             os.write(fd, json.dumps({
@@ -66,4 +68,6 @@ def archive_lock(archive_dir: Path, *, what: str, shared: bool = False, wait: fl
             }, ensure_ascii=False).encode("utf-8"))
         yield
     finally:
+        if held and not shared:  # so a later "busy" never names a process long gone
+            os.ftruncate(fd, 0)
         os.close(fd)  # closing the descriptor releases the lock

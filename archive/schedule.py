@@ -16,8 +16,10 @@ to ARCHIVE_DIR/schedule.log, one line per pull to pull.log (via=schedule).
 Times: production scans at 09:00 and 18:00 Beijing time; the agent runs at
 10:30 and 19:30 Beijing. launchd counts in this Mac's own time zone, which
 may keep daylight saving (America/Los_Angeles here), so install schedules the
-Beijing times under both of its offsets: two harmless extra runs a day, and
-no reinstall when the clocks change. A time missed while the Mac sleeps runs
+Beijing times under both of its offsets: two extra runs a day, and no
+reinstall when the clocks change. In summer the extra runs fall an hour
+early, inside a scan; a run that finds itself within an hour after a scan
+starts skips (in_scan_window). A time missed while the Mac sleeps runs
 at wake; RunAtLoad covers a Mac that was off, and gives a first run right
 at install, while someone is there to answer a privacy prompt.
 
@@ -48,6 +50,11 @@ from .lock import ArchiveBusy, archive_lock
 
 LABEL = "org.zjip-monitor.archive"
 BEIJING_TIMES = ((10, 30), (19, 30))
+# Production scans start here (settings.yaml schedule.crons); a run inside
+# the first hour after a start — the daylight-saving extra run lands there —
+# would only race the scan's own writes, so it is skipped.
+SCAN_STARTS = ((9, 0), (18, 0))
+SCAN_WINDOW_MINUTES = 60
 LOG_NAME = "schedule.log"
 TITLE = "zjip 本机归档"
 LOCK_WAIT_SECONDS = 1800
@@ -127,16 +134,40 @@ def _companies(paths: list[str], top: int = 3) -> str:
     return text + (f" 等 {len(ranked)} 家" if len(ranked) > top else "")
 
 
+def in_scan_window(now: datetime | None = None) -> bool:
+    t = (now or datetime.now(_BEIJING)).astimezone(_BEIJING)
+    minutes = t.hour * 60 + t.minute
+    return any(0 <= minutes - (h * 60 + m) < SCAN_WINDOW_MINUTES for h, m in SCAN_STARTS)
+
+
 def run_scheduled(cfg: ArchiveConfig, *, notify_fn: Callable[[str], None] = notify,
-                  sleep: Callable[[float], None] = time.sleep, lock_wait: float = LOCK_WAIT_SECONDS) -> int:
+                  sleep: Callable[[float], None] = time.sleep, lock_wait: float = LOCK_WAIT_SECONDS,
+                  now: datetime | None = None) -> int:
     print(f"=== {datetime.now().astimezone():%Y-%m-%d %H:%M %Z} 定时归档开始", flush=True)
+    if in_scan_window(now):
+        print("服务器正在巡检（北京时间整点后一小时内），这次跳过，下一次再拉")
+        return 0
+    try:
+        return _run(cfg, notify_fn=notify_fn, sleep=sleep, lock_wait=lock_wait)
+    except Exception as exc:  # noqa: BLE001 — unattended: whatever breaks must be said
+        print(f"✗ 定时归档出错：{type(exc).__name__}: {exc}", flush=True)
+        import traceback
+        traceback.print_exc()
+        notify_fn(f"本机归档出错：{type(exc).__name__}: {str(exc)[:120]}，详见 {cfg.archive_dir / LOG_NAME}")
+        return 1
+
+
+def _run(cfg: ArchiveConfig, *, notify_fn: Callable[[str], None], sleep: Callable[[float], None],
+         lock_wait: float) -> int:
     root = cfg.archive_dir
     try:
         with archive_lock(root, what="定时归档 auto", wait=lock_wait, sleep=sleep):
             stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
             before = pull.notice_files(root)
-            result = pull.pull_jobs(pull.plan(cfg, stamp=stamp, notices_only=True), tag="（通知书）",
-                                    retries=RETRIES, sleep=sleep)
+            # Each pass its own backup stamp: a file the server rewrites
+            # between the two keeps both of its older versions.
+            result = pull.pull_jobs(pull.plan(cfg, stamp=f"{stamp}-notices", notices_only=True),
+                                    tag="（通知书）", retries=RETRIES, sleep=sleep)
             result = result.merge(pull.pull_jobs(pull.plan(cfg, stamp=stamp), retries=RETRIES, sleep=sleep))
             fresh = pull.new_notices(root, before, cfg.db_path)
             pull.log_line(cfg, result, notices=len(fresh), via="schedule")
@@ -192,7 +223,14 @@ except BaseException as exc:
     except BaseException:
         pass
     sys.exit({EXIT_BOOTSTRAP})
-sys.exit(main({args!r} + ["auto"]))
+try:
+    code = main({args!r} + ["auto"])
+except SystemExit:
+    raise
+except BaseException as exc:
+    print("本机归档出错：%s: %s" % (type(exc).__name__, exc), file=sys.stderr)
+    code = 1
+sys.exit(code)
 """
 
 
@@ -201,7 +239,8 @@ def plist(cfg: ArchiveConfig, *, python: Path, repo: Path, site_packages: Path, 
     log = str(cfg.archive_dir / LOG_NAME)
     return {
         "Label": LABEL,
-        "ProgramArguments": [str(python), "-I", "-c", bootstrap_code(repo, site_packages, env_file)],
+        # -u: -I ignores PYTHONUNBUFFERED, and schedule.log should have every line up to a hang
+        "ProgramArguments": [str(python), "-I", "-u", "-c", bootstrap_code(repo, site_packages, env_file)],
         "WorkingDirectory": str(cfg.archive_dir),
         "StandardOutPath": log,
         "StandardErrorPath": log,
@@ -209,7 +248,7 @@ def plist(cfg: ArchiveConfig, *, python: Path, repo: Path, site_packages: Path, 
         "RunAtLoad": True,
         "ProcessType": "Background",
         "LowPriorityIO": True,
-        "EnvironmentVariables": {"PATH": path_env, "LANG": "en_US.UTF-8", "PYTHONUNBUFFERED": "1"},
+        "EnvironmentVariables": {"PATH": path_env, "LANG": "en_US.UTF-8"},
     }
 
 
@@ -226,6 +265,8 @@ def install(cfg: ArchiveConfig, *, env_file: Path | None = None, times=BEIJING_T
             runner: Callable = subprocess.run, target: Path | None = None) -> int:
     python = Path(os.path.realpath(sys.executable))
     site_packages = Path(sysconfig.get_paths()["purelib"])
+    if env_file is None and os.environ.get("ZJIP_ARCHIVE_ENV"):
+        env_file = Path(os.environ["ZJIP_ARCHIVE_ENV"])  # the agent does not inherit the variable
     local = local_times(times)
     cfg.archive_dir.mkdir(parents=True, exist_ok=True)
     data = plist(cfg, python=python, repo=_REPO, site_packages=site_packages, times=local,

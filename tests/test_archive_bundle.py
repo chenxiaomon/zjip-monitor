@@ -155,3 +155,10 @@ def test_bundle_does_not_load_the_web_framework():
             "sys.exit(f'loaded {bad}' if bad else 0)")
     proc = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr or proc.stdout
+
+
+def test_a_broken_snapshot_is_a_message(arc, capsys):
+    newest = sorted((arc.archive_dir / "snapshots").glob("甲_公司_2026-11-14*.json"))[-1]
+    newest.write_text("{not json", encoding="utf-8")
+    assert bundle.run_bundle(arc, "甲 公司") == 1
+    assert "读不了最新快照" in capsys.readouterr().out

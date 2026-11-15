@@ -3,6 +3,7 @@
 import plistlib
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -13,6 +14,7 @@ from archive.config import ArchiveConfig
 from archive.lock import archive_lock
 
 REPO = Path(__file__).resolve().parent.parent
+NOON = datetime(2026, 11, 15, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
 
 
 @pytest.fixture
@@ -45,8 +47,8 @@ def _plist(cfg, tmp_path, **kw):
 def test_the_agent_definition(cfg, tmp_path):
     data = _plist(cfg, tmp_path)
     assert data["Label"] == "org.zjip-monitor.archive"
-    python, flag, dash_c, code = data["ProgramArguments"]
-    assert "Desktop" not in python and (flag, dash_c) == ("-I", "-c")
+    python, isolated, unbuffered, dash_c, code = data["ProgramArguments"]
+    assert "Desktop" not in python and (isolated, unbuffered, dash_c) == ("-I", "-u", "-c")
     assert "Desktop" not in data["WorkingDirectory"]
     assert data["StandardOutPath"] == data["StandardErrorPath"] == str(cfg.archive_dir / "schedule.log")
     assert data["StartCalendarInterval"] == [{"Hour": 3, "Minute": 30}, {"Hour": 18, "Minute": 30}]
@@ -70,9 +72,10 @@ def test_the_bootstrap_starts_auto(tmp_path):
     env.write_text(f"ARCHIVE_DIR={tmp_path / 'arc'}\nSERVER=nobody@127.0.0.1\nSSH_CMD=/usr/bin/false\n", encoding="utf-8")
     code = schedule.bootstrap_code(REPO, site, env_file=env, notifier="/usr/bin/true")
     # stop at the door: no rsync, no notification on the developer's screen
-    code = code.replace("sys.exit(main(", "import archive.schedule as s\n"
-                        "s.run_scheduled = lambda cfg, **k: print('auto reached', cfg.archive_dir) or 0\n"
-                        "sys.exit(main(")
+    hook = "try:\n    code = main("
+    assert hook in code
+    code = code.replace(hook, "import archive.schedule as s\n"
+                        "s.run_scheduled = lambda cfg, **k: print('auto reached', cfg.archive_dir) or 0\n" + hook)
     proc = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr[-500:]
     assert f"auto reached {tmp_path / 'arc'}" in proc.stdout  # the env file given at install was read
@@ -164,7 +167,7 @@ def test_notices_first_then_the_rest_then_index(cfg, fake_pull, capsys):
     fake_pull["drops"] = {"notices": [("attachments/甲/R1/《补正通知书》.pdf", b"n1"),
                                       ("attachments/乙/R9/《公示通知书》.pdf", b"n2")]}
     said = []
-    assert schedule.run_scheduled(cfg, notify_fn=said.append, sleep=lambda s: None) == 0
+    assert schedule.run_scheduled(cfg, notify_fn=said.append, sleep=lambda s: None, now=NOON) == 0
     assert fake_pull["calls"] == ["notices", "attachments", "snapshots", "events", "audit", "index"]
     assert said == ["新归档通知书 2 份（乙 1、甲 1）"]
     line = (cfg.archive_dir / "pull.log").read_text(encoding="utf-8").splitlines()[-1]
@@ -173,7 +176,7 @@ def test_notices_first_then_the_rest_then_index(cfg, fake_pull, capsys):
 
 def test_a_quiet_run_says_nothing(cfg, fake_pull):
     said = []
-    assert schedule.run_scheduled(cfg, notify_fn=said.append, sleep=lambda s: None) == 0
+    assert schedule.run_scheduled(cfg, notify_fn=said.append, sleep=lambda s: None, now=NOON) == 0
     assert said == []
 
 
@@ -181,7 +184,7 @@ def test_a_failed_pull_is_retried_then_reported_and_index_still_runs(cfg, fake_p
     fake_pull["codes"] = {"snapshots": 12}
     fake_pull["drops"] = {"notices": [("attachments/甲/R1/《补正通知书》.pdf", b"n1")]}
     said, slept = [], []
-    assert schedule.run_scheduled(cfg, notify_fn=said.append, sleep=slept.append) == 1
+    assert schedule.run_scheduled(cfg, notify_fn=said.append, sleep=slept.append, now=NOON) == 1
     assert fake_pull["calls"].count("snapshots") == 3 and slept == [60, 300]
     assert fake_pull["calls"][-1] == "index"
     (msg,) = said
@@ -194,7 +197,7 @@ def test_an_index_failure_is_reported(cfg, fake_pull, monkeypatch):
         raise RuntimeError("database is locked")
     monkeypatch.setattr(index, "run", broken)
     said = []
-    assert schedule.run_scheduled(cfg, notify_fn=said.append, sleep=lambda s: None) == 1
+    assert schedule.run_scheduled(cfg, notify_fn=said.append, sleep=lambda s: None, now=NOON) == 1
     assert said and "入库失败" in said[0] and "database is locked" in said[0]
 
 
@@ -210,7 +213,7 @@ def test_a_busy_archive_is_waited_for_then_skipped(cfg, fake_pull, monkeypatch):
     try:
         assert ready.wait(20)
         said = []
-        assert schedule.run_scheduled(cfg, notify_fn=said.append, sleep=lambda s: None, lock_wait=0.01) == 1
+        assert schedule.run_scheduled(cfg, notify_fn=said.append, sleep=lambda s: None, lock_wait=0.01, now=NOON) == 1
         assert fake_pull["calls"] == []
         assert said and said[0].startswith("本机归档这次没跑：另一个归档命令正在运行")
     finally:
@@ -218,3 +221,56 @@ def test_a_busy_archive_is_waited_for_then_skipped(cfg, fake_pull, monkeypatch):
         p.join(10)
     with archive_lock(cfg.archive_dir, what="x"):
         pass
+
+
+@pytest.mark.parametrize("hm, skip", [((9, 0), True), ((9, 30), True), ((9, 59), True), ((10, 0), False),
+                                      ((10, 30), False), ((18, 30), True), ((19, 30), False), ((3, 0), False)])
+def test_runs_inside_a_scan_hour_are_skipped(cfg, fake_pull, hm, skip):
+    now = datetime(2026, 7, 15, *hm, tzinfo=ZoneInfo("Asia/Shanghai"))
+    said = []
+    assert schedule.run_scheduled(cfg, notify_fn=said.append, sleep=lambda s: None, now=now) == 0
+    assert (fake_pull["calls"] == []) is skip and said == []
+
+
+def test_the_summer_extra_runs_are_the_ones_that_skip():
+    la = ZoneInfo("America/Los_Angeles")
+    shanghai = ZoneInfo("Asia/Shanghai")
+    summer = [datetime(2026, 7, 15, h, m, tzinfo=la) for h, m in schedule.local_times(tz=la, year=2026)]
+    winter = [datetime(2026, 1, 15, h, m, tzinfo=la) for h, m in schedule.local_times(tz=la, year=2026)]
+    assert sorted(f"{t.astimezone(shanghai):%H:%M}" for t in summer if not schedule.in_scan_window(t)) == ["10:30", "19:30"]
+    assert sorted(f"{t.astimezone(shanghai):%H:%M}" for t in winter if not schedule.in_scan_window(t)) == [
+        "10:30", "11:30", "19:30", "20:30"]
+
+
+def test_an_unexpected_error_is_said(cfg, fake_pull, monkeypatch):
+    def broken(*a, **k):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(pull, "log_line", broken)
+    said = []
+    assert schedule.run_scheduled(cfg, notify_fn=said.append, sleep=lambda s: None, now=NOON) == 1
+    assert said and said[0].startswith("本机归档出错：OSError") and "No space left" in said[0]
+
+
+def test_each_pass_backs_up_into_its_own_folder(cfg, monkeypatch):
+    seen = []
+
+    def fake_run(argv, **kw):
+        seen.append(next(a for a in argv if a.startswith("--backup-dir=")) if "--backup" in argv else None)
+        return subprocess.CompletedProcess(argv, 0, stdout="Number of files transferred: 0\n", stderr="")
+    monkeypatch.setattr(pull.subprocess, "run", fake_run)
+    monkeypatch.setattr(index, "run", lambda c: 0)
+    cfg.archive_dir.mkdir(parents=True)
+    schedule.run_scheduled(cfg, notify_fn=lambda m: None, sleep=lambda s: None, now=NOON)
+    notices_dir, full_dir = seen[0], seen[1]
+    assert notices_dir.endswith("-notices/attachments") and not full_dir.endswith("-notices/attachments")
+    assert notices_dir.rsplit("/", 1)[0] != full_dir.rsplit("/", 1)[0]  # .overwritten/<stamp> differs
+
+
+def test_install_honours_the_env_variable(cfg, tmp_path, monkeypatch):
+    env = tmp_path / "other.env"
+    env.write_text("SERVER=x@y\n", encoding="utf-8")
+    monkeypatch.setenv("ZJIP_ARCHIVE_ENV", str(env))
+    target = tmp_path / "a.plist"
+    assert schedule.install(cfg, runner=FakeLaunchctl(), target=target) == 0
+    code = plistlib.loads(target.read_bytes())["ProgramArguments"][-1]
+    assert f"'--env', {str(env.resolve())!r}" in code

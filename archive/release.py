@@ -316,7 +316,7 @@ def run_restore_certificates(cfg: ArchiveConfig, *, company: str | None = None, 
         _stage(items, cfg.archive_dir, staging)
         # -t keeps the files' times; -O leaves the server's directory times
         # alone; no -a: the server owns the files (root), not the laptop's uid.
-        argv = ["rsync", "-rtO", "--ignore-existing", "--stats", "-e", cfg.ssh_cmd]
+        argv = ["rsync", "-rtO", "--ignore-existing", "--stats", "-e", cfg.ssh_cmd, "--timeout=300"]
         if not yes:
             argv.append("-n")
         argv += [f"{staging}/", f"{cfg.server}:{cfg.remote}/data/attachments/"]

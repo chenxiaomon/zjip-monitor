@@ -23,7 +23,7 @@ def test_plan_is_append_only(tmp_path):
                                      for n in ("attachments", "snapshots", "events", "audit")]
     for argv in jobs:
         assert not any(a.startswith("--delete") for a in argv)
-        assert argv[:5] == ["rsync", "-az", "--stats", "-e", "ssh -p 22"]
+        assert argv[:6] == ["rsync", "-az", "--stats", "-e", "ssh -p 22", "--timeout=300"]
 
     attachments, snapshots, events, audit_log = jobs
     assert "--exclude=*.part" in attachments
@@ -178,3 +178,13 @@ def test_pull_log_gets_the_notice_count(tmp_path, monkeypatch):
     pull.run(cfg)
     line = (cfg.archive_dir / "pull.log").read_text(encoding="utf-8").splitlines()[-1]
     assert line.split("\t")[2:] == ["transferred=12", "ok", "notices=0", "via=manual"]
+
+
+def test_a_hung_transfer_is_ended_and_counted_as_failed(tmp_path, monkeypatch):
+    def fake_run(argv, **kw):
+        assert kw["timeout"] == pull.RUN_LIMIT_SECONDS
+        raise subprocess.TimeoutExpired(argv, kw["timeout"])
+
+    monkeypatch.setattr(pull.subprocess, "run", fake_run)
+    result = pull.pull_jobs(pull.plan(_cfg(tmp_path), notices_only=True), retries=1, sleep=lambda s: None)
+    assert result.failed == ["attachments"] and "已终止" in result.errors[0]

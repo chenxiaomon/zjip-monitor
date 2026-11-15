@@ -76,3 +76,13 @@ def test_the_cli_refuses_while_another_command_runs(tmp_path, holder, monkeypatc
     holder()
     assert cli.main(["index"]) == 1
     assert "另一个归档命令正在运行" in capsys.readouterr().out
+
+
+def test_a_finished_writer_leaves_no_name_behind(tmp_path):
+    with archive_lock(tmp_path, what="archive pull"):
+        assert "archive pull" in (tmp_path / ".archive.lock").read_text(encoding="utf-8")
+    assert (tmp_path / ".archive.lock").read_text(encoding="utf-8") == ""
+    with pytest.raises(RuntimeError):
+        with archive_lock(tmp_path, what="archive index"):
+            raise RuntimeError("boom")
+    assert (tmp_path / ".archive.lock").read_text(encoding="utf-8") == ""

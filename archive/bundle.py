@@ -1,7 +1,8 @@
 """python -m archive bundle <企业> — the 交付包 from this Mac's archive.
 
-The same package the console's 交付包 button gives (web/services/handover.py,
-same bytes from the same snapshot), but built from ~/zjip-archive: the
+The same package the console's 交付包 button gives (web/services/handover.py:
+the same content from the same snapshot — the same bytes, too, where both
+sides run the same xlsxwriter and zlib), but built from ~/zjip-archive: the
 certificates an earlier release took off the server are still here, and so
 are companies the server no longer scans.
 
@@ -98,7 +99,14 @@ def run_bundle(cfg: ArchiveConfig, company: str, *, out: Path | None = None,
     except (LookupError, ValueError) as exc:
         print(f"✗ {exc.args[0]}")
         return 1
-    snap = json.loads(snap_path.read_text(encoding="utf-8"))
+    why: Exception | None = None
+    try:
+        snap = json.loads(snap_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        snap, why = None, exc
+    if not isinstance(snap, dict):
+        print(f"✗ 读不了最新快照 {snap_path.name}（{why if snap is None else '格式不对'}）")
+        return 1
     pkg = handover.plan(name, snap, cfg.archive_dir / "attachments")
     if not pkg.rows:
         print(f"✗ {name} 还没有登记成功的记录")

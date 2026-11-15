@@ -33,6 +33,12 @@ _TRANSFERRED_RE = re.compile(r"Number of (?:regular )?files transferred: ([\d,]+
 _OK_CODES = (0, 24)
 # Certificate files and their older dated rounds: 国家局登记证书.pdf, 国家局登记证书_2026-07-19.pdf
 _CERT_EXCLUDES = tuple(f"--exclude={label}*" for label in CERTIFICATE_TYPES)
+# A connection that goes quiet (the Mac slept, the network or the proxy
+# dropped it) must end the transfer, not hold the archive lock for hours:
+# rsync gives up after this many seconds without I/O, and the whole job
+# after RUN_LIMIT_SECONDS whatever happens (a first full pull took ~2h).
+IO_TIMEOUT_SECONDS = 300
+RUN_LIMIT_SECONDS = 6 * 3600
 
 
 def plan(cfg: ArchiveConfig, *, reports: bool = False, stamp: str | None = None,
@@ -44,7 +50,7 @@ def plan(cfg: ArchiveConfig, *, reports: bool = False, stamp: str | None = None,
     dest = cfg.archive_dir
 
     def job(name: str, *extra: str, backup: bool = True, source: str | None = None) -> list[str]:
-        argv = ["rsync", "-az", "--stats", "-e", cfg.ssh_cmd]
+        argv = ["rsync", "-az", "--stats", "-e", cfg.ssh_cmd, f"--timeout={IO_TIMEOUT_SECONDS}"]
         if backup:
             argv += ["--backup", f"--backup-dir={dest / '.overwritten' / stamp / name}"]
         return argv + list(extra) + [source or f"{src}/{name}/", f"{dest / name}/"]
@@ -87,7 +93,12 @@ def pull_jobs(jobs: list[list[str]], *, tag: str = "", retries: int = 0, waits: 
     for argv in jobs:
         name = argv[-1].rstrip("/").rsplit("/", 1)[-1] + tag
         for attempt in range(retries + 1):
-            proc = subprocess.run(argv, capture_output=True, text=True)
+            try:
+                proc = subprocess.run(argv, capture_output=True, text=True, errors="replace",
+                                      timeout=RUN_LIMIT_SECONDS)
+            except subprocess.TimeoutExpired:
+                proc = subprocess.CompletedProcess(argv, -1, stdout="",
+                                                   stderr=f"超过 {RUN_LIMIT_SECONDS // 3600} 小时没完成，已终止")
             if proc.returncode in _OK_CODES:
                 m = _TRANSFERRED_RE.search(proc.stdout)
                 count = int(m.group(1).replace(",", "")) if m else 0
