@@ -103,6 +103,15 @@ def test_bundle_never_writes_into_the_archive_data(arc, sub, capsys):
     assert not list(arc.archive_dir.rglob("*.zip"))
 
 
+def test_each_missing_certificate_names_its_own_record(arc, capsys):
+    # Two records without certificates: their missing CertFiles are equal,
+    # and each line must still name its own 登记号.
+    _snap(arc.archive_dir, "丁公司", [_rec("D1", 7, "丁一"), _rec("D2", 7, "丁二")])
+    assert bundle.run_bundle(arc, "丁公司") == 0
+    lines = [ln.strip() for ln in capsys.readouterr().out.splitlines() if ln.strip().startswith("!")]
+    assert lines == ["! D1 国家局登记证书（缺：未下载）", "! D2 国家局登记证书（缺：未下载）"]
+
+
 def test_a_company_with_nothing_registered(arc, capsys):
     assert bundle.run_bundle(arc, "乙") == 1
     assert "还没有登记成功" in capsys.readouterr().out
