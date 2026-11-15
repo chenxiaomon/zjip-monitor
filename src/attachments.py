@@ -36,6 +36,7 @@ import requests
 from loguru import logger
 
 from . import diskstat, pdftext
+from .archive_policy import NATIONAL_CERTIFICATE, PROVINCIAL_CERTIFICATE
 from .exceptions import TokenExpiredError
 from .fsutil import atomic_write_text
 from .runtime_settings import attachment_settings
@@ -204,8 +205,8 @@ def _fetch_certificates(session: requests.Session, base_url: str, reg_no: str) -
         return []
     out = []
     for key, label in (
-        ("systemConfirmation", "浙江省登记证书"),
-        ("nationalConfirmation", "国家局登记证书"),
+        ("systemConfirmation", PROVINCIAL_CERTIFICATE),
+        ("nationalConfirmation", NATIONAL_CERTIFICATE),
     ):
         url = (data.get(key) or {}).get("confirmationUrl")
         if url:

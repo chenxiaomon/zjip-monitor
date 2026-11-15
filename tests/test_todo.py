@@ -123,3 +123,15 @@ def test_facts_follow_a_rewritten_manifest():
     assert todo.correction_for(ACC, _record("R1", 2), TODAY).deadline == "2026-10-12"
     _manifest("R1", {NOTICE: {"kind": "补正", "deadline": "2026-10-20", "extra": 1}})
     assert todo.correction_for(ACC, _record("R1", 2), TODAY).deadline == "2026-10-20"
+
+
+def test_certificate_validity_reads_the_current_announcement():
+    facts = {
+        "《公告》.pdf": {"kind": "公告", "issued_on": "2026-08-12", "valid_from": "2026-08-12", "valid_to": "2029-08-12"},
+        "《公告》_2026-01-01.pdf": {"kind": "公告", "issued_on": "2023-01-01", "valid_from": "2023-01-01", "valid_to": "2026-01-01"},
+        "《补正》.pdf": {"kind": "补正", "issued_on": "2026-07-01"},
+    }
+    assert todo.certificate_validity(facts) == ("2026-08-12", "2029-08-12")
+    assert todo.certificate_validity({}) == (None, None)
+    wrong = {"《公告》.pdf": {"kind": "公告", "valid_from": "2029-01-01", "valid_to": "2026-01-01"}}
+    assert todo.certificate_validity(wrong) == (None, None)

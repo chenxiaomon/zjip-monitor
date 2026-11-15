@@ -6,6 +6,12 @@
         stdout: JSON {"released": [...], "skipped": [{"path", "reason"}], "bytes": N, "dry_run": bool}
     python scripts/archive_release.py --unarchive <企业目录>/<登记号>
         after `python -m archive restore` copied the files back: forget their archived marks
+    ... | python scripts/archive_release.py --unarchive-stdin
+        the same for many records at once (`restore --certificates`)
+        stdin : JSON ["<企业目录>/<登记号>", ...]
+        stdout: JSON {"records": {dir: {"restored", "still_archived"}}, "invalid": [dir, ...]}
+    python scripts/archive_release.py --space
+        stdout: JSON {"free_mb", "min_free_mb", "attachments_bytes", "max_total_bytes"} — no lock
 
 A file is deleted only when every check passes:
   - this process holds the global run lock, so no scan is writing data/attachments
@@ -13,6 +19,7 @@ A file is deleted only when every check passes:
   - its sha256 equals the one the laptop verified its own copy against
   - src.archive_policy.releasable() agrees, judged from the server's own latest
     snapshot and settings.yaml → archive — not from the laptop's database
+    (a current certificate never goes: the console's 交付包 hands it out)
 The record's .sync.json gets the file under "archived" BEFORE the file goes, so
 a crash in between leaves a harmless extra copy, never a file the next sync
 would silently fetch again.
@@ -32,11 +39,11 @@ sys.path.insert(0, str(ROOT))
 
 from loguru import logger  # noqa: E402
 
-from src import archive_policy, audit, control  # noqa: E402
+from src import archive_policy, audit, control, diskstat  # noqa: E402
 from src.attachments import _MANIFEST_NAME, _safe_name, _sha256  # noqa: E402
 from src.fsutil import atomic_write_text  # noqa: E402
 from src.logging_setup import setup_logging  # noqa: E402
-from src.runtime_settings import archive_settings  # noqa: E402
+from src.runtime_settings import archive_settings, attachment_settings, disk_settings  # noqa: E402
 from src.scraper import int_or_none  # noqa: E402
 from web.services.snapshot import get_latest_snapshot  # noqa: E402
 
@@ -112,6 +119,9 @@ def release(items: list, *, dry_run: bool, days: int, now: datetime | None = Non
             skipped.append({"path": rel, "reason": "服务器上没有这个文件"})
             continue
         company_dir, reg_dir, name = Path(rel).parts
+        if archive_policy.is_certificate(name):
+            skipped.append({"path": rel, "reason": "证书保留在服务器（交付包要用）"})
+            continue
         status, updated = _record_state(company_dir, reg_dir)
         if not archive_policy.releasable(name, status, updated, days=days, now=now):
             skipped.append({"path": rel, "reason": "按服务器快照不满足释放条件"})
@@ -172,12 +182,50 @@ def unarchive(rel_dir: str) -> dict:
     return {"restored": restored, "still_archived": sorted(archived)}
 
 
+def unarchive_many(rel_dirs: list) -> dict:
+    """unarchive() for each record directory; one that is not a record
+    directory is reported, never fatal — the others still get their marks
+    cleared."""
+    records: dict[str, dict] = {}
+    invalid: list[str] = []
+    for rel_dir in rel_dirs:
+        rel_dir = str(rel_dir or "")
+        try:
+            records[rel_dir] = unarchive(rel_dir)
+        except ValueError:
+            invalid.append(rel_dir)
+    return {"records": records, "invalid": invalid}
+
+
+def space() -> dict:
+    """Free space and attachment usage against their limits, for the laptop
+    to judge a restore before it sends anything."""
+    stats = diskstat.dir_stats(_ATTACHMENTS_DIR)
+    return {
+        "free_mb": round(diskstat.check_free().free_mb, 1),
+        "min_free_mb": disk_settings().min_free_mb,
+        "attachments_bytes": stats.bytes,
+        "max_total_bytes": attachment_settings().max_total_bytes,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     setup_logging("cli")
     parser = argparse.ArgumentParser(description="释放已归档到本机的附件（由 python -m archive 调用）")
     parser.add_argument("--dry-run", action="store_true", help="只核对，不删除")
     parser.add_argument("--unarchive", metavar="企业目录/登记号", help="文件已送回后，清掉它们的归档标记")
+    parser.add_argument("--unarchive-stdin", action="store_true",
+                        help="同上，一次处理多条：stdin 为 JSON 数组 [\"企业目录/登记号\", ...]")
+    parser.add_argument("--space", action="store_true", help="只报告剩余空间和附件占用（不加锁）")
     args = parser.parse_args(argv)
+
+    if args.space:
+        try:
+            print(json.dumps(space(), ensure_ascii=False))
+            return 0
+        except Exception as exc:  # noqa: BLE001 — reported as JSON to the laptop
+            print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False))
+            return 1
 
     ctx = control.try_acquire(kind="archive_release", trigger="cli")
     if ctx is None:
@@ -187,6 +235,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.unarchive:
             result = unarchive(args.unarchive)
+        elif args.unarchive_stdin:
+            dirs = json.load(sys.stdin)
+            if not isinstance(dirs, list):
+                raise ValueError("stdin 应为 JSON 数组")
+            result = unarchive_many(dirs)
         else:
             items = json.load(sys.stdin)
             if not isinstance(items, list):

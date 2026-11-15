@@ -41,7 +41,8 @@ def server(tmp_path, monkeypatch, isolated_control_dir):
     for reg, name, body in [
         ("DONE", "国家局登记证书.pdf", b"cert"),
         ("DONE", "《登记公告通知书》.pdf", b"notice"),
-        ("FRESH", "国家局登记证书.pdf", b"fresh"),
+        ("DONE", "浙江省登记证书.pdf", b"prov"),
+        ("FRESH", "《登记公告通知书》.pdf", b"fresh"),
         ("ACTIVE", "《补正通知书》.pdf", b"current"),
         ("ACTIVE", "《补正通知书》_2026-09-01.pdf", b"old-round"),
     ]:
@@ -50,8 +51,8 @@ def server(tmp_path, monkeypatch, isolated_control_dir):
         (d / name).write_bytes(body)
         files[f"甲公司/{reg}/{name}"] = hashlib.sha256(body).hexdigest()
     (att / "甲公司" / "DONE" / ".sync.json").write_text(json.dumps({
-        "status": 7, "files": ["国家局登记证书.pdf", "《登记公告通知书》.pdf"],
-        "sources": {"国家局登记证书.pdf": "path:/abc.pdf"},
+        "status": 7, "files": ["国家局登记证书.pdf", "浙江省登记证书.pdf", "《登记公告通知书》.pdf"],
+        "sources": {"《登记公告通知书》.pdf": "path:/abc.pdf"},
     }, ensure_ascii=False), encoding="utf-8")
     yield att, files
     snap_svc._cache.clear()
@@ -62,35 +63,72 @@ def _release(files, paths, **kw):
     return archive_release.release(items, dry_run=kw.get("dry_run", False), days=90, now=NOW)
 
 
+NOTICE = "甲公司/DONE/《登记公告通知书》.pdf"
+
+
+def _mark_archived(att, rel_dir, names):
+    """What the 2026-09-26 release left behind: files gone, marks in the manifest."""
+    path = att / rel_dir / ".sync.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["archived"] = {n: {"sha256": "0" * 64, "size": 1, "archived_at": "2026-09-26T00:00:00+00:00"}
+                            for n in names}
+    manifest["files"] = [f for f in manifest["files"] if f not in names]
+    path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    for n in names:
+        (att / rel_dir / n).unlink(missing_ok=True)
+
+
 def test_releases_a_verified_file_of_a_finished_record(server):
     att, files = server
-    result = _release(files, ["甲公司/DONE/国家局登记证书.pdf"])
+    result = _release(files, [NOTICE])
 
-    assert result["released"] == ["甲公司/DONE/国家局登记证书.pdf"]
-    assert result["bytes"] == 4
-    assert not (att / "甲公司/DONE/国家局登记证书.pdf").exists()
+    assert result["released"] == [NOTICE]
+    assert result["bytes"] == 6
+    assert not (att / NOTICE).exists()
     manifest = json.loads((att / "甲公司/DONE/.sync.json").read_text(encoding="utf-8"))
-    entry = manifest["archived"]["国家局登记证书.pdf"]
-    assert entry["sha256"] == files["甲公司/DONE/国家局登记证书.pdf"]
-    assert entry["size"] == 4 and entry["archived_at"].startswith("2026-09-27")
-    assert manifest["files"] == ["《登记公告通知书》.pdf"]
-    assert manifest["sources"] == {"国家局登记证书.pdf": "path:/abc.pdf"}  # identity kept for the sync
+    entry = manifest["archived"]["《登记公告通知书》.pdf"]
+    assert entry["sha256"] == files[NOTICE]
+    assert entry["size"] == 6 and entry["archived_at"].startswith("2026-09-27")
+    assert manifest["files"] == ["国家局登记证书.pdf", "浙江省登记证书.pdf"]
+    assert manifest["sources"] == {"《登记公告通知书》.pdf": "path:/abc.pdf"}  # identity kept for the sync
+
+
+@pytest.mark.parametrize("name", ["国家局登记证书.pdf", "浙江省登记证书.pdf"])
+def test_a_current_certificate_stays_on_the_server(server, name):
+    """The console's 交付包 hands certificates out, so the server keeps them
+    whatever the laptop sends — even for a record finished long ago."""
+    att, files = server
+    result = _release(files, [f"甲公司/DONE/{name}"])
+    assert result["released"] == []
+    assert result["skipped"] == [{"path": f"甲公司/DONE/{name}", "reason": "证书保留在服务器（交付包要用）"}]
+    assert (att / "甲公司/DONE" / name).exists()
+    assert "archived" not in json.loads((att / "甲公司/DONE/.sync.json").read_text(encoding="utf-8"))
+
+
+def test_an_older_certificate_round_may_go(server):
+    att, files = server
+    old = att / "甲公司/DONE/国家局登记证书_2026-07-19.pdf"
+    old.write_bytes(b"old-cert")
+    files["甲公司/DONE/国家局登记证书_2026-07-19.pdf"] = hashlib.sha256(b"old-cert").hexdigest()
+    result = _release(files, ["甲公司/DONE/国家局登记证书_2026-07-19.pdf"])
+    assert result["released"] == ["甲公司/DONE/国家局登记证书_2026-07-19.pdf"]
+    assert not old.exists() and (att / "甲公司/DONE/国家局登记证书.pdf").exists()
 
 
 def test_dry_run_deletes_nothing(server):
     att, files = server
-    result = _release(files, ["甲公司/DONE/国家局登记证书.pdf"], dry_run=True)
-    assert result["released"] == ["甲公司/DONE/国家局登记证书.pdf"] and result["dry_run"] is True
-    assert (att / "甲公司/DONE/国家局登记证书.pdf").exists()
+    result = _release(files, [NOTICE], dry_run=True)
+    assert result["released"] == [NOTICE] and result["dry_run"] is True
+    assert (att / NOTICE).exists()
     assert "archived" not in json.loads((att / "甲公司/DONE/.sync.json").read_text(encoding="utf-8"))
 
 
 def test_the_server_judges_the_policy_from_its_own_snapshot(server):
     att, files = server
-    result = _release(files, ["甲公司/FRESH/国家局登记证书.pdf", "甲公司/ACTIVE/《补正通知书》.pdf"])
+    result = _release(files, ["甲公司/FRESH/《登记公告通知书》.pdf", "甲公司/ACTIVE/《补正通知书》.pdf"])
     assert result["released"] == []
     assert {s["reason"] for s in result["skipped"]} == {"按服务器快照不满足释放条件"}
-    assert (att / "甲公司/FRESH/国家局登记证书.pdf").exists()
+    assert (att / "甲公司/FRESH/《登记公告通知书》.pdf").exists()
     assert (att / "甲公司/ACTIVE/《补正通知书》.pdf").exists()
 
 
@@ -105,10 +143,10 @@ def test_an_older_round_of_an_active_record_may_go(server):
 
 def test_a_hash_mismatch_is_refused(server):
     att, files = server
-    files = dict(files, **{"甲公司/DONE/国家局登记证书.pdf": "f" * 64})
-    result = _release(files, ["甲公司/DONE/国家局登记证书.pdf"])
+    files = dict(files, **{NOTICE: "f" * 64})
+    result = _release(files, [NOTICE])
     assert result["released"] == [] and result["skipped"][0]["reason"] == "哈希与本机副本不一致"
-    assert (att / "甲公司/DONE/国家局登记证书.pdf").exists()
+    assert (att / NOTICE).exists()
 
 
 @pytest.mark.parametrize("path", [
@@ -124,9 +162,9 @@ def test_anything_but_a_document_path_is_refused(server, path):
 
 def test_a_missing_file_is_reported_not_fatal(server):
     _, files = server
-    result = _release(files, ["甲公司/DONE/不存在.pdf", "甲公司/DONE/国家局登记证书.pdf"])
+    result = _release(files, ["甲公司/DONE/不存在.pdf", NOTICE])
     assert result["skipped"] == [{"path": "甲公司/DONE/不存在.pdf", "reason": "服务器上没有这个文件"}]
-    assert result["released"] == ["甲公司/DONE/国家局登记证书.pdf"]
+    assert result["released"] == [NOTICE]
 
 
 @pytest.fixture(autouse=True)
@@ -138,13 +176,13 @@ def test_main_needs_the_run_lock(server, monkeypatch, capsys):
     att, files = server
     holder = control.try_acquire(kind="run_all", trigger="daemon")
     try:
-        items = [{"path": "甲公司/DONE/国家局登记证书.pdf", "sha256": files["甲公司/DONE/国家局登记证书.pdf"]}]
+        items = [{"path": NOTICE, "sha256": files[NOTICE]}]
         monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(items)))
         assert archive_release.main([]) == 2
     finally:
         holder.finish("done")
     assert "error" in json.loads(capsys.readouterr().out)
-    assert (att / "甲公司/DONE/国家局登记证书.pdf").exists()
+    assert (att / NOTICE).exists()
 
 
 def test_main_reads_stdin_and_prints_json(server, monkeypatch, capsys):
@@ -159,7 +197,7 @@ def test_main_reads_stdin_and_prints_json(server, monkeypatch, capsys):
 
 def test_unarchive_forgets_marks_of_files_that_are_back(server):
     att, files = server
-    _release(files, ["甲公司/DONE/国家局登记证书.pdf", "甲公司/DONE/《登记公告通知书》.pdf"])
+    _mark_archived(att, "甲公司/DONE", ["国家局登记证书.pdf", "《登记公告通知书》.pdf"])
     (att / "甲公司/DONE/国家局登记证书.pdf").write_bytes(b"cert")  # restore copied it back
 
     result = archive_release.unarchive("甲公司/DONE")
@@ -184,7 +222,7 @@ def _audit_lines(d):
 def test_a_release_is_logged_once_per_record(server, _isolated_audit, monkeypatch):
     att, files = server
     monkeypatch.setenv("SSH_CLIENT", "198.51.100.7 52114 22")
-    _release(files, ["甲公司/DONE/国家局登记证书.pdf", "甲公司/DONE/《登记公告通知书》.pdf",
+    _release(files, ["甲公司/DONE/国家局登记证书.pdf", NOTICE,
                      "甲公司/ACTIVE/《补正通知书》_2026-09-01.pdf"])
     lines = _audit_lines(_isolated_audit)
     assert sorted((e["action"], e["company"], e["target"]) for e in lines) == [
@@ -192,18 +230,19 @@ def test_a_release_is_logged_once_per_record(server, _isolated_audit, monkeypatc
     ]
     done = next(e for e in lines if e["target"] == "DONE")
     assert done["actor"] == "本机归档" and done["via"] == "ssh" and done["ip"] == "198.51.100.7"
-    assert done["detail"]["files"] == 2 and done["detail"]["bytes"] == len(b"cert") + len(b"notice")
+    # the certificate in the same batch stayed: one file, the notice
+    assert done["detail"]["files"] == 1 and done["detail"]["bytes"] == len(b"notice")
 
 
 def test_a_dry_run_logs_nothing(server, _isolated_audit):
     att, files = server
-    _release(files, ["甲公司/DONE/国家局登记证书.pdf"], dry_run=True)
+    _release(files, [NOTICE], dry_run=True)
     assert _audit_lines(_isolated_audit) == []
 
 
 def test_unarchive_is_logged(server, _isolated_audit):
     att, files = server
-    _release(files, ["甲公司/DONE/国家局登记证书.pdf"])
+    _mark_archived(att, "甲公司/DONE", ["国家局登记证书.pdf"])
     (att / "甲公司/DONE/国家局登记证书.pdf").write_bytes(b"cert")
     archive_release.unarchive("甲公司/DONE")
     last = _audit_lines(_isolated_audit)[-1]
@@ -220,3 +259,55 @@ def test_stdout_stays_one_json_line_when_the_log_cannot_be_written(
     assert archive_release.main([]) == 0
     out = capsys.readouterr().out.strip().splitlines()
     assert len(out) == 1 and json.loads(out[0])["released"] == ["甲公司/DONE/《登记公告通知书》.pdf"]
+
+
+# --- restore --certificates: many records at once, and the space check ---------
+
+def test_unarchive_many_clears_each_record_and_reports_bad_dirs(server, _isolated_audit):
+    att, files = server
+    _mark_archived(att, "甲公司/DONE", ["国家局登记证书.pdf", "浙江省登记证书.pdf"])
+    (att / "甲公司/DONE/国家局登记证书.pdf").write_bytes(b"cert")  # only this one came back
+
+    result = archive_release.unarchive_many(["甲公司/DONE", "../甲公司", "甲公司/NOPE"])
+    assert result == {
+        "records": {"甲公司/DONE": {"restored": ["国家局登记证书.pdf"], "still_archived": ["浙江省登记证书.pdf"]}},
+        "invalid": ["../甲公司", "甲公司/NOPE"],
+    }
+    assert [e["action"] for e in _audit_lines(_isolated_audit)] == ["archive.unarchive"]
+
+
+def test_main_unarchive_stdin_holds_the_lock(server, monkeypatch, capsys):
+    att, files = server
+    _mark_archived(att, "甲公司/DONE", ["国家局登记证书.pdf"])
+    (att / "甲公司/DONE/国家局登记证书.pdf").write_bytes(b"cert")
+    holder = control.try_acquire(kind="run_all", trigger="daemon")
+    try:
+        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(["甲公司/DONE"], ensure_ascii=False)))
+        assert archive_release.main(["--unarchive-stdin"]) == 2
+    finally:
+        holder.finish("done")
+    capsys.readouterr()
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(["甲公司/DONE"], ensure_ascii=False)))
+    assert archive_release.main(["--unarchive-stdin"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["records"]["甲公司/DONE"]["restored"] == ["国家局登记证书.pdf"] and out["invalid"] == []
+
+
+def test_main_unarchive_stdin_wants_a_list(server, monkeypatch, capsys):
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"甲公司/DONE": 1}, ensure_ascii=False)))
+    assert archive_release.main(["--unarchive-stdin"]) == 1
+    assert "error" in json.loads(capsys.readouterr().out)
+
+
+def test_space_reports_without_the_lock(server, monkeypatch, capsys):
+    att, files = server
+    holder = control.try_acquire(kind="run_all", trigger="daemon")
+    try:
+        assert archive_release.main(["--space"]) == 0
+    finally:
+        holder.finish("done")
+    out = json.loads(capsys.readouterr().out)
+    assert set(out) == {"free_mb", "min_free_mb", "attachments_bytes", "max_total_bytes"}
+    assert out["attachments_bytes"] == sum(f.stat().st_size for f in att.rglob("*") if f.is_file())
+    assert out["free_mb"] > 0 and out["max_total_bytes"] > 0

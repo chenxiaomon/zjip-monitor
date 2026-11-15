@@ -10,19 +10,24 @@ from __future__ import annotations
 
 import csv
 import io
+import os
+import tempfile
+import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
+from starlette.background import BackgroundTask
 
-from src import todo
+from src import diskstat, todo
 from src.scraper import AUDIT_STATUS, decode_status
 from web.auth import allowed_usernames, shown_accounts, visible_accounts
 from src.focus import apply_year
 from web.deps import STATUS_COLORS, attachment_disposition, int_or_none, templates
-from web.services import audit_log, ledger, year_scope
-from web.services.attachments_svc import archived_attachments, list_attachments
+from web.services import audit_log, handover, ledger, year_scope
+from web.services.attachments_svc import archived_attachments, attachments_dir, list_attachments
 from web.services.events import read_change_rows
 from web.services.snapshot import get_latest_snapshot
 from web.services.year_scope import YearScope
@@ -31,6 +36,10 @@ router = APIRouter()
 
 PAGE_SIZE = 50
 _SHANGHAI_TZ = timezone(timedelta(hours=8))
+# 交付包 is written here, served, then deleted; a download the client
+# abandoned leaves its file behind, swept after an hour.
+_HANDOVER_TMP = Path(__file__).parent.parent.parent / "data" / "tmp"
+_HANDOVER_STALE_SECONDS = 3600
 
 
 def _page_number(page: str | None) -> int:
@@ -343,9 +352,21 @@ def _ctx(
         "year_scope": scope,
         "years": tally["years"],
         "outside": tally["outside"],
+        "handover": _handover_counts(accounts_list, account),
         "STATUS_COLORS": STATUS_COLORS,
         "AUDIT_STATUS": AUDIT_STATUS,
     }
+
+
+def _handover_counts(accounts_list, account: str | None) -> dict | None:
+    """{"registered", "open"} for the 交付包 button of the company picked in
+    the chips; None when no (visible) company is picked. The status and
+    keyword filters do not matter: the package is the whole company."""
+    acc = next((a for a in accounts_list if a.username == (account or "")), None)
+    snap = get_latest_snapshot(acc.company) if acc else None
+    if not snap:
+        return None
+    return handover.counts([r for r in snap.get("records") or [] if isinstance(r, dict)])
 
 
 @router.get("/records", response_class=HTMLResponse)
@@ -525,3 +546,51 @@ def records_ledger(request: Request, account: str | None = None) -> Response:
     return Response(body, media_type=ledger.MEDIA_TYPE, headers={
         "Content-Disposition": attachment_disposition(name), "Cache-Control": "no-store",
     })
+
+
+def _sweep_handover_tmp(now: float | None = None) -> None:
+    now = now or time.time()
+    try:
+        stale = [f for f in _HANDOVER_TMP.glob("handover-*.zip")
+                 if now - f.stat().st_mtime > _HANDOVER_STALE_SECONDS]
+    except OSError:
+        return
+    for f in stale:
+        f.unlink(missing_ok=True)
+
+
+@router.get("/records/handover.zip")
+def records_handover(request: Request, account: str | None = None) -> Response:
+    """一家企业的交付包（zip）：登记成功、续展登记的证书清单 xlsx 加证书文件
+    （web/services/handover.py）。和导出台账一样：看不到的企业、不存在的企业、
+    还没有巡检数据的企业，回答都一样。"""
+    acc = next((a for a in visible_accounts(request) if a.username == (account or "")), None)
+    snap = get_latest_snapshot(acc.company) if acc else None
+    if snap is None:
+        return Response("没有这家企业的巡检数据", status_code=404, media_type="text/plain; charset=utf-8")
+    pkg = handover.plan(acc.company, snap, attachments_dir())
+    if not pkg.rows:
+        return Response("这家企业还没有登记成功的记录", status_code=404, media_type="text/plain; charset=utf-8")
+    disk = diskstat.check_free()
+    if disk.free_mb - pkg.total_bytes / 1048576 < disk.min_free_mb:
+        return Response(f"服务器磁盘空间不足（剩余 {disk.free_mb:.0f}MB），暂时打不了包",
+                        status_code=503, media_type="text/plain; charset=utf-8")
+
+    _HANDOVER_TMP.mkdir(parents=True, exist_ok=True)
+    _sweep_handover_tmp()
+    fd, tmp = tempfile.mkstemp(prefix="handover-", suffix=".zip", dir=_HANDOVER_TMP)
+    os.close(fd)
+    try:
+        size = handover.write_zip(pkg, Path(tmp))
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+    audit_log.record_request(request, "data.records_handover", company=acc.company, detail={
+        "rows": len(pkg.rows), "certificates": len(pkg.present), "missing": len(pkg.missing),
+        "open": pkg.open_count, "bytes": size,
+    })
+    return FileResponse(
+        tmp, media_type=handover.MEDIA_TYPE,
+        headers={"Content-Disposition": attachment_disposition(pkg.zip_name), "Cache-Control": "no-store"},
+        background=BackgroundTask(Path(tmp).unlink, missing_ok=True),
+    )

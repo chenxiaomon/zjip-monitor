@@ -44,19 +44,24 @@ def _safe_name(company: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "_" for c in company)
 
 
-def get_latest_snapshot(company: str) -> dict | None:
-    if not _SNAPSHOTS_DIR.exists():
+def latest_snapshot_file(directory: Path, company: str) -> Path | None:
+    """The newest {company}_{YYYY-MM-DD-HHMM}.json in directory — the server's
+    data/snapshots or the laptop archive's snapshots/ alike."""
+    if not directory.is_dir():
         return None
     prefix = _safe_name(company)
     # Anchor the prefix via _DATE_RE: a plain glob lets "公司" also match
     # "公司_分部_2026-…" and serve another company's snapshot.
     files = sorted(
-        f for f in _SNAPSHOTS_DIR.glob(f"{prefix}_*.json")
+        f for f in directory.glob(f"{prefix}_*.json")
         if (m := _DATE_RE.match(f.stem)) and m.group(1) == prefix
     )
-    if not files:
-        return None
-    return _read_cached(files[-1])
+    return files[-1] if files else None
+
+
+def get_latest_snapshot(company: str) -> dict | None:
+    path = latest_snapshot_file(_SNAPSHOTS_DIR, company)
+    return _read_cached(path) if path else None
 
 
 def get_all_latest_snapshots() -> list[dict]:

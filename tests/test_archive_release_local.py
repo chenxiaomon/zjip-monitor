@@ -9,6 +9,7 @@ import json
 import sqlite3
 import subprocess
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -34,7 +35,7 @@ def cfg(tmp_path, monkeypatch):
     (snaps / "甲公司_2026-09-26-1000.json").write_text(json.dumps(
         {"company": "甲公司", "snapshot_time": "2026-09-26T02:00:00+00:00", "records": records},
         ensure_ascii=False), encoding="utf-8")
-    for reg, name in [("DONE", "国家局登记证书.pdf"), ("FRESH", "不予登记.pdf"),
+    for reg, name in [("DONE", "《登记公告通知书》.pdf"), ("DONE", "国家局登记证书.pdf"), ("FRESH", "不予登记.pdf"),
                       ("ACTIVE", "补正.pdf"), ("ACTIVE", "补正_2026-09-01.pdf")]:
         d = root / "attachments" / "甲公司" / reg
         d.mkdir(parents=True, exist_ok=True)
@@ -58,7 +59,8 @@ def _fake_transport(monkeypatch, reply):
 
 def test_select_follows_the_policy(cfg):
     picked = {(c["reg_no"], c["filename"]) for c in release.select(cfg.db_path, days=90)}
-    assert picked == {("DONE", "国家局登记证书.pdf"), ("ACTIVE", "补正_2026-09-01.pdf")}
+    # the certificate of DONE stays on the server (交付包), whatever its age
+    assert picked == {("DONE", "《登记公告通知书》.pdf"), ("ACTIVE", "补正_2026-09-01.pdf")}
     assert release.select(cfg.db_path, days=90, company="乙公司") == []
 
 
@@ -71,7 +73,7 @@ def test_dry_run_asks_the_server_to_verify_only(cfg, monkeypatch, capsys):
     assert call["argv"][:2] == ["ssh", "root@h"]
     assert call["argv"][2] == "cd /opt/z && .venv/bin/python scripts/archive_release.py --dry-run"
     sent = json.loads(call["input"])
-    assert {i["path"] for i in sent} == {"甲公司/DONE/国家局登记证书.pdf", "甲公司/ACTIVE/补正_2026-09-01.pdf"}
+    assert {i["path"] for i in sent} == {"甲公司/DONE/《登记公告通知书》.pdf", "甲公司/ACTIVE/补正_2026-09-01.pdf"}
     assert sent[0]["sha256"] == hashlib.sha256(sent[0]["path"].split("/", 1)[1].encode()).hexdigest()
     assert "预演" in capsys.readouterr().out
     assert release.select(cfg.db_path, days=90)  # nothing marked released
@@ -79,7 +81,7 @@ def test_dry_run_asks_the_server_to_verify_only(cfg, monkeypatch, capsys):
 
 def test_yes_records_what_the_server_released(cfg, monkeypatch):
     calls = _fake_transport(monkeypatch, {
-        "released": ["甲公司/DONE/国家局登记证书.pdf"],
+        "released": ["甲公司/DONE/《登记公告通知书》.pdf"],
         "skipped": [{"path": "甲公司/ACTIVE/补正_2026-09-01.pdf", "reason": "哈希与本机副本不一致"}],
         "bytes": 30, "dry_run": False,
     })
@@ -91,7 +93,7 @@ def test_yes_records_what_the_server_released(cfg, monkeypatch):
 
 
 def test_a_changed_local_copy_is_never_offered(cfg, monkeypatch, capsys):
-    (cfg.archive_dir / "attachments/甲公司/DONE/国家局登记证书.pdf").write_bytes(b"tampered")
+    (cfg.archive_dir / "attachments/甲公司/DONE/《登记公告通知书》.pdf").write_bytes(b"tampered")
     calls = _fake_transport(monkeypatch, {"released": [], "skipped": [], "bytes": 0})
 
     release.run_release(cfg)
@@ -109,7 +111,8 @@ def test_a_server_error_is_reported(cfg, monkeypatch, capsys):
 def test_push_facts_sends_released_notices_only(cfg, monkeypatch, capsys):
     db = sqlite3.connect(cfg.db_path)
     db.execute("UPDATE documents SET doc_kind = '公告', valid_from = '2026-08-08', valid_to = '2029-08-08', "
-               "released_at = '2026-09-26T17:00:00+00:00', reasons = ? WHERE reg_no = 'DONE'", ("r" * 500,))
+               "released_at = '2026-09-26T17:00:00+00:00', reasons = ? WHERE reg_no = 'DONE' AND filename LIKE '《%'",
+               ("r" * 500,))
     db.execute("UPDATE documents SET doc_kind = '补正', deadline = '2026-10-12' WHERE reg_no = 'ACTIVE' AND superseded = 0")
     db.commit()
     db.close()
@@ -127,16 +130,133 @@ def test_push_facts_sends_released_notices_only(cfg, monkeypatch, capsys):
 
 
 def test_restore_sends_files_back_and_clears_the_marks(cfg, monkeypatch):
-    _fake_transport(monkeypatch, {"released": ["甲公司/DONE/国家局登记证书.pdf"], "skipped": [], "bytes": 1})
+    _fake_transport(monkeypatch, {"released": ["甲公司/DONE/《登记公告通知书》.pdf"], "skipped": [], "bytes": 1})
     release.run_release(cfg, yes=True)
 
     calls = _fake_transport(monkeypatch, lambda argv, stdin: (
-        {"restored": ["国家局登记证书.pdf"], "still_archived": []} if argv[0] == "ssh" else {}))
+        {"restored": ["《登记公告通知书》.pdf"], "still_archived": []} if argv[0] == "ssh" else {}))
     assert release.run_restore(cfg, "甲公司", "DONE") == 0
 
     rsync, ssh = calls
     assert rsync["argv"][:3] == ["rsync", "-rt", "--ignore-existing"]  # no -a: the server owns the files
-    assert rsync["argv"][-2].endswith("attachments/甲公司/DONE/国家局登记证书.pdf")
+    assert rsync["argv"][-2].endswith("attachments/甲公司/DONE/《登记公告通知书》.pdf")
     assert rsync["argv"][-1] == "root@h:/opt/z/data/attachments/甲公司/DONE/"
     assert ssh["argv"][2].endswith("scripts/archive_release.py --unarchive '甲公司/DONE'")
-    assert ("DONE", "国家局登记证书.pdf") in {(c["reg_no"], c["filename"]) for c in release.select(cfg.db_path, days=90)}
+    assert ("DONE", "《登记公告通知书》.pdf") in {(c["reg_no"], c["filename"]) for c in release.select(cfg.db_path, days=90)}
+
+
+# --- restore --certificates ------------------------------------------------------
+
+CERT = "attachments/甲公司/DONE/国家局登记证书.pdf"
+SPACE = {"free_mb": 2400.0, "min_free_mb": 500, "attachments_bytes": 380 << 20, "max_total_bytes": 1024 << 20}
+
+
+def _mark_released(cfg, *paths):
+    """What the 2026-09-26 release left in the database."""
+    db = sqlite3.connect(cfg.db_path)
+    with db:
+        for path in paths:
+            db.execute("UPDATE documents SET released_at = '2026-09-26T17:00:00+00:00' WHERE path = ?", (path,))
+    db.close()
+
+
+def _released_paths(cfg):
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        return {p for (p,) in db.execute("SELECT path FROM documents WHERE released_at IS NOT NULL")}
+    finally:
+        db.close()
+
+
+def _restore_transport(monkeypatch, *, space=SPACE, unarchive=None, staged=None):
+    """ssh --space / rsync / ssh --unarchive-stdin, recording what rsync would send."""
+    def reply(argv, stdin):
+        if argv[0] == "rsync":
+            src = Path(argv[-2])
+            if staged is not None:
+                staged.extend(sorted(str(f.relative_to(src)) for f in src.rglob("*") if f.is_file()))
+            return {}
+        if argv[2].endswith("--space"):
+            return space
+        dirs = json.loads(stdin)
+        return unarchive(dirs) if unarchive else {
+            "records": {d: {"restored": ["国家局登记证书.pdf"], "still_archived": []} for d in dirs}, "invalid": []}
+    return _fake_transport(monkeypatch, reply)
+
+
+def test_certificates_to_restore_picks_released_current_certificates(cfg):
+    _mark_released(cfg, CERT, "attachments/甲公司/DONE/《登记公告通知书》.pdf", "attachments/甲公司/ACTIVE/补正_2026-09-01.pdf")
+    items, problems = release.certificates_to_restore(cfg.db_path, cfg.archive_dir)
+    assert [c["path"] for c in items] == [CERT] and problems == []
+    assert release.certificates_to_restore(cfg.db_path, cfg.archive_dir, company="乙公司") == ([], [])
+
+
+def test_a_changed_local_certificate_is_not_sent(cfg):
+    _mark_released(cfg, CERT)
+    (cfg.archive_dir / CERT).write_bytes(b"tampered")
+    assert release.certificates_to_restore(cfg.db_path, cfg.archive_dir) == ([], [CERT])
+
+
+def test_restore_certificates_dry_run_sends_nothing(cfg, monkeypatch, capsys):
+    _mark_released(cfg, CERT)
+    staged: list[str] = []
+    calls = _restore_transport(monkeypatch, staged=staged)
+
+    assert release.run_restore_certificates(cfg) == 0
+    space, rsync = calls  # no unarchive call
+    assert space["argv"][2].endswith("scripts/archive_release.py --space")
+    assert rsync["argv"][:3] == ["rsync", "-rtO", "--ignore-existing"] and "-n" in rsync["argv"]
+    assert rsync["argv"][-1] == "root@h:/opt/z/data/attachments/"
+    assert staged == ["甲公司/DONE/国家局登记证书.pdf"]
+    assert not list(cfg.archive_dir.glob(".restore-*"))  # staging removed
+    out = capsys.readouterr().out
+    assert "待送回证书 1 张" in out and "预演" in out
+    assert _released_paths(cfg) == {CERT}
+
+
+def test_restore_certificates_yes_clears_the_marks(cfg, monkeypatch, capsys):
+    _mark_released(cfg, CERT)
+    calls = _restore_transport(monkeypatch)
+
+    assert release.run_restore_certificates(cfg, yes=True) == 0
+    space, rsync, unarchive = calls
+    assert "-n" not in rsync["argv"]
+    assert unarchive["argv"][2].endswith("scripts/archive_release.py --unarchive-stdin")
+    assert json.loads(unarchive["input"]) == ["甲公司/DONE"]
+    assert _released_paths(cfg) == set()
+    assert "已送回并清除标记 1 个文件" in capsys.readouterr().out
+
+    # a second run finds nothing left to do
+    calls = _restore_transport(monkeypatch)
+    assert release.run_restore_certificates(cfg, yes=True) == 0 and calls == []
+
+
+def test_restore_certificates_refuses_when_the_server_would_run_short(cfg, monkeypatch, capsys):
+    _mark_released(cfg, CERT)
+    calls = _restore_transport(monkeypatch, space=dict(SPACE, free_mb=600.0))
+    assert release.run_restore_certificates(cfg, yes=True) == 1
+    assert len(calls) == 1  # only --space
+    assert "不送" in capsys.readouterr().out
+    assert _released_paths(cfg) == {CERT}
+
+
+def test_restore_certificates_keeps_the_marks_when_unarchive_fails(cfg, monkeypatch, capsys):
+    _mark_released(cfg, CERT)
+    _restore_transport(monkeypatch, unarchive=lambda dirs: {"error": "另一巡检进行中，稍后再试"})
+    assert release.run_restore_certificates(cfg, yes=True) == 1
+    assert "稍后重跑" in capsys.readouterr().out
+    assert _released_paths(cfg) == {CERT}  # the rerun will clear them
+
+
+def test_restore_cli_needs_a_record_or_certificates(cfg, monkeypatch):
+    from archive import __main__ as cli
+    monkeypatch.setattr(cli, "load_config", lambda env=None: cfg)
+    with pytest.raises(SystemExit):
+        cli.main(["restore", "甲公司"])
+    with pytest.raises(SystemExit):
+        cli.main(["restore", "甲公司", "DONE", "--certificates"])
+    seen = {}
+    monkeypatch.setattr(release, "run_restore_certificates",
+                        lambda c, company=None, yes=False: seen.update(company=company, yes=yes) or 0)
+    assert cli.main(["restore", "--certificates", "--company", "甲公司"]) == 0
+    assert seen == {"company": "甲公司", "yes": False}

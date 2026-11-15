@@ -4,6 +4,13 @@ Shared by the laptop's `python -m archive release` (to pick candidates) and
 scripts/archive_release.py on the server (to refuse anything else, judged from
 the server's own latest snapshot): a record still being worked on keeps every
 document on the server, whatever the laptop's database says.
+
+Notices are the irreplaceable history — the platform serves only the current
+one — so the laptop's verified copy is their record and the server may let
+old ones go. Current certificates stay on the server whatever their age: the
+console's 交付包 (web/services/handover.py) hands them out, and the platform
+can always issue them again anyway. Older rounds (dated names) are history
+like any superseded notice.
 """
 
 from __future__ import annotations
@@ -14,13 +21,32 @@ from datetime import datetime, timezone
 # 主动撤回 不予登记 登记成功 终止登记 登记撤销 未续展失效 视为撤回 续展登记
 TERMINAL_STATUSES = frozenset({5, 6, 7, 8, 9, 10, 11, 13})
 
+# The names src/attachments.py stores certificates under (+ the URL's extension)
+NATIONAL_CERTIFICATE = "国家局登记证书"
+PROVINCIAL_CERTIFICATE = "浙江省登记证书"
+CERTIFICATE_TYPES = (NATIONAL_CERTIFICATE, PROVINCIAL_CERTIFICATE)
+
 # An older round kept under a dated name by src/attachments._archive_name()
 _SUPERSEDED_RE = re.compile(r"_\d{4}-\d{2}-\d{2}(?:_\d+)?$")
 
 
+def _stem(filename: str) -> str:
+    return filename.rsplit(".", 1)[0] if "." in filename else filename
+
+
 def is_superseded(filename: str) -> bool:
-    stem = filename.rsplit(".", 1)[0] if "." in filename else filename
-    return bool(_SUPERSEDED_RE.search(stem))
+    return bool(_SUPERSEDED_RE.search(_stem(filename)))
+
+
+def certificate_type(filename: str) -> str | None:
+    """NATIONAL_ / PROVINCIAL_CERTIFICATE for a record's current certificate
+    file, None for anything else (notices, older dated rounds)."""
+    stem = _stem(filename)
+    return stem if stem in CERTIFICATE_TYPES else None
+
+
+def is_certificate(filename: str) -> bool:
+    return certificate_type(filename) is not None
 
 
 def releasable(
@@ -32,10 +58,12 @@ def releasable(
     now: datetime | None = None,
 ) -> bool:
     """True when the file is history rather than working material: an older
-    round the platform no longer serves, or any document of a finished record
-    the platform has not touched for `days` days."""
+    round the platform no longer serves, or a notice of a finished record the
+    platform has not touched for `days` days. A current certificate never is."""
     if is_superseded(filename):
         return True
+    if is_certificate(filename):
+        return False
     if status_code not in TERMINAL_STATUSES or updated_at is None:
         return False
     now = now or datetime.now(timezone.utc)
