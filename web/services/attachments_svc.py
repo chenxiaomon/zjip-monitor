@@ -52,9 +52,6 @@ def download_name(company: str, reg_no: str, filename: str) -> str:
     下载时反查最新快照拼上数据名称与登记号,保证跨记录唯一。查不到记录时
     降级为 {登记号}_{原文件名},仍然唯一。
     """
-    stem, dot, ext = filename.rpartition(".")
-    if not dot:
-        stem, ext = filename, ""
     data_name = ""
     real_reg_no = reg_no
     snap = get_latest_snapshot(company)
@@ -65,7 +62,20 @@ def download_name(company: str, reg_no: str, filename: str) -> str:
                 data_name = r.get("dataRegName", "") or ""
                 real_reg_no = no
                 break
-    base = "_".join(p for p in (data_name, real_reg_no, stem) if p)
+    return attachment_download_name(data_name, real_reg_no, filename)
+
+
+def attachment_download_name(data_name: str, reg_no: str, filename: str, *,
+                             max_name: int | None = None) -> str:
+    """{数据名称}_{登记号}_{原文件名主干}.{后缀}, with characters no file system
+    takes squeezed to _. max_name caps the data name (交付包: a Windows path
+    must stay short); the registration number keeps the name unique anyway."""
+    stem, dot, ext = filename.rpartition(".")
+    if not dot:
+        stem, ext = filename, ""
+    if max_name is not None and len(data_name) > max_name:
+        data_name = data_name[:max_name]
+    base = "_".join(p for p in (data_name, reg_no, stem) if p)
     base = re.sub(r'[\\/:*?"<>|\s]+', "_", base).strip("._") or "file"
     return base + (f".{ext}" if ext else "")
 

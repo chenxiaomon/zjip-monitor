@@ -40,6 +40,9 @@
         <a href="{{ records_url(csv=True) }}" title="导出当前筛选的全部记录（Excel 可直接打开）" class="btn btn-xs">{{ icon('download') }}导出 CSV</a>
         {% if filter_account and accounts_list|selectattr('username', 'equalto', filter_account)|list %}
         <a href="/records/ledger.xlsx?account={{ filter_account|urlencode }}" title="这家企业的全部登记记录和状态变更记录（xlsx），不受上面的状态、关键字筛选影响" class="btn btn-xs">{{ icon('file-download') }}导出台账</a>
+        {% if handover and handover.registered %}
+        <a href="/records/handover.zip?account={{ filter_account|urlencode }}" title="登记成功、续展登记的证书清单（xlsx）和证书文件，打成一个 zip{% if handover.open %}；还有 {{ handover.open }} 条在审，没有列入{% endif %}" class="btn btn-xs">{{ icon('certificate') }}交付包{% if handover.open %}（尚有 {{ handover.open }} 条在审）{% endif %}</a>
+        {% endif %}
         {% else %}
         <span class="xs faint" title="在上方选一家企业后可导出它的进度台账">选一家企业可导出台账</span>
         {% endif %}

@@ -129,7 +129,7 @@ def notices_of(company: str, reg_no: str) -> list[dict]:
     (dated file names): [{file, kind, issued_on, deadline, valid_from,
     valid_to, reasons, current}] — current marks the live one of its kind."""
     facts = record_facts(company, reg_no)
-    live = {kind: _current_notice(facts, kind) for kind in {v.get("kind") for v in facts.values()}}
+    live = {kind: current_notice(facts, kind) for kind in {v.get("kind") for v in facts.values()}}
     out = [
         {"file": name, "kind": v.get("kind"), "issued_on": v.get("issued_on"),
          "deadline": v.get("deadline"), "valid_from": v.get("valid_from"),
@@ -141,16 +141,29 @@ def notices_of(company: str, reg_no: str) -> list[dict]:
     return out
 
 
-def _current_notice(facts: dict[str, dict], kind: str) -> dict | None:
+def current_notice(facts: dict[str, dict], kind: str) -> dict | None:
     """The live notice of a kind: the undated file name; if several, the
     latest issued."""
     candidates = [
         v for name, v in facts.items()
-        if v.get("kind") == kind and not _DATED_RE.search(Path(name).stem)
+        if isinstance(v, dict) and v.get("kind") == kind and not _DATED_RE.search(Path(name).stem)
     ]
     if not candidates:
         return None
     return max(candidates, key=lambda v: v.get("issued_on") or "")
+
+
+
+def certificate_validity(facts: dict[str, dict]) -> tuple[str | None, str | None]:
+    """(valid_from, valid_to) of the certificate, from the record's current
+    公告 — the certificate PDF itself carries no dates. (None, None) when the
+    notice is missing or contradicts itself (facts stored before the parser
+    refused those)."""
+    notice = current_notice(facts, "公告") or {}
+    valid_from, valid_to = notice.get("valid_from"), notice.get("valid_to")
+    if valid_from and valid_to and valid_to <= valid_from:
+        return None, None
+    return valid_from, valid_to
 
 
 def _days(until: str | None, today: date) -> int | None:
@@ -177,7 +190,7 @@ def correction_for(acc: Account, record: dict, today: date | None = None) -> Cor
         return None
     today = today or today_local()
     reg_no = str(record.get("dataRegNo") or "")
-    notice = _current_notice(record_facts(acc.company, reg_no), "补正") or {}
+    notice = current_notice(record_facts(acc.company, reg_no), "补正") or {}
     deadline = notice.get("deadline")
     days_left = _days(deadline, today)
     reasons = notice.get("reasons") or None
@@ -199,17 +212,14 @@ def renewal_for(acc: Account, record: dict, today: date | None = None,
         return None
     today = today or today_local()
     reg_no = str(record.get("dataRegNo") or "")
-    notice = _current_notice(record_facts(acc.company, reg_no), "公告") or {}
-    valid_from, valid_to = notice.get("valid_from"), notice.get("valid_to")
-    if valid_from and valid_to and valid_to <= valid_from:
-        return None  # the notice itself is wrong (facts stored before the parser refused these)
+    _, valid_to = certificate_validity(record_facts(acc.company, reg_no))
     days_left = _days(valid_to, today)
     if days_left is None or (window is not None and days_left > window):
         return None
     return Renewal(
         company=acc.company, username=acc.username, reg_no=reg_no,
         name=str(record.get("dataRegName") or ""),
-        valid_to=notice["valid_to"], days_left=days_left, expired=days_left < 0,
+        valid_to=valid_to, days_left=days_left, expired=days_left < 0,
     )
 
 
@@ -236,7 +246,7 @@ def build(accounts: list[Account], today: date | None = None) -> dict[str, Any]:
             if rn is not None:
                 renewals.append(rn)
             else:
-                valid_to = (_current_notice(record_facts(acc.company, str(r["dataRegNo"])), "公告") or {}).get("valid_to")
+                valid_to = (current_notice(record_facts(acc.company, str(r["dataRegNo"])), "公告") or {}).get("valid_to")
                 if valid_to and _days(valid_to, today) is not None and _days(valid_to, today) > RENEWAL_WINDOW_DAYS:
                     upcoming.append((valid_to, {
                         "company": acc.company, "reg_no": str(r["dataRegNo"]),

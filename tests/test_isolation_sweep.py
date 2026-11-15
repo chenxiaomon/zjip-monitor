@@ -82,6 +82,7 @@ PAGES = [
     f"/partials/record?account={OWNER_LOGIN}&reg_no=RBOSS1",
     f"/attachments/{OWNER_COMPANY}/RBOSS1/notice.pdf",
     f"/records/ledger.xlsx?account={OWNER_LOGIN}",
+    f"/records/handover.zip?account={OWNER_LOGIN}",
     "/accounts/scan-plan",
 ]
 
@@ -119,6 +120,36 @@ def test_the_ledger_export_never_carries_the_owners_company(world, web_client, l
 
     owner = web_client.get(f"/records/ledger.xlsx?account={OWNER_LOGIN}")
     missing = web_client.get("/records/ledger.xlsx?account=no-such-acct")
+    assert owner.status_code == missing.status_code == 404 and owner.text == missing.text
+
+
+def test_the_handover_package_never_carries_the_owners_company(
+        world, web_client, login_as, monkeypatch, isolated_snapshots, tmp_path):
+    """Same for the 交付包: the colleague's own zip (names and the workbook
+    inside) holds nothing of the owner's; the owner's is a 404 like none."""
+    from web.routes import records as records_routes
+    from web.services import attachments_svc
+
+    monkeypatch.setattr(records_routes, "attachment_disposition", lambda name: "attachment")
+    monkeypatch.setattr(records_routes, "_HANDOVER_TMP", tmp_path / "handover-tmp")
+    for company, reg in ((OWNER_COMPANY, "RBOSS1"), (COLLEAGUE_COMPANY, "RCOL1")):
+        isolated_snapshots.write(company, [{"dataRegNo": reg, "dataRegAuditStatus": 7,
+                                            "dataRegName": f"{company}的数据集", "id": reg}])
+        d = attachments_svc._ATTACHMENTS_DIR / company / reg
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "国家局登记证书.pdf").write_bytes(f"%PDF-1.4 {company}".encode())
+    login_as(web_client, *OPERATOR_A)
+    own = web_client.get("/records/handover.zip?account=col-acct")
+    assert own.status_code == 200
+    with zipfile.ZipFile(BytesIO(own.content)) as z:
+        names = "".join(z.namelist())
+        text = names + "".join(z.read(n).decode("utf-8", "replace") for n in z.namelist() if n.endswith(".pdf"))
+        with zipfile.ZipFile(BytesIO(z.read(next(n for n in z.namelist() if n.endswith(".xlsx"))))) as book:
+            text += "".join(book.read(n).decode("utf-8") for n in book.namelist())
+    assert COLLEAGUE_COMPANY in text and _leaks(text) == []
+
+    owner = web_client.get(f"/records/handover.zip?account={OWNER_LOGIN}")
+    missing = web_client.get("/records/handover.zip?account=no-such-acct")
     assert owner.status_code == missing.status_code == 404 and owner.text == missing.text
 
 

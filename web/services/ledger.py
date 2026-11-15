@@ -113,10 +113,14 @@ def describe_change(before: str, after: str, *, added: bool = False) -> str:
     return f"{before}→{after}"
 
 
+def safe_file_part(name: str) -> str:
+    """A company name as part of a file name: characters no file system takes become _."""
+    return re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", name).strip() or "企业"
+
+
 def filename(company: str, on: date) -> str:
     """数据知识产权登记进度台账_<公司>_<YYYYMMDD>.xlsx；文件名里不能有的字符换成 _。"""
-    safe = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", company).strip() or "企业"
-    return f"数据知识产权登记进度台账_{safe}_{on:%Y%m%d}.xlsx"
+    return f"数据知识产权登记进度台账_{safe_file_part(company)}_{on:%Y%m%d}.xlsx"
 
 
 # --- data ----------------------------------------------------------------------
@@ -244,10 +248,10 @@ def _setup_sheet(ws, columns, tab_color: str, header_row: int, last_row: int) ->
 
 
 def _row_colors(wb, ws, first: int, end: int, key_col: str, status_cols: tuple[int, int],
-                ncols: int) -> None:
+                ncols: int, tones: dict[str, str] | None = None) -> None:
     """状态格按状态着色；其它格隔行浅蓝底（照原台账的条件格式）。"""
     lo, hi = status_cols
-    for label, tone in _STATUS_TONE.items():
+    for label, tone in (tones or _STATUS_TONE).items():
         font, fill = _TONES[tone]
         ws.conditional_format(first, lo, end, hi, {
             "type": "cell", "criteria": "==", "value": f'"{label}"',

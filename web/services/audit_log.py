@@ -134,6 +134,7 @@ ACTION_LABELS: dict[str, str] = {
     "data.attachment": "下载附件",
     "data.records_csv": "导出 CSV",
     "data.records_ledger": "导出台账",
+    "data.records_handover": "导出交付包",
     "archive.release": "归档释放（删除服务器文件）",
     "archive.unarchive": "取消归档（文件送回服务器）",
     "http.unaudited": "未登记的写操作",
@@ -174,6 +175,7 @@ _KEY_LABELS = {
     "minutes": "锁定分钟", "status": "状态码", "http_method": "请求",
     "label": "名称", "for_user": "给用户",
     "scan": "巡检", "stopped": "停巡", "resumed": "恢复每轮巡检", "skipped": "情况有变未改",
+    "certificates": "证书数", "missing": "缺证书", "open": "在审",
 }
 
 

@@ -45,3 +45,13 @@ def test_missing_snapshot_returns_none(monkeypatch, tmp_path):
     snap_svc._cache.clear()
     assert main.load_latest_snapshot("无此公司") is None
     assert snap_svc.get_latest_snapshot("无此公司") is None
+
+
+def test_latest_snapshot_file_reads_any_directory(tmp_path):
+    """The laptop's `archive bundle` reads ~/zjip-archive/snapshots the same way."""
+    _write(tmp_path, "公司_2026-01-01-0900", "公司")
+    _write(tmp_path, "公司_2026-01-03-0900", "公司")
+    _write(tmp_path, "公司_分部_2026-01-09-0900", "公司_分部")
+    assert snap_svc.latest_snapshot_file(tmp_path, "公司").name == "公司_2026-01-03-0900.json"
+    assert snap_svc.latest_snapshot_file(tmp_path, "别家") is None
+    assert snap_svc.latest_snapshot_file(tmp_path / "nope", "公司") is None

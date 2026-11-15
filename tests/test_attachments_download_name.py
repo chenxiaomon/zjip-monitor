@@ -77,3 +77,11 @@ def test_no_extension_ok(snap):
         download_name("某公司", "浙DR20240001", "浙江省登记证书")
         == "出行数据集_浙DR20240001_浙江省登记证书"
     )
+
+
+def test_the_pure_name_rule_and_its_cap():
+    from web.services.attachments_svc import attachment_download_name
+
+    assert attachment_download_name("气象 数据/合集", "R1", "国家局登记证书.pdf") == "气象_数据_合集_R1_国家局登记证书.pdf"
+    assert attachment_download_name("长" * 80, "R1", "x.pdf", max_name=60) == "长" * 60 + "_R1_x.pdf"
+    assert attachment_download_name("短", "R1", "x", max_name=60) == "短_R1_x"
