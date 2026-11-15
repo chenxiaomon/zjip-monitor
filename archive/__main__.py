@@ -26,9 +26,13 @@ def main(argv: list[str] | None = None) -> int:
                        help=f"办结后多少天没有变动才释放（默认 {release.DEFAULT_DAYS}；服务器按自己的配置再核一遍）")
     p_rel.add_argument("--company", metavar="企业目录", help="只处理这一家（先小范围试）")
     sub.add_parser("push-facts", help="把已释放通知书的解析结果（证书有效期等）送到服务器，供控制台显示")
-    p_res = sub.add_parser("restore", help="把某条申请已释放的文件送回服务器")
-    p_res.add_argument("company_dir", metavar="企业目录")
-    p_res.add_argument("reg_no", metavar="登记号")
+    p_res = sub.add_parser("restore", help="把某条申请已释放的文件送回服务器；--certificates 送回全部已释放的证书")
+    p_res.add_argument("company_dir", metavar="企业目录", nargs="?")
+    p_res.add_argument("reg_no", metavar="登记号", nargs="?")
+    p_res.add_argument("--certificates", action="store_true",
+                       help="送回所有已释放的当前证书（交付包要用；默认只预演）")
+    p_res.add_argument("--company", metavar="企业目录", help="配合 --certificates：只处理这一家")
+    p_res.add_argument("--yes", action="store_true", help="配合 --certificates：正式送回")
     p_s = sub.add_parser("search", help="在全部通知书与证书正文里搜关键词")
     p_s.add_argument("term", metavar="关键词")
     p_s.add_argument("--kind", help="只看某一类：补正 / 公示 / 公告 / 不予登记 / 异议 / 国家局证书 / 省证书")
@@ -42,6 +46,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "release":
         return release.run_release(cfg, yes=args.yes, days=args.days, company=args.company)
     if args.command == "restore":
+        if args.certificates:
+            if args.company_dir or args.reg_no:
+                parser.error("--certificates 不和 企业目录/登记号 一起用；只处理一家请用 --company")
+            return release.run_restore_certificates(cfg, company=args.company, yes=args.yes)
+        if not (args.company_dir and args.reg_no) or args.company or args.yes:
+            parser.error("restore 需要 企业目录 和 登记号（或用 --certificates）")
         return release.run_restore(cfg, args.company_dir, args.reg_no)
     if args.command == "push-facts":
         return release.run_push_facts(cfg)
