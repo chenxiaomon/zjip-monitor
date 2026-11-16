@@ -18,6 +18,12 @@ os.environ.setdefault("WEB_USERS", "")
 os.environ.setdefault("SESSION_SECRET", "test-session-secret")
 os.environ.setdefault("API_KEY", "test-api-key-0123456789")
 os.environ.setdefault("ZJIP_LOG_TO_FILE", "0")
+# A dummy key, so the developer's real FERNET_KEY never enters the test
+# process — not from .env (web.app / web.auth load it at import, and
+# load_dotenv never overrides what is set) and not from a shell export
+# (assigned, not setdefault). Tests that encrypt a store of their own set
+# their own key. It decodes to b"test-only-fernet-key-not-secret!".
+os.environ["FERNET_KEY"] = "dGVzdC1vbmx5LWZlcm5ldC1rZXktbm90LXNlY3JldCE="
 
 from types import SimpleNamespace  # noqa: E402
 
@@ -50,6 +56,30 @@ def _own_patcher():
     patcher = pytest.MonkeyPatch()
     yield patcher
     patcher.undo()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_account_files(tmp_path_factory, _own_patcher):
+    """No test may read the developer's real config/accounts.enc or .env.
+
+    load_accounts() is imported by name into many modules (web.auth,
+    src.ops_alerts, src.main, …). `fake_accounts` patches some of them;
+    whatever it missed — the ops banner on every dashboard page, for one —
+    fell through to the real file and decrypted it with the key from the
+    real .env. Pointing the loader itself at an empty temp directory closes
+    every such path at once: an unpatched caller now gets ConfigError (not
+    found), which each of them already handles. Tests that need a real
+    store (test_config_loader_cache, test_scripts_accounts) point the paths
+    at files of their own.
+    """
+    from src import config_loader
+
+    d = tmp_path_factory.mktemp("accounts")
+    _own_patcher.setattr(config_loader, "_ENC_PATH", d / "accounts.enc")  # never created
+    _own_patcher.setattr(config_loader, "_ENV_PATH", d / ".env")  # never created
+    config_loader.invalidate_cache()
+    yield d
+    config_loader.invalidate_cache()
 
 
 @pytest.fixture(autouse=True)
