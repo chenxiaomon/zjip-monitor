@@ -135,7 +135,7 @@ app = FastAPI(title="数智通监控", lifespan=_lifespan)
 
 
 # 管理员专属页面（分组账号访问返回 403）
-_ADMIN_ONLY_PREFIXES = ("/settings", "/notify", "/reports", "/run-once", "/users", "/audit")
+_ADMIN_ONLY_PREFIXES = ("/settings", "/notify", "/reports", "/run-once", "/users", "/audit", "/dashboard/layout")
 
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 # Extra origins allowed to submit state-changing requests, e.g. when the

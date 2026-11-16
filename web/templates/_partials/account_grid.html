@@ -1,7 +1,9 @@
 {# Standalone (its own route) it refreshes itself; inside dashboard_body.html the body does.
-   Two parts (web/routes/dashboard.py): the cards to watch — every-round accounts,
-   plus 停巡 ones with records still in review — and, folded away, the 停巡 ones
-   whose work is done. The fold remembers being open for this tab (ui.js). #}
+   Three parts (web/routes/dashboard.py → _grid_ctx), in the admin's 排序与显示 layout:
+   the cards to watch — every-round accounts, plus 停巡 ones with records still in
+   review — one segment per 来源 (a heading only when there is more than one);
+   folded away, the companies the admin hid; and the 停巡 ones whose work is done.
+   The folds remember being open for this tab (ui.js). #}
 {% set is_admin = request.state.user and request.state.user.role == 'admin' %}
 {# Which group a company is in only says something to whoever sees more than one. #}
 {% set show_group = is_admin or (request.state.user and request.state.user.groups | length > 1) %}
@@ -11,14 +13,38 @@
      hx-trigger="sse:update"
      hx-swap="outerHTML"
      {% endif %}>
-  {% if grid_main or not grid_dormant %}
+  {% if grid_main or not (grid_dormant or grid_hidden) %}
+  {% for seg in grid_segments %}
+  {% if show_segments %}
+  <div class="acc-seg-title">
+    <span class="acc-seg-name">{{ seg.label }}</span>
+    <span class="faint">{{ seg.items | length }} 家</span>
+  </div>
+  {% endif %}
   <div class="acc-grid">
-    {% for snap in grid_main %}
+    {% for snap in seg.items %}
     {% include "_partials/acc_card.html" %}
-    {% else %}
-    <div class="card empty" style="grid-column:1/-1">{{ icon('inbox') }}暂无账号数据</div>
     {% endfor %}
   </div>
+  {% else %}
+  <div class="acc-grid">
+    <div class="card empty" style="grid-column:1/-1">{{ icon('inbox') }}暂无账号数据</div>
+  </div>
+  {% endfor %}
+  {% endif %}
+  {% if grid_hidden %}
+  <details class="acc-fold" id="hidden-cards" data-keep-open>
+    <summary>
+      {{ icon('chevron-right', 'acc-fold-chev') }}
+      <span class="medium">已隐藏 {{ grid_hidden | length }} 家</span>
+      <span class="faint">管理员设定不在上面显示；上方的数字、待办和变更照常包含它们</span>
+    </summary>
+    <div class="acc-grid">
+      {% for snap in grid_hidden %}
+      {% include "_partials/acc_card.html" %}
+      {% endfor %}
+    </div>
+  </details>
   {% endif %}
   {% if grid_dormant %}
   {% set sweep_failed = grid_dormant | selectattr('sweep_failed') | list | length %}

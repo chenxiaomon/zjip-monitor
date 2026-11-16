@@ -34,7 +34,15 @@
     {% include "_partials/trend.html" %}
   </div>
   {% include "_partials/todo.html" %}
-  <div class="section-title">账号状态 <span class="count">{{ account_snapshots|length }} 家{% if grid_dormant %} · {{ grid_dormant|length }} 家停巡，收在下方{% endif %}</span></div>
+  <div class="section-title">
+    <span>账号状态 <span class="count">{{ account_snapshots|length }} 家
+      {%- if grid_hidden %} · {{ grid_hidden|length }} 家已隐藏{% endif %}
+      {%- if grid_dormant %} · {{ grid_dormant|length }} 家停巡{% endif %}
+      {%- if grid_hidden or grid_dormant %}，收在下方{% endif %}</span></span>
+    {% if can_arrange %}
+    <a href="/dashboard/layout" class="btn btn-xs" title="调整来源和企业的先后、选择在这里显示哪些企业（所有人看到同一个排法）">{{ icon('arrows-sort') }}排序与显示</a>
+    {% endif %}
+  </div>
   {% include "_partials/account_grid.html" %}
   {% include "_partials/timeline.html" %}
 </div>

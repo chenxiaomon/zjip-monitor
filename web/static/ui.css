@@ -475,6 +475,33 @@ a.acc-name:hover { color: var(--accent-text); }
 .acc-fold[open] > summary { margin-bottom: 14px; }
 .acc-fold-chev { width: 14px; height: 14px; color: var(--muted); transition: transform .15s; }
 .acc-fold[open] .acc-fold-chev { transform: rotate(90deg); }
+/* 来源分段（仪表盘「排序与显示」）：只在看得到不止一个来源时出现 */
+.acc-seg-title { display: flex; align-items: baseline; gap: 8px; margin: 2px 0 8px; font-size: 12.5px; color: var(--text-2); }
+.acc-seg-name { font-weight: 600; }
+.acc-seg-title::after { content: ""; flex: 1; height: 1px; background: var(--border); align-self: center; }
+.section-title .btn { text-transform: none; letter-spacing: 0; }
+
+/* 排序与显示编辑页 */
+.lay-editor { max-width: 46rem; }
+.lay-seg .card-title .count { font-weight: 500; font-size: 12px; margin-left: 2px; }
+.lay-rows { list-style: none; margin: 0; padding: 4px 0; }
+.lay-row { display: flex; align-items: center; gap: 10px; padding: 7px 16px; border-top: 1px solid var(--border); transition: background .6s; }
+.lay-row:first-child { border-top: 0; }
+.lay-row.just-moved, .lay-seg.just-moved { background: var(--accent-soft); transition: none; }
+.lay-show { display: flex; align-items: center; gap: 10px; cursor: pointer; min-width: 0; }
+.lay-show input { width: 16px; height: 16px; flex-shrink: 0; accent-color: var(--accent); }
+.lay-show > .grow { display: flex; flex-direction: column; }
+.lay-name { font-size: 13px; font-weight: 500; }
+.lay-user { font-family: var(--mono); font-size: 11.5px; color: var(--faint); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.lay-hidden-tag { display: none; }
+.lay-show input:not(:checked) ~ .grow .lay-hidden-tag { display: inline-flex; }
+.lay-show input:not(:checked) ~ .grow .lay-name { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--border-2); }
+.lay-btns { display: flex; gap: 4px; flex-shrink: 0; }
+.lay-btns .btn-xs { min-width: 32px; height: 30px; justify-content: center; }
+.lay-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; position: sticky; bottom: 0; padding: 10px 0; background: var(--bg); border-top: 1px solid var(--border); }
+.lay-dirty { display: none; }
+.is-dirty .lay-dirty { display: inline; }
+@media (max-width: 640px) { .lay-row { padding: 8px 12px; gap: 8px; } .lay-btns .btn-xs { min-width: 34px; height: 34px; } }
 
 /* ---------- 弹窗 ---------- */
 .modal-backdrop {

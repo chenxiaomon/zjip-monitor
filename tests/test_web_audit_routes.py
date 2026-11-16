@@ -62,6 +62,7 @@ def world(monkeypatch, tmp_path, fake_accounts, isolated_settings, isolated_snap
                       password=BOSS[1], by="t", must_change=False)
     settings = isolated_settings.read()
     settings["groups"]["g_empty"] = "空组"  # something the delete route may remove
+    settings["display"] = {"dashboard": {"hidden": ["ub1"]}}  # something the layout reset may clear
     isolated_settings.write(settings)
     yield
     accounts_routes._web_logins.clear()
@@ -102,6 +103,9 @@ ROUTES = {
     "/reports/delete/{filename}": ("/reports/delete/report_x.html", {}, "report.delete", "report_x.html"),
     "/settings/pause": ("/settings/pause", {}, "settings.pause", None),
     "/settings/focus": ("/settings/focus", {"on": "1"}, "settings.focus", None),
+    "/dashboard/layout": ("/dashboard/layout", {"group": ["group_b"], "account": ["ub1"], "shown": []},
+                          "settings.dashboard_layout", None),
+    "/dashboard/layout/reset": ("/dashboard/layout/reset", {}, "settings.dashboard_layout", None),
     "/settings/schedule": ("/settings/schedule", {"crons": ["0 8 * * *"]}, "settings.schedule", None),
     "/settings/login": ("/settings/login", {"method": "http"}, "settings.login", None),
     "/settings/thresholds": ("/settings/thresholds", "THRESHOLDS", "settings.thresholds", None),

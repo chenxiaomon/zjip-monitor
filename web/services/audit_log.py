@@ -126,6 +126,7 @@ ACTION_LABELS: dict[str, str] = {
     "settings.login": "修改登录参数",
     "settings.thresholds": "修改告警阈值",
     "settings.focus": "开关默认关注范围",
+    "settings.dashboard_layout": "调整仪表盘排序与显示",
     "notify.dingtalk": "修改钉钉通知",
     "notify.wechat": "修改企业微信通知",
     "notify.email": "修改邮件通知",
@@ -164,6 +165,8 @@ _FLAG_TEXT = {
     "must_change": ("要求下次登录改口令", ""),
     "force": ("尚未办结，确认后停巡", ""),
     "scan_resumed": ("已恢复每轮巡检", ""),
+    "reordered": ("调整了企业先后", ""),
+    "reset": ("恢复默认", ""),
 }
 _KEY_LABELS = {
     "contact": "联系人", "group": "分组", "groups": "分组", "role": "角色", "display_name": "显示名",
@@ -176,6 +179,7 @@ _KEY_LABELS = {
     "label": "名称", "for_user": "给用户",
     "scan": "巡检", "stopped": "停巡", "resumed": "恢复每轮巡检", "skipped": "情况有变未改",
     "certificates": "证书数", "missing": "缺证书", "open": "在审",
+    "group_order": "来源先后", "hidden": "隐藏",
 }
 
 
@@ -186,7 +190,7 @@ def _fmt_value(key: str, value) -> str:
         return "（空）"
     if key == "role":
         return ROLE_LABELS.get(value, str(value))
-    if key in ("group", "groups"):
+    if key in ("group", "groups", "group_order"):
         values = value if isinstance(value, list) else [value]
         return "、".join(group_label(v) for v in values) or "（空）"
     if isinstance(value, bool):
