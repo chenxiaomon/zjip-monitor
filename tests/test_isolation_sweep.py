@@ -83,7 +83,7 @@ PAGES = [
     f"/attachments/{OWNER_COMPANY}/RBOSS1/notice.pdf",
     f"/records/ledger.xlsx?account={OWNER_LOGIN}",
     f"/records/handover.zip?account={OWNER_LOGIN}",
-    "/accounts/scan-plan",
+    "/accounts/scan-plan", "/dashboard/layout",
 ]
 
 

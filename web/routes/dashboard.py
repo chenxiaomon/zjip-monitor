@@ -15,18 +15,20 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from src import ops_alerts, scan_plan, status_store, todo
 from src.runtime_settings import ops_alert_settings, run_settings
 from src.scraper import AUDIT_STATUS
 from web.auth import (
-    SCOPE_COOKIE, allowed_usernames, is_admin, shown_accounts, shown_usernames, visible_accounts,
+    SCOPE_COOKIE, allowed_usernames, is_admin, require_admin, shown_accounts, shown_usernames,
+    visible_accounts,
 )
 from web.deps import STATUS_COLORS, account_dot, int_or_none, templates
 from web.deps import status_distribution
-from web.services import trends, year_scope
+from web.services import audit_log, dash_layout, trends, year_scope
+from web.services.settings_svc import REFUSED_HINT, SettingsUnreadable
 from web.services.year_scope import YearScope
 from web.services.events import read_events
 from web.services.run_state import run_state_ctx
@@ -126,6 +128,39 @@ def records_link_factory(scope: YearScope):
     return records_link
 
 
+def _grid_ctx(request: Request, cards: list[dict]) -> dict:
+    """The account grid in three parts, in the admin's layout (web/services/
+    dash_layout.py): the cards to watch, one segment per 来源; the ones the
+    admin hid, folded; the 停巡 ones whose work is done, folded too.
+
+    Hiding wins over 停巡 (it is the explicit choice). Inside a segment a
+    停巡 card with records still in review (建议恢复) comes first, as it did
+    before segments. Only the cards move: every count on the page is built
+    from all of them before this."""
+    layout = dash_layout.current()
+
+    def arrange(items: list[dict]) -> list[dash_layout.Segment]:
+        return dash_layout.arrange(items, layout, account=lambda c: c["account"])
+
+    def flat(items: list[dict]) -> list[dict]:
+        return [c for seg in arrange(items) for c in seg.items]
+
+    hidden = [c for c in cards if c["account"].username in layout.hidden]
+    rest = [c for c in cards if c["account"].username not in layout.hidden]
+    segments = arrange([c for c in rest if c["resume"] or not c["dormant"]])
+    for seg in segments:
+        seg.items.sort(key=lambda c: not c["resume"])  # stable: the layout order stays
+    return {
+        "grid_segments": segments,
+        # A heading only says something when there is more than one.
+        "show_segments": len(segments) > 1,
+        "grid_main": [c for seg in segments for c in seg.items],
+        "grid_hidden": flat(hidden),
+        "grid_dormant": flat([c for c in rest if c["dormant"] and not c["resume"]]),
+        "can_arrange": is_admin(request),
+    }
+
+
 def _dashboard_ctx(request: Request, year: str | None = None, range_days: int = 30) -> dict:
     # 我负责的 or everything visible; the ops banner below stays on the
     # full visible set — a failing scan is everyone's business.
@@ -217,12 +252,7 @@ def _dashboard_ctx(request: Request, year: str | None = None, range_days: int = 
         "dash_url": _dash_url_factory(scope, range_days),
         "records_link": records_link_factory(scope),
         "account_snapshots": account_snapshots,
-        # The account grid in two parts: the cards to watch (停巡 ones that
-        # should be resumed first), and the 停巡 ones whose work is done,
-        # folded away below.
-        "grid_main": [s for s in account_snapshots if s["resume"]]
-                     + [s for s in account_snapshots if not s["dormant"]],
-        "grid_dormant": [s for s in account_snapshots if s["dormant"] and not s["resume"]],
+        **_grid_ctx(request, account_snapshots),
         "sweep_days": run_settings().dormant_sweep_days,
         "login_alerts": login_alerts,
         # Scoped to what this user may see: a group user must never learn from
@@ -316,3 +346,97 @@ def partial_timeline(request: Request) -> HTMLResponse:
         "_partials/timeline.html",
         {"events": events, "STATUS_COLORS": STATUS_COLORS, "AUDIT_STATUS": AUDIT_STATUS},
     )
+
+
+# ---------------------------------------------------------------------------
+# 排序与显示 — the admin's layout of the 账号状态 cards (web/services/dash_layout.py)
+# ---------------------------------------------------------------------------
+
+def _layout_ctx(request: Request, *, error: str | None = None) -> dict:
+    """The editor lists every company the admin sees (not narrowed by
+    我负责的: the layout is everyone's), in the order the dashboard uses."""
+    accounts = visible_accounts(request)
+    statuses = status_store.get_all()
+    layout = dash_layout.current()
+    segments = dash_layout.arrange(accounts, layout)
+    return {
+        "segments": [
+            {"key": seg.key, "label": seg.label, "rows": [
+                {"account": a, "hidden": a.username in layout.hidden,
+                 "dormant": status_store.is_dormant(statuses.get(a.username))}
+                for a in seg.items
+            ]}
+            for seg in segments
+        ],
+        "total": len(accounts),
+        "hidden_count": sum(1 for a in accounts if a.username in layout.hidden),
+        "is_default": layout.is_default,
+        "error": error,
+    }
+
+
+def _layout_audit(diff: dict, accounts: list) -> dict:
+    """The operation log line: 来源 by name, hidden companies by name, and
+    only the fact that companies were reordered (thirty logins say nothing)."""
+    names = {a.username: a.company for a in accounts}
+    detail: dict = {}
+    if "group_order" in diff:
+        # As the dashboard shows them, not as stored: an empty list is the default order.
+        keys = [a.group or dash_layout.UNGROUPED for a in accounts]
+        old, new = (dash_layout.segment_order(keys, dash_layout.Layout(group_order=side))
+                    for side in diff["group_order"])
+        if old != new:
+            detail["group_order"] = [old, new]
+    if "hidden" in diff:
+        detail["hidden"] = [[names.get(u, u) for u in side] for side in diff["hidden"]]
+    if "account_order" in diff:
+        detail["reordered"] = True
+    return detail
+
+
+@router.get("/dashboard/layout", response_class=HTMLResponse)
+def layout_page(request: Request) -> HTMLResponse:
+    require_admin(request)
+    return templates.TemplateResponse(request, "dashboard_layout.html", _layout_ctx(request))
+
+
+@router.post("/dashboard/layout")
+def save_layout(
+    request: Request,
+    group: list[str] = Form(default=[]),
+    account: list[str] = Form(default=[]),
+    shown: list[str] = Form(default=[]),
+):
+    """The editor's form: `group` and `account` in the order the rows stand
+    on the page, `shown` the ticked companies."""
+    require_admin(request)
+    accounts = visible_accounts(request)
+    try:
+        diff = dash_layout.save(group, account, shown, accounts)
+    except SettingsUnreadable as exc:
+        audit_log.record_request(request, "settings.dashboard_layout", ok=False, detail={"error": str(exc)})
+        return templates.TemplateResponse(
+            request, "dashboard_layout.html", _layout_ctx(request, error=f"{exc}。{REFUSED_HINT}"),
+            status_code=409)
+    if diff:
+        audit_log.record_request(request, "settings.dashboard_layout", detail=_layout_audit(diff, accounts))
+    else:
+        audit_log.nothing_changed(request)
+    return RedirectResponse(url="/", status_code=303)
+
+
+@router.post("/dashboard/layout/reset")
+def reset_layout(request: Request):
+    require_admin(request)
+    try:
+        changed = dash_layout.reset()
+    except SettingsUnreadable as exc:
+        audit_log.record_request(request, "settings.dashboard_layout", ok=False, detail={"error": str(exc)})
+        return templates.TemplateResponse(
+            request, "dashboard_layout.html", _layout_ctx(request, error=f"{exc}。{REFUSED_HINT}"),
+            status_code=409)
+    if changed:
+        audit_log.record_request(request, "settings.dashboard_layout", detail={"reset": True})
+    else:
+        audit_log.nothing_changed(request)
+    return RedirectResponse(url="/dashboard/layout", status_code=303)

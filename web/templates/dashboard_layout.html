@@ -1,0 +1,80 @@
+{% extends "_base.html" %}
+
+{% block title %}排序与显示 — 数智通监控{% endblock %}
+{% block page_title %}仪表盘 · 排序与显示{% endblock %}
+
+{#
+  The admin's layout of the dashboard's 账号状态 cards (web/routes/dashboard.py,
+  web/services/dash_layout.py). The rows move on the page (ui.js, data-move);
+  the form posts `group` and `account` in the order they then stand, and `shown`
+  for the ticked companies.
+#}
+{% block content %}
+<form method="post" action="/dashboard/layout" class="lay-editor stack" data-dirty-form>
+  <div class="alert alert-info alert-inline">{{ icon('info-circle') }}<div>
+    这里定的先后对所有人生效：同事只看得到自己分组的企业，也按这个先后排。
+    不勾「显示」的企业会收进仪表盘最下面的「已隐藏」，上方的数字、待办和最近变更照常包含它们。
+  </div></div>
+  {% if error %}
+  <div class="alert alert-danger alert-inline">{{ icon('alert-circle') }}<div>{{ error }}</div></div>
+  {% endif %}
+
+  {% if segments %}
+  <div class="lay-segs stack" data-move-list>
+    {% for seg in segments %}
+    <section class="card lay-seg" data-move-item>
+      <input type="hidden" name="group" value="{{ seg.key }}">
+      <div class="card-head">
+        <span class="card-title">{{ icon('building') }}{{ seg.label }}<span class="count faint">{{ seg.rows | length }} 家</span></span>
+        {% if segments | length > 1 %}
+        <span class="lay-btns">
+          <button type="button" class="btn btn-xs" data-move="up" title="这个来源上移" aria-label="「{{ seg.label }}」上移">{{ icon('chevron-up') }}</button>
+          <button type="button" class="btn btn-xs" data-move="down" title="这个来源下移" aria-label="「{{ seg.label }}」下移">{{ icon('chevron-down') }}</button>
+        </span>
+        {% endif %}
+      </div>
+      <ol class="lay-rows" data-move-list>
+        {% for row in seg.rows %}
+        {% set a = row.account %}
+        <li class="lay-row" data-move-item>
+          <input type="hidden" name="account" value="{{ a.username }}">
+          <label class="lay-show grow" title="勾上：在仪表盘上显示；不勾：收进「已隐藏」">
+            <input type="checkbox" name="shown" value="{{ a.username }}" {% if not row.hidden %}checked{% endif %}>
+            <span class="grow">
+              <span class="lay-name truncate">{{ a.company }}</span>
+              <span class="lay-user">{{ a.username }}
+                {%- if row.dormant %} <span class="pill pill-xs pill-neutral">停巡</span>{% endif %}
+                <span class="pill pill-xs pill-neutral lay-hidden-tag">已隐藏</span>
+              </span>
+            </span>
+          </label>
+          {% if seg.rows | length > 1 %}
+          <span class="lay-btns">
+            <button type="button" class="btn btn-xs" data-move="top" title="移到本来源最前" aria-label="{{ a.company }} 移到最前">置顶</button>
+            <button type="button" class="btn btn-xs" data-move="up" title="上移" aria-label="{{ a.company }} 上移">{{ icon('chevron-up') }}</button>
+            <button type="button" class="btn btn-xs" data-move="down" title="下移" aria-label="{{ a.company }} 下移">{{ icon('chevron-down') }}</button>
+          </span>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ol>
+    </section>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="card empty">{{ icon('inbox') }}还没有企业账号</div>
+  {% endif %}
+
+  <div class="lay-actions">
+    <button type="submit" class="btn btn-primary">{{ icon('check') }}保存</button>
+    <a href="/" class="btn">返回仪表盘</a>
+    <span class="lay-dirty warn xs">有改动，保存后生效</span>
+    <span class="grow"></span>
+    {% if not is_default %}
+    <button type="submit" form="layout-reset" class="btn btn-danger"
+            data-confirm="恢复默认：来源按分组设置的顺序、企业按添加的先后排，隐藏的企业全部重新显示。确定？">恢复默认</button>
+    {% endif %}
+  </div>
+</form>
+<form id="layout-reset" method="post" action="/dashboard/layout/reset"></form>
+{% endblock %}

@@ -315,3 +315,39 @@ function togglePassword(btn) {
   document.addEventListener('htmx:afterSettle', refresh);
   document.addEventListener('DOMContentLoaded', refresh);
 })();
+
+/* 仪表盘「排序与显示」：[data-move=up|down|top] 在同一个 [data-move-list] 里移动最近的
+   [data-move-item]（企业行或整个来源）。表单按行在页面上的先后提交，不另存顺序。
+   有改动时表单加 is-dirty，提示「保存后生效」；[data-confirm] 的提交按钮先确认。 */
+(function () {
+  function dirty(el) {
+    var form = el.closest('[data-dirty-form]');
+    if (form) form.classList.add('is-dirty');
+  }
+  document.addEventListener('click', function (e) {
+    var ask = e.target.closest('button[data-confirm]');
+    if (ask && !window.confirm(ask.getAttribute('data-confirm'))) { e.preventDefault(); return; }
+    var btn = e.target.closest('[data-move]');
+    if (!btn) return;
+    var item = btn.closest('[data-move-item]');
+    var list = item && item.parentElement;
+    if (!list || !list.hasAttribute('data-move-list')) return;
+    e.preventDefault();
+    var how = btn.getAttribute('data-move');
+    var before = list.firstElementChild;
+    if (how === 'up') before = item.previousElementSibling;
+    else if (how === 'down') before = item.nextElementSibling && item.nextElementSibling.nextElementSibling;
+    if (how === 'down' && !item.nextElementSibling) return;
+    if (how !== 'down' && (!before || before === item)) return;
+    list.insertBefore(item, before);  // before = null → append at the end
+    // A brief highlight on what moved, fading out (the .6s transition in ui.css).
+    clearTimeout(item._movedTimer);
+    item.classList.add('just-moved');
+    item._movedTimer = setTimeout(function () { item.classList.remove('just-moved'); }, 350);
+    btn.focus();
+    dirty(item);
+  });
+  document.addEventListener('change', function (e) {
+    if (e.target.matches && e.target.matches('[data-dirty-form] input')) dirty(e.target);
+  });
+})();
