@@ -188,7 +188,11 @@ def _build_records(
     only the chosen application years (None: all). When `tally` is given it
     receives "years" (every application year in these accounts, newest
     first) and "outside" (rows that matched every other filter but not the
-    years)."""
+    years).
+
+    Rows hold only what the snapshot says. The lookups that touch the disk —
+    attachments, archive markers, 补正 deadline, certificate expiry — come
+    from _fill_details, for the rows actually shown or exported."""
     if isinstance(status_filter, int):
         status_filter = frozenset({status_filter})
     rows: list[dict] = []
@@ -249,11 +253,6 @@ def _build_records(
                 "company": acc.company,
                 "username": acc.username,
                 "reg_no": reg_no,
-                "attachments": list_attachments(acc.company, reg_no) if reg_no else [],
-                "archived": archived_attachments(acc.company, reg_no) if reg_no else [],
-                # 待补正 → the notice's deadline; 登记成功 → certificate expiry when near
-                "due": todo.correction_for(acc, r) if reg_no else None,
-                "renewal": todo.renewal_for(acc, r) if reg_no else None,
                 "name": name,
                 "industry": r.get("dataRegIndustry", ""),
                 "data_type": r.get("dataRegDataType", ""),
@@ -261,6 +260,7 @@ def _build_records(
                 "status_code": code,
                 "status_label": decode_status(r.get("dataRegAuditStatus")),
                 "_raw": r,
+                "_acc": acc,
             })
 
     _sort_rows(rows, sort)
@@ -268,6 +268,23 @@ def _build_records(
         tally["years"] = sorted(years, reverse=True)
         tally["outside"] = outside
     return rows, missing_accounts, fetch_warnings
+
+
+def _fill_details(rows: list[dict]) -> list[dict]:
+    """Add each row's attachments, archive markers, 补正 deadline and
+    certificate expiry — a directory listing and the record's .sync.json —
+    to just these rows. The page shows 50 of however many rows the filters
+    leave, and filtering and sorting never look at these, so doing them for
+    every row made each page view, chip and search keystroke cost as much as
+    the whole table (0.6 s at 10,000 records)."""
+    for row in rows:
+        acc, reg_no, r = row["_acc"], row["reg_no"], row["_raw"]
+        row["attachments"] = list_attachments(acc.company, reg_no) if reg_no else []
+        row["archived"] = archived_attachments(acc.company, reg_no) if reg_no else []
+        # 待补正 → the notice's deadline; 登记成功 → certificate expiry when near
+        row["due"] = todo.correction_for(acc, r) if reg_no else None
+        row["renewal"] = todo.renewal_for(acc, r) if reg_no else None
+    return rows
 
 
 def _all_rows(request: Request, account: str | None, statuses: frozenset[int] | None,
@@ -357,7 +374,7 @@ def _ctx(
         return {"url": records_url(sort=target, page=1), "state": state}
 
     return {
-        "rows": rows[(current - 1) * PAGE_SIZE: current * PAGE_SIZE],
+        "rows": _fill_details(rows[(current - 1) * PAGE_SIZE: current * PAGE_SIZE]),
         "total": total,
         "page": current,
         "pages": pages,
@@ -537,6 +554,7 @@ def records_csv(
     else:
         _, rows, _, _ = _all_rows(request, account or None, _statuses(request), start_date, end_date, q,
                                   _sort(sort), scope)
+    _fill_details(rows)  # only what is exported: five ticked rows cost five lookups
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(_CSV_HEADER)

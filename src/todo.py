@@ -45,8 +45,11 @@ RED_DAYS = 3
 AMBER_DAYS = 7
 
 _cache_lock = threading.Lock()
-_json_cache: dict[str, tuple[tuple[int, int], Any]] = {}
-_CACHE_MAX = 4096
+# company prefix → (path, (mtime_ns, size), parsed): one snapshot per company,
+# as in web/services/snapshot.py. Every scan writes a new file name; keyed on
+# the name, every round's copy stayed in memory until 4096 files piled up —
+# in the console and in the daemon (its banner refresh runs build()).
+_json_cache: dict[str, tuple[str, tuple[int, int], Any]] = {}
 
 
 @dataclass
@@ -78,24 +81,24 @@ def today_local() -> date:
     return datetime.now(_SHANGHAI_TZ).date()
 
 
-def _cached_json(path: Path) -> Any:
+def _cached_json(path: Path, slot: str) -> Any:
+    """path parsed; the cache keeps one file per slot (a company), so the
+    next snapshot replaces the last."""
     try:
         st = path.stat()
     except OSError:
         return None
     key, stamp = str(path), (st.st_mtime_ns, st.st_size)
     with _cache_lock:
-        hit = _json_cache.get(key)
-        if hit is not None and hit[0] == stamp:
-            return hit[1]
+        hit = _json_cache.get(slot)
+        if hit is not None and hit[0] == key and hit[1] == stamp:
+            return hit[2]
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     with _cache_lock:
-        if len(_json_cache) >= _CACHE_MAX:
-            _json_cache.clear()
-        _json_cache[key] = (stamp, data)
+        _json_cache[slot] = (key, stamp, data)
     return data
 
 
@@ -113,7 +116,7 @@ def _latest_snapshot(company: str) -> dict | None:
         return None
     if not files:
         return None
-    data = _cached_json(files[-1])
+    data = _cached_json(files[-1], prefix)
     return data if isinstance(data, dict) else None
 
 

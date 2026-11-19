@@ -226,7 +226,15 @@ def _load_manifest(rec_dir: Path) -> dict | None:
 
 _manifest_cache_lock = threading.Lock()
 _manifest_cache: dict[str, tuple[tuple[int, int], dict]] = {}
-_MANIFEST_CACHE_MAX = 4096
+# One entry per record directory (~3 KB parsed). Readers walk every record in
+# one pass — 待办, the banner, the records page — so the cap must sit above
+# that working set: below it, the clear-on-full in load_manifest_cached empties
+# the cache mid-walk and every request re-reads thousands of files. At 4096
+# that cliff hit around 6,000 records (待办 6× slower for 2.5× the data). An
+# LRU would not help either: a walk longer than the cache evicts each entry
+# before it is used again. 20,000 is twice the 10,000 records this box is
+# sized for, ~60 MB at most.
+_MANIFEST_CACHE_MAX = 20_000
 
 
 def load_manifest_cached(rec_dir: Path) -> dict:

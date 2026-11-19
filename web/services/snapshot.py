@@ -2,6 +2,12 @@
 
 Parsed files are cached on mtime — the dashboard renders several partials per
 refresh and each used to re-read and re-parse every snapshot from disk.
+
+The cache holds one snapshot per company. Every scan writes a new file name,
+and a cache keyed on the name kept each round's copy alive until 512 files
+had piled up — memory that grew with every round (at 10,000 records about
+20 MB a round here; with src/todo.py's copy, past the server's RAM within
+about 20 rounds). Now a company's next file takes the place of its last.
 """
 
 from __future__ import annotations
@@ -15,28 +21,31 @@ _SNAPSHOTS_DIR = Path(__file__).parent.parent.parent / "data" / "snapshots"
 _DATE_RE = re.compile(r"^(.+)_(\d{4}-\d{2}-\d{2}-\d{4})$")
 
 _cache_lock = threading.Lock()
-_cache: dict[str, tuple[float, dict]] = {}  # path → (mtime, parsed)
-_CACHE_MAX = 512
+_cache: dict[str, tuple[str, float, dict]] = {}  # company prefix → (path, mtime, parsed)
 
 
-def _read_cached(path: Path) -> dict | None:
+def _read_cached(path: Path, *, keep: bool = True) -> dict | None:
+    """path parsed — from the cache when it is the file the cache holds for
+    its company. keep=False reads an older snapshot without evicting the
+    company's latest one."""
     key = str(path)
+    m = _DATE_RE.match(path.stem)
+    slot = m.group(1) if m else path.stem
     try:
         mtime = path.stat().st_mtime
     except OSError:
         return None
     with _cache_lock:
-        hit = _cache.get(key)
-        if hit is not None and hit[0] == mtime:
-            return hit[1]
+        hit = _cache.get(slot)
+        if hit is not None and hit[0] == key and hit[1] == mtime:
+            return hit[2]
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
-    with _cache_lock:
-        if len(_cache) >= _CACHE_MAX:
-            _cache.clear()  # crude but bounded; refills on demand
-        _cache[key] = (mtime, parsed)
+    if keep:
+        with _cache_lock:
+            _cache[slot] = (key, mtime, parsed)
     return parsed
 
 
@@ -106,7 +115,8 @@ def get_snapshots_by_date(date_str: str) -> list[dict]:
                 by_company[company] = f
     results = []
     for path in by_company.values():
-        parsed = _read_cached(path)
+        # Usually not the latest file: read it without evicting the latest.
+        parsed = _read_cached(path, keep=False)
         if parsed is not None:
             results.append(parsed)
     return results
