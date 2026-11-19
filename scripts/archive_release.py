@@ -19,7 +19,8 @@ A file is deleted only when every check passes:
   - its sha256 equals the one the laptop verified its own copy against
   - src.archive_policy.releasable() agrees, judged from the server's own latest
     snapshot and settings.yaml → archive — not from the laptop's database
-    (a current certificate never goes: the console's 交付包 hands it out)
+    (a current certificate waits release_certificates_after_days, longer than
+    a notice: the console's 交付包 hands certificates out)
 The record's .sync.json gets the file under "archived" BEFORE the file goes, so
 a crash in between leaves a harmless extra copy, never a file the next sync
 would silently fetch again.
@@ -101,7 +102,8 @@ def _audit(action: str, rec_dir: Path, detail: dict) -> None:
     )
 
 
-def release(items: list, *, dry_run: bool, days: int, now: datetime | None = None) -> dict:
+def release(items: list, *, dry_run: bool, days: int, cert_days: int,
+            now: datetime | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
     released: list[str] = []
     skipped: list[dict] = []
@@ -119,11 +121,8 @@ def release(items: list, *, dry_run: bool, days: int, now: datetime | None = Non
             skipped.append({"path": rel, "reason": "服务器上没有这个文件"})
             continue
         company_dir, reg_dir, name = Path(rel).parts
-        if archive_policy.is_certificate(name):
-            skipped.append({"path": rel, "reason": "证书保留在服务器（交付包要用）"})
-            continue
         status, updated = _record_state(company_dir, reg_dir)
-        if not archive_policy.releasable(name, status, updated, days=days, now=now):
+        if not archive_policy.releasable(name, status, updated, days=days, cert_days=cert_days, now=now):
             skipped.append({"path": rel, "reason": "按服务器快照不满足释放条件"})
             continue
         digest = _sha256(path)
@@ -244,8 +243,9 @@ def main(argv: list[str] | None = None) -> int:
             items = json.load(sys.stdin)
             if not isinstance(items, list):
                 raise ValueError("stdin 应为 JSON 数组")
-            days = archive_settings().release_after_terminal_days
-            result = release(items, dry_run=args.dry_run, days=days)
+            cfg = archive_settings()
+            result = release(items, dry_run=args.dry_run, days=cfg.release_after_terminal_days,
+                             cert_days=cfg.release_certificates_after_days)
         print(json.dumps(result, ensure_ascii=False))
         return 0
     except Exception as exc:  # noqa: BLE001 — reported as JSON to the laptop

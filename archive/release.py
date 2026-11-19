@@ -10,9 +10,10 @@ restore: copy one record's released files back to the server and clear their
 archived marks, e.g. when a client asks for an old certificate.
 
 restore --certificates: the same for every released current certificate at
-once. Certificates stay on the server since the console's 交付包 hands them
-out (src/archive_policy), so the ones an earlier release took are sent back:
-one rsync of a hard-linked staging tree, one ssh call to clear the marks.
+once, so the console's 交付包 can hand them out again: one rsync of a
+hard-linked staging tree, one ssh call to clear the marks. Certificates older
+than archive.release_certificates_after_days are candidates again at the next
+release (src/archive_policy).
 """
 
 from __future__ import annotations
@@ -35,9 +36,10 @@ from .config import ArchiveConfig
 from .index import _sha256
 
 DEFAULT_DAYS = ArchiveSettings().release_after_terminal_days
+DEFAULT_CERT_DAYS = ArchiveSettings().release_certificates_after_days
 
 
-def select(db_path: Path, *, days: int, company: str | None = None,
+def select(db_path: Path, *, days: int, cert_days: int, company: str | None = None,
            now: datetime | None = None) -> list[dict]:
     """Files still on the server that the policy says may go."""
     db = sqlite3.connect(db_path)
@@ -55,7 +57,7 @@ def select(db_path: Path, *, days: int, company: str | None = None,
         if company and company_dir != company:
             continue
         updated_at = datetime.fromisoformat(updated) if updated else None
-        if releasable(filename, status, updated_at, days=days, now=now):
+        if releasable(filename, status, updated_at, days=days, cert_days=cert_days, now=now):
             picked.append({"path": path, "company_dir": company_dir, "reg_no": reg_no,
                            "filename": filename, "kind": kind, "sha256": sha, "size": size})
     return picked
@@ -75,11 +77,11 @@ def _server_json(proc: subprocess.CompletedProcess) -> dict:
 
 
 def run_release(cfg: ArchiveConfig, *, yes: bool = False, days: int = DEFAULT_DAYS,
-                company: str | None = None) -> int:
+                cert_days: int = DEFAULT_CERT_DAYS, company: str | None = None) -> int:
     if not cfg.db_path.exists():
         print("✗ 还没有 archive.sqlite，先运行 python -m archive pull 和 index")
         return 1
-    candidates = select(cfg.db_path, days=days, company=company)
+    candidates = select(cfg.db_path, days=days, cert_days=cert_days, company=company)
     verified = []
     for c in candidates:
         local = cfg.archive_dir / c["path"]
@@ -93,7 +95,8 @@ def run_release(cfg: ArchiveConfig, *, yes: bool = False, days: int = DEFAULT_DA
 
     mb = sum(c["size"] for c in verified) / 1048576
     kinds = Counter(c["kind"] for c in verified)
-    print(f"候选 {len(verified)} 个文件，共 {mb:.1f}MB（办结满 {days} 天，或已被新一轮替换）：")
+    print(f"候选 {len(verified)} 个文件，共 {mb:.1f}MB（通知书办结满 {days} 天、证书满 {cert_days} 天，"
+          "或已被新一轮替换）：")
     print("  " + "、".join(f"{k} {n}" for k, n in kinds.most_common()))
 
     items = [{"path": f"{c['company_dir']}/{c['reg_no']}/{c['filename']}", "sha256": c["sha256"]}

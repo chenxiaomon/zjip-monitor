@@ -58,10 +58,14 @@ def _fake_transport(monkeypatch, reply):
 
 
 def test_select_follows_the_policy(cfg):
-    picked = {(c["reg_no"], c["filename"]) for c in release.select(cfg.db_path, days=90)}
-    # the certificate of DONE stays on the server (交付包), whatever its age
-    assert picked == {("DONE", "《登记公告通知书》.pdf"), ("ACTIVE", "补正_2026-09-01.pdf")}
-    assert release.select(cfg.db_path, days=90, company="乙公司") == []
+    picked = {(c["reg_no"], c["filename"]) for c in release.select(cfg.db_path, days=90, cert_days=180)}
+    # DONE was finished 200 days ago: past the notices' 90 and the certificates' 180
+    assert picked == {("DONE", "《登记公告通知书》.pdf"), ("DONE", "国家局登记证书.pdf"),
+                      ("ACTIVE", "补正_2026-09-01.pdf")}
+    # a certificate waits longer than a notice (交付包 hands it out from the server)
+    later = {(c["reg_no"], c["filename"]) for c in release.select(cfg.db_path, days=90, cert_days=365)}
+    assert later == {("DONE", "《登记公告通知书》.pdf"), ("ACTIVE", "补正_2026-09-01.pdf")}
+    assert release.select(cfg.db_path, days=90, cert_days=180, company="乙公司") == []
 
 
 def test_dry_run_asks_the_server_to_verify_only(cfg, monkeypatch, capsys):
@@ -73,10 +77,12 @@ def test_dry_run_asks_the_server_to_verify_only(cfg, monkeypatch, capsys):
     assert call["argv"][:2] == ["ssh", "root@h"]
     assert call["argv"][2] == "cd /opt/z && .venv/bin/python scripts/archive_release.py --dry-run"
     sent = json.loads(call["input"])
-    assert {i["path"] for i in sent} == {"甲公司/DONE/《登记公告通知书》.pdf", "甲公司/ACTIVE/补正_2026-09-01.pdf"}
+    assert {i["path"] for i in sent} == {"甲公司/DONE/《登记公告通知书》.pdf", "甲公司/DONE/国家局登记证书.pdf",
+                                         "甲公司/ACTIVE/补正_2026-09-01.pdf"}
     assert sent[0]["sha256"] == hashlib.sha256(sent[0]["path"].split("/", 1)[1].encode()).hexdigest()
-    assert "预演" in capsys.readouterr().out
-    assert release.select(cfg.db_path, days=90)  # nothing marked released
+    out = capsys.readouterr().out
+    assert "预演" in out and "通知书办结满 90 天、证书满 180 天" in out
+    assert release.select(cfg.db_path, days=90, cert_days=180)  # nothing marked released
 
 
 def test_yes_records_what_the_server_released(cfg, monkeypatch):
@@ -88,8 +94,8 @@ def test_yes_records_what_the_server_released(cfg, monkeypatch):
 
     assert release.run_release(cfg, yes=True) == 0
     assert "--dry-run" not in calls[0]["argv"][2]
-    left = {(c["reg_no"], c["filename"]) for c in release.select(cfg.db_path, days=90)}
-    assert left == {("ACTIVE", "补正_2026-09-01.pdf")}
+    left = {(c["reg_no"], c["filename"]) for c in release.select(cfg.db_path, days=90, cert_days=180)}
+    assert left == {("ACTIVE", "补正_2026-09-01.pdf"), ("DONE", "国家局登记证书.pdf")}
 
 
 def test_a_changed_local_copy_is_never_offered(cfg, monkeypatch, capsys):
@@ -97,7 +103,8 @@ def test_a_changed_local_copy_is_never_offered(cfg, monkeypatch, capsys):
     calls = _fake_transport(monkeypatch, {"released": [], "skipped": [], "bytes": 0})
 
     release.run_release(cfg)
-    assert [i["path"] for i in json.loads(calls[0]["input"])] == ["甲公司/ACTIVE/补正_2026-09-01.pdf"]
+    assert [i["path"] for i in json.loads(calls[0]["input"])] == ["甲公司/ACTIVE/补正_2026-09-01.pdf",
+                                                                  "甲公司/DONE/国家局登记证书.pdf"]
     assert "本机副本缺失或已变" in capsys.readouterr().out
 
 
@@ -105,7 +112,7 @@ def test_a_server_error_is_reported(cfg, monkeypatch, capsys):
     _fake_transport(monkeypatch, {"error": "另一巡检进行中，稍后再试"})
     assert release.run_release(cfg, yes=True) == 1
     assert "另一巡检进行中" in capsys.readouterr().out
-    assert len(release.select(cfg.db_path, days=90)) == 2
+    assert len(release.select(cfg.db_path, days=90, cert_days=180)) == 3
 
 
 def test_push_facts_sends_released_notices_only(cfg, monkeypatch, capsys):
@@ -142,7 +149,7 @@ def test_restore_sends_files_back_and_clears_the_marks(cfg, monkeypatch):
     assert rsync["argv"][-2].endswith("attachments/甲公司/DONE/《登记公告通知书》.pdf")
     assert rsync["argv"][-1] == "root@h:/opt/z/data/attachments/甲公司/DONE/"
     assert ssh["argv"][2].endswith("scripts/archive_release.py --unarchive '甲公司/DONE'")
-    assert ("DONE", "《登记公告通知书》.pdf") in {(c["reg_no"], c["filename"]) for c in release.select(cfg.db_path, days=90)}
+    assert ("DONE", "《登记公告通知书》.pdf") in {(c["reg_no"], c["filename"]) for c in release.select(cfg.db_path, days=90, cert_days=180)}
 
 
 # --- restore --certificates ------------------------------------------------------
