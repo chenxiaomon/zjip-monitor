@@ -548,8 +548,10 @@ def records_csv(
     rules and the same application years as the page."""
     scope = year_scope.resolve(year)
     picked = _picked(request)
-    if picked:  # 勾选了就只要勾选的：其它筛选不再起作用（勾选时可能是别的筛选）
-        _, rows, _, _ = _all_rows(request, account or None, None, None, None, None, _sort(sort))
+    if picked:
+        # 勾选了就只要勾选的，可以跨几家企业：上方选的企业、其它筛选都不再起作用
+        # （勾选时可能是别的企业、别的筛选），能看到哪些企业照旧按权限。
+        rows, _, _ = _build_records(visible_accounts(request), None, None, sort=_sort(sort))
         rows = [r for r in rows if r["reg_no"] in picked]
     else:
         _, rows, _, _ = _all_rows(request, account or None, _statuses(request), start_date, end_date, q,
@@ -566,9 +568,12 @@ def records_csv(
             r["renewal"].valid_to if r["renewal"] else "",
             len(r["attachments"]) + len(r["archived"]),
         ])
-    filters = ({"account": account, "picked": len(picked)} if picked else
-               {"account": account, "statuses": _statuses(request), "start_date": start_date,
-                "end_date": end_date, "q": q, "year": None if scope.is_all else scope.value})
+    if picked:
+        companies = len({r["username"] for r in rows})
+        filters = {"account": account, "picked": len(picked), "companies": companies if companies > 1 else None}
+    else:
+        filters = {"account": account, "statuses": _statuses(request), "start_date": start_date,
+                   "end_date": end_date, "q": q, "year": None if scope.is_all else scope.value}
     audit_log.record_request(request, "data.records_csv", detail={
         **{k: v for k, v in filters.items() if v}, "rows": len(rows),
     })
@@ -580,18 +585,47 @@ def records_csv(
     )
 
 
-def _selection(request: Request, acc, snap: dict) -> tuple[list[dict], dict]:
-    """(records, how they were chosen) — what 导出台账 and 交付包 cover.
+def _picked_groups(request: Request, picked: frozenset[str]) -> list[tuple]:
+    """The ticked records company by company: [(account, snapshot, records)]
+    for each company the caller may see that holds one of them, in account
+    order. Ticks are kept across the company chips, so the company picked
+    there does not narrow them — visibility does."""
+    groups = []
+    for acc in visible_accounts(request):
+        snap = get_latest_snapshot(acc.company)
+        records = [r for r in (snap or {}).get("records") or []
+                   if isinstance(r, dict) and str(r.get("dataRegNo") or "") in picked]
+        if records:
+            groups.append((acc, snap, records))
+    return groups
 
-    Ticked records (?reg=) win outright: they may have been ticked under
-    other filters, so the filters no longer apply. Otherwise the page's
-    filters — status, keyword, application dates and years, the same test
-    as the table. "How" is {} when nothing narrows it: the whole company,
-    exactly as before there was a choice."""
-    records = [r for r in snap.get("records") or [] if isinstance(r, dict)]
+
+def _chosen(request: Request, account: str | None) -> tuple[list[tuple], dict] | None:
+    """What 导出台账 and 交付包 cover: ([(account, snapshot, records)], how).
+
+    Ticked records (?reg=) win outright: they may have been ticked under other
+    filters and in other companies (_picked_groups), so neither the filters
+    nor the company picked in the chips apply. Otherwise that one company by
+    the page's filters (_selection). None when the caller may see no such
+    company, or it has no snapshot yet."""
     picked = _picked(request)
     if picked:
-        return [r for r in records if str(r.get("dataRegNo") or "") in picked], {"picked": len(picked)}
+        groups = _picked_groups(request, picked)
+        return groups, {"picked": sum(len(records) for _, _, records in groups)}
+    acc = next((a for a in visible_accounts(request) if a.username == (account or "")), None)
+    snap = get_latest_snapshot(acc.company) if acc else None
+    if snap is None:
+        return None
+    records, how = _selection(request, acc, snap)
+    return [(acc, snap, records)], how
+
+
+def _selection(request: Request, acc, snap: dict) -> tuple[list[dict], dict]:
+    """(records, how they were chosen) — one company by the page's filters:
+    status, keyword, application dates and years, the same test as the
+    table. "How" is {} when nothing narrows it: the whole company, exactly as
+    before there was a choice. (Ticks are _chosen's.)"""
+    records = [r for r in snap.get("records") or [] if isinstance(r, dict)]
     qp = request.query_params
     statuses = _statuses(request)
     start_date, end_date = (qp.get("start_date") or "").strip(), (qp.get("end_date") or "").strip()
@@ -610,20 +644,12 @@ def _selection(request: Request, acc, snap: dict) -> tuple[list[dict], dict]:
 _NOTHING_CHOSEN = "没有符合当前筛选或勾选的记录（勾选的记录可能已不在最新数据里，请刷新页面重新勾选）"
 
 
-@router.get("/records/ledger.xlsx")
-def records_ledger(request: Request, account: str | None = None) -> Response:
-    """一家企业的进度台账（xlsx）：登记记录页当前筛选出的、或勾选的记录，和
-    它们开始监控以来的状态变更（_selection）；什么都没筛选时是这家企业的全部。
-    看不到的企业、不存在的企业、还没有巡检数据的企业，回答都一样。"""
-    acc = next((a for a in visible_accounts(request) if a.username == (account or "")), None)
-    snap = get_latest_snapshot(acc.company) if acc else None
-    if snap is None:
-        return Response("没有这家企业的巡检数据", status_code=404, media_type="text/plain; charset=utf-8")
-    records, how = _selection(request, acc, snap)
-    if how and not records:
-        return Response(_NOTHING_CHOSEN, status_code=404, media_type="text/plain; charset=utf-8")
+def _ledger_of(request: Request, acc, snap: dict, records: list[dict], *, narrowed: bool) -> tuple[bytes, int]:
+    """One company's 台账 over these records: (xlsx, how many changes it lists).
+    A narrowed choice keeps only these records' changes; the whole company
+    keeps every change, the vanished records' too."""
     changes = read_change_rows(account=acc.username, accounts=allowed_usernames(request), since=_EPOCH)
-    if how:
+    if narrowed:
         changes = ledger.changes_of(records, changes)
     noticed = {
         reg_no: sum(1 for n in todo.notices_of(acc.company, reg_no) if n["kind"] == "补正")
@@ -631,11 +657,38 @@ def records_ledger(request: Request, account: str | None = None) -> Response:
     }
     body = ledger.build_ledger(acc.company, records, changes, corrections_noticed=noticed,
                                as_of=snap.get("snapshot_time"))
-    audit_log.record_request(request, "data.records_ledger", company=acc.company, detail={
-        "rows": len(records), "changes": sum(1 for c in changes if c["type"] != "removed"), **how,
-    })
-    name = ledger.filename(acc.company, datetime.now(_SHANGHAI_TZ).date())
-    return Response(body, media_type=ledger.MEDIA_TYPE, headers={
+    return body, sum(1 for c in changes if c["type"] != "removed")
+
+
+@router.get("/records/ledger.xlsx")
+def records_ledger(request: Request, account: str | None = None) -> Response:
+    """进度台账：登记记录页上选的一家企业，按当前筛选；或者勾选的记录（_chosen）。
+    每份含这些记录和它们开始监控以来的状态变更；什么都没筛选时是这家企业的全部。
+    勾选可以跨几家企业：那时每家一份 xlsx，打成一个 zip。看不到的企业、不存在的
+    企业、还没有巡检数据的企业，回答都一样。"""
+    chosen = _chosen(request, account)
+    if chosen is None:
+        return Response("没有这家企业的巡检数据", status_code=404, media_type="text/plain; charset=utf-8")
+    groups, how = chosen
+    if how and not any(records for _, _, records in groups):
+        return Response(_NOTHING_CHOSEN, status_code=404, media_type="text/plain; charset=utf-8")
+    today = datetime.now(_SHANGHAI_TZ).date()
+    books = []
+    for acc, snap, records in groups:
+        body, changes = _ledger_of(request, acc, snap, records, narrowed=bool(how))
+        audit_log.record_request(request, "data.records_ledger", company=acc.company, detail={
+            "rows": len(records), "changes": changes,
+            **({"picked": len(records)} if "picked" in how else how),
+            **({"companies": len(groups)} if len(groups) > 1 else {}),
+        })
+        books.append((ledger.filename(acc.company, today), body))
+    if len(books) == 1:
+        name, body = books[0]
+        media = ledger.MEDIA_TYPE
+    else:
+        name, body = ledger.batch_filename(groups[0][0].company, len(books), today), ledger.zip_of(books)
+        media = ledger.ZIP_MEDIA_TYPE
+    return Response(body, media_type=media, headers={
         "Content-Disposition": attachment_disposition(name), "Cache-Control": "no-store",
     })
 
@@ -653,21 +706,22 @@ def _sweep_handover_tmp(now: float | None = None) -> None:
 
 @router.get("/records/handover.zip")
 def records_handover(request: Request, account: str | None = None) -> Response:
-    """一家企业的交付包（zip）：登记成功、续展登记的证书清单 xlsx 加证书文件
+    """交付包（zip）：登记成功、续展登记的证书清单 xlsx 加证书文件
     （web/services/handover.py），只从当前筛选出的、或勾选的记录里取，和导出
-    台账一样（_selection）；「尚有 N 条在审」也只数这些。看不到的企业、不存在
-    的企业、还没有巡检数据的企业，回答都一样。"""
-    acc = next((a for a in visible_accounts(request) if a.username == (account or "")), None)
-    snap = get_latest_snapshot(acc.company) if acc else None
-    if snap is None:
+    台账一样（_chosen）；「尚有 N 条在审」也只数这些。勾选跨几家企业时一个 zip
+    里每家一个文件夹，没有登记成功记录的那家不放。看不到的企业、不存在的企业、
+    还没有巡检数据的企业，回答都一样。"""
+    chosen = _chosen(request, account)
+    if chosen is None:
         return Response("没有这家企业的巡检数据", status_code=404, media_type="text/plain; charset=utf-8")
-    records, how = _selection(request, acc, snap)
-    pkg = handover.plan(acc.company, {**snap, "records": records}, attachments_dir())
-    if not pkg.rows:
+    groups, how = chosen
+    pkgs = [(acc, pkg) for acc, snap, records in groups
+            if (pkg := handover.plan(acc.company, {**snap, "records": records}, attachments_dir())).rows]
+    if not pkgs:
         why = "所选的记录里没有登记成功的" if how else "这家企业还没有登记成功的记录"
         return Response(why, status_code=404, media_type="text/plain; charset=utf-8")
     disk = diskstat.check_free()
-    if disk.free_mb - pkg.total_bytes / 1048576 < disk.min_free_mb:
+    if disk.free_mb - sum(pkg.total_bytes for _, pkg in pkgs) / 1048576 < disk.min_free_mb:
         return Response(f"服务器磁盘空间不足（剩余 {disk.free_mb:.0f}MB），暂时打不了包",
                         status_code=503, media_type="text/plain; charset=utf-8")
 
@@ -676,16 +730,21 @@ def records_handover(request: Request, account: str | None = None) -> Response:
     fd, tmp = tempfile.mkstemp(prefix="handover-", suffix=".zip", dir=_HANDOVER_TMP)
     os.close(fd)
     try:
-        size = handover.write_zip(pkg, Path(tmp))
+        size = handover.write_batch_zip([pkg for _, pkg in pkgs], Path(tmp))
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
-    audit_log.record_request(request, "data.records_handover", company=acc.company, detail={
-        "rows": len(pkg.rows), "certificates": len(pkg.present), "missing": len(pkg.missing),
-        "open": pkg.open_count, "bytes": size, **how,
-    })
+    for acc, pkg in pkgs:
+        audit_log.record_request(request, "data.records_handover", company=acc.company, detail={
+            "rows": len(pkg.rows), "certificates": len(pkg.present), "missing": len(pkg.missing),
+            "open": pkg.open_count, "bytes": size,
+            **({"picked": sum(len(records) for a, _, records in groups if a is acc)} if "picked" in how else how),
+            **({"companies": len(pkgs)} if len(pkgs) > 1 else {}),
+        })
+    name = (pkgs[0][1].zip_name if len(pkgs) == 1 else
+            handover.batch_zip_name([pkg for _, pkg in pkgs], datetime.now(_SHANGHAI_TZ).date()))
     return FileResponse(
         tmp, media_type=handover.MEDIA_TYPE,
-        headers={"Content-Disposition": attachment_disposition(pkg.zip_name), "Cache-Control": "no-store"},
+        headers={"Content-Disposition": attachment_disposition(name), "Cache-Control": "no-store"},
         background=BackgroundTask(Path(tmp).unlink, missing_ok=True),
     )

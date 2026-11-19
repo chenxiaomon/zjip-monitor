@@ -7,10 +7,14 @@ document on the server, whatever the laptop's database says.
 
 Notices are the irreplaceable history — the platform serves only the current
 one — so the laptop's verified copy is their record and the server may let
-old ones go. Current certificates stay on the server whatever their age: the
-console's 交付包 (web/services/handover.py) hands them out, and the platform
-can always issue them again anyway. Older rounds (dated names) are history
-like any superseded notice.
+old ones go. Current certificates are what the console's 交付包
+(web/services/handover.py) hands out, so they stay longer: until the record
+has sat untouched for archive.release_certificates_after_days (default 180,
+twice the notices' 90). Past that the package was long delivered, the
+laptop's `python -m archive bundle` still has them, and the platform can
+issue them again anyway — while on the server they are two thirds of the
+attachment bytes. Older rounds (dated names) are history like any
+superseded notice.
 """
 
 from __future__ import annotations
@@ -55,16 +59,17 @@ def releasable(
     updated_at: datetime | None,
     *,
     days: int,
+    cert_days: int,
     now: datetime | None = None,
 ) -> bool:
     """True when the file is history rather than working material: an older
-    round the platform no longer serves, or a notice of a finished record the
-    platform has not touched for `days` days. A current certificate never is."""
+    round the platform no longer serves, or a document of a finished record
+    the platform has not touched for `days` days — `cert_days` for a current
+    certificate."""
     if is_superseded(filename):
         return True
-    if is_certificate(filename):
-        return False
     if status_code not in TERMINAL_STATUSES or updated_at is None:
         return False
+    wait = cert_days if is_certificate(filename) else days
     now = now or datetime.now(timezone.utc)
-    return (now - updated_at).total_seconds() >= days * 86400
+    return (now - updated_at).total_seconds() >= wait * 86400

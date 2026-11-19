@@ -29,7 +29,9 @@ def main(argv: list[str] | None = None) -> int:
     p_rel = sub.add_parser("release", help="把已归档的旧文件从服务器删除以腾空间（默认只预演）")
     p_rel.add_argument("--yes", action="store_true", help="正式释放（不加就只预演，服务器上什么都不删）")
     p_rel.add_argument("--days", type=int, default=release.DEFAULT_DAYS,
-                       help=f"办结后多少天没有变动才释放（默认 {release.DEFAULT_DAYS}；服务器按自己的配置再核一遍）")
+                       help=f"通知书：办结后多少天没有变动才释放（默认 {release.DEFAULT_DAYS}；服务器按自己的配置再核一遍）")
+    p_rel.add_argument("--cert-days", type=int, default=release.DEFAULT_CERT_DAYS,
+                       help=f"证书：办结后多少天没有变动才释放（默认 {release.DEFAULT_CERT_DAYS}；服务器同样再核一遍）")
     p_rel.add_argument("--company", metavar="企业目录", help="只处理这一家（先小范围试）")
     sub.add_parser("push-facts", help="把已释放通知书的解析结果（证书有效期等）送到服务器，供控制台显示")
     p_res = sub.add_parser("restore", help="把某条申请已释放的文件送回服务器；--certificates 送回全部已释放的证书")
@@ -86,7 +88,8 @@ def _run(args, cfg) -> int:
     if args.command == "pull":
         return pull.run(cfg, reports=args.reports)
     if args.command == "release":
-        return release.run_release(cfg, yes=args.yes, days=args.days, company=args.company)
+        return release.run_release(cfg, yes=args.yes, days=args.days, cert_days=args.cert_days,
+                                   company=args.company)
     if args.command == "restore":
         if args.certificates:
             return release.run_restore_certificates(cfg, company=args.company, yes=args.yes)

@@ -60,7 +60,8 @@ def server(tmp_path, monkeypatch, isolated_control_dir):
 
 def _release(files, paths, **kw):
     items = [{"path": p, "sha256": files.get(p, "0" * 64)} for p in paths]
-    return archive_release.release(items, dry_run=kw.get("dry_run", False), days=90, now=NOW)
+    return archive_release.release(items, dry_run=kw.get("dry_run", False), days=90,
+                                   cert_days=kw.get("cert_days", 180), now=NOW)
 
 
 NOTICE = "甲公司/DONE/《登记公告通知书》.pdf"
@@ -94,15 +95,22 @@ def test_releases_a_verified_file_of_a_finished_record(server):
 
 
 @pytest.mark.parametrize("name", ["国家局登记证书.pdf", "浙江省登记证书.pdf"])
-def test_a_current_certificate_stays_on_the_server(server, name):
+def test_a_current_certificate_waits_its_own_days(server, name):
     """The console's 交付包 hands certificates out, so the server keeps them
-    whatever the laptop sends — even for a record finished long ago."""
+    longer than notices, by its own settings whatever the laptop sends. DONE
+    was finished 200 days ago: past 180, not past 365."""
     att, files = server
-    result = _release(files, [f"甲公司/DONE/{name}"])
-    assert result["released"] == []
-    assert result["skipped"] == [{"path": f"甲公司/DONE/{name}", "reason": "证书保留在服务器（交付包要用）"}]
-    assert (att / "甲公司/DONE" / name).exists()
+    path = f"甲公司/DONE/{name}"
+    kept = _release(files, [path], cert_days=365)
+    assert kept["released"] == []
+    assert kept["skipped"] == [{"path": path, "reason": "按服务器快照不满足释放条件"}]
+    assert (att / path).exists()
     assert "archived" not in json.loads((att / "甲公司/DONE/.sync.json").read_text(encoding="utf-8"))
+
+    gone = _release(files, [path])
+    assert gone["released"] == [path] and not (att / path).exists()
+    manifest = json.loads((att / "甲公司/DONE/.sync.json").read_text(encoding="utf-8"))
+    assert name in manifest["archived"] and name not in manifest["files"]
 
 
 def test_an_older_certificate_round_may_go(server):
@@ -230,8 +238,8 @@ def test_a_release_is_logged_once_per_record(server, _isolated_audit, monkeypatc
     ]
     done = next(e for e in lines if e["target"] == "DONE")
     assert done["actor"] == "本机归档" and done["via"] == "ssh" and done["ip"] == "198.51.100.7"
-    # the certificate in the same batch stayed: one file, the notice
-    assert done["detail"]["files"] == 1 and done["detail"]["bytes"] == len(b"notice")
+    # one line for DONE's two files, the certificate and the notice
+    assert done["detail"]["files"] == 2 and done["detail"]["bytes"] == len(b"cert") + len(b"notice")
 
 
 def test_a_dry_run_logs_nothing(server, _isolated_audit):

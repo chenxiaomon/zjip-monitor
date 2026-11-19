@@ -165,6 +165,9 @@ class ArchiveSettings:
     # for this many days may have its files released from the server once
     # the laptop holds a verified copy. Older rounds are released regardless.
     release_after_terminal_days: int = 90
+    # The same for a record's current certificates, which stay longer: the
+    # console's 交付包 hands them out from the server.
+    release_certificates_after_days: int = 180
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +233,7 @@ _RULES: dict[str, dict[str, _Rule]] = {
     "archive": {
         # 0 is meaningful: "as soon as the record is finished".
         "release_after_terminal_days": (_INT, 0, False),
+        "release_certificates_after_days": (_INT, 0, False),
     },
 }
 

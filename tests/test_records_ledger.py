@@ -278,5 +278,7 @@ def test_records_page_offers_the_ledger_once_a_company_is_picked(world, web_clie
     login_as(web_client, *OPERATOR_A)
     picked = web_client.get("/records?account=ua1").text
     assert 'href="/records/ledger.xlsx?account=ua1"' in picked
+    # 全部账号：台账按钮藏着，勾了记录（可以跨几家企业）页面脚本再显示
     everyone = web_client.get("/records").text
-    assert "/records/ledger.xlsx" not in everyone and "选一家企业可导出台账" in everyone
+    assert 'href="/records/ledger.xlsx" data-export data-pick-only hidden' in everyone
+    assert "选一家企业或勾选记录，可导出台账和交付包" in everyone
