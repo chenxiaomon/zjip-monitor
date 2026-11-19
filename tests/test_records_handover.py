@@ -4,6 +4,7 @@
 """
 
 import json
+import re
 import zipfile
 from io import BytesIO
 
@@ -130,10 +131,13 @@ def test_records_page_offers_the_package_once_a_company_is_picked(world, web_cli
     picked = web_client.get("/records?account=ua1").text
     assert 'href="/records/handover.zip?account=ua1"' in picked
     assert "交付包（尚有 1 条在审）" in picked
+    # 这家没有登记成功的、或者全部账号：按钮在但藏着——勾了（别家也算）登记成功的
+    # 记录时，页面脚本再显示
     nothing_registered = web_client.get("/records?account=ua2").text
-    assert "/records/handover.zip" not in nothing_registered
+    assert re.search(r'href="/records/handover.zip\?account=ua2"[^>]*data-registered="0"[^>]*hidden',
+                     nothing_registered)
     everyone = web_client.get("/records").text
-    assert "/records/handover.zip" not in everyone
+    assert re.search(r'href="/records/handover.zip"[^>]*data-registered="0" data-open="0" hidden', everyone)
 
 
 def test_a_finished_company_says_just_package(fake_accounts, isolated_snapshots, web_client, login_as):

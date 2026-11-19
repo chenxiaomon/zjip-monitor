@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import io
 import re
+import zipfile
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
@@ -122,6 +123,33 @@ def safe_file_part(name: str) -> str:
 def filename(company: str, on: date) -> str:
     """数据知识产权登记进度台账_<公司>_<YYYYMMDD>.xlsx；文件名里不能有的字符换成 _。"""
     return f"数据知识产权登记进度台账_{safe_file_part(company)}_{on:%Y%m%d}.xlsx"
+
+
+ZIP_MEDIA_TYPE = "application/zip"
+
+
+def batch_filename(first_company: str, count: int, on: date) -> str:
+    """勾选跨几家企业时：数据知识产权登记进度台账_<第一家>等N家_<YYYYMMDD>.zip"""
+    return f"数据知识产权登记进度台账_{safe_file_part(first_company)}等{count}家_{on:%Y%m%d}.zip"
+
+
+def zip_of(books: list[tuple[str, bytes]]) -> bytes:
+    """几份台账打成一个 zip，每家一份，名字就是单独导出时的名字。存储不压缩：
+    xlsx 本身就是压缩过的。两家的名字只差文件名里不能有的字符时，后一份加 _2。"""
+    buf = io.BytesIO()
+    seen: set[str] = set()
+    with zipfile.ZipFile(buf, "w") as z:
+        for name, body in books:
+            stem, dot, ext = name.rpartition(".")
+            unique, n = name, 2
+            while unique in seen:
+                unique, n = f"{stem}_{n}{dot}{ext}", n + 1
+            seen.add(unique)
+            info = zipfile.ZipInfo(unique, date_time=datetime.now(_SHANGHAI).timetuple()[:6])
+            info.compress_type = zipfile.ZIP_STORED
+            info.external_attr = 0o100644 << 16
+            z.writestr(info, body)
+    return buf.getvalue()
 
 
 # --- data ----------------------------------------------------------------------

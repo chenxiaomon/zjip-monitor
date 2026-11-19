@@ -351,11 +351,24 @@ def write_zip(pkg: Package, dest: Path) -> int:
     """Write the package to dest; returns its size. Entries, their order and
     their times depend only on the package, so the server and the laptop
     produce the same bytes from the same snapshot and files."""
-    when = pkg.as_of.timetuple()[:6] if pkg.as_of and pkg.as_of.year >= 1980 else _ZIP_EPOCH
-    entries = [(f"{pkg.stem}/{pkg.xlsx_name}", None)]
-    entries += sorted((f"{pkg.stem}/{c.arcname}", c.source) for c in pkg.present)
+    return write_batch_zip([pkg], dest)
+
+
+def write_batch_zip(pkgs: list[Package], dest: Path) -> int:
+    """Several packages in one zip, one top folder each — the console's 交付包
+    of records ticked across companies. One package is write_zip's bytes."""
     with zipfile.ZipFile(dest, "w", allowZip64=True) as z:
-        for arcname, source in entries:
-            data = build_xlsx(pkg) if source is None else source.read_bytes()
-            z.writestr(_entry(arcname, when), data)
+        for pkg in pkgs:
+            when = pkg.as_of.timetuple()[:6] if pkg.as_of and pkg.as_of.year >= 1980 else _ZIP_EPOCH
+            entries = [(f"{pkg.stem}/{pkg.xlsx_name}", None)]
+            entries += sorted((f"{pkg.stem}/{c.arcname}", c.source) for c in pkg.present)
+            for arcname, source in entries:
+                data = build_xlsx(pkg) if source is None else source.read_bytes()
+                z.writestr(_entry(arcname, when), data)
     return dest.stat().st_size
+
+
+def batch_zip_name(pkgs: list[Package], on) -> str:
+    """数据知识产权登记交付包_<第一家>等N家_<YYYYMMDD>.zip — each folder inside
+    keeps its own package's name and date."""
+    return f"数据知识产权登记交付包_{ledger.safe_file_part(pkgs[0].company)}等{len(pkgs)}家_{on:%Y%m%d}.zip"

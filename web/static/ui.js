@@ -208,9 +208,10 @@ function togglePassword(btn) {
 })();
 
 // 登记记录页的勾选：勾了哪几条，「导出 CSV / 导出台账 / 交付包」就只含哪几条，
-// 不勾就按当前筛选。勾选按企业记在 sessionStorage（翻页、换筛选、排序都还在，
-// 关掉标签页就清掉）；存不了时只记在这一页里。每条存「是否登记成功、是否在审」，
-// 别的页上勾的也能算进交付包按钮的条数。
+// 不勾就按当前筛选。勾选记在 sessionStorage，不分企业（翻页、换筛选、换企业、排序
+// 都还在，关掉标签页就清掉）；存不了时只记在这一页里。每条存「哪家企业、是否登记
+// 成功、是否在审」，别的页、别的企业上勾的也能算进按钮上的条数和家数。勾了几家
+// 企业时，台账每家一份、交付包每家一个文件夹，都打成一个 zip（服务器端）。
 (function () {
   var memory = {};
   function box() { return document.getElementById('records-table-box'); }
@@ -228,7 +229,14 @@ function togglePassword(btn) {
       else sessionStorage.removeItem(key);
     } catch (e) { /* 忽略 */ }
   }
-  function facts(cb) { return { r: cb.dataset.reg === '1' ? 1 : 0, o: cb.dataset.open === '1' ? 1 : 0 }; }
+  function facts(cb) {
+    return { u: cb.dataset.user || '', r: cb.dataset.reg === '1' ? 1 : 0, o: cb.dataset.open === '1' ? 1 : 0 };
+  }
+  function companies(picked, regs, onlyRegistered) {  // 勾选涉及几家企业
+    var seen = {};
+    regs.forEach(function (r) { if (!onlyRegistered || picked[r].r) seen[picked[r].u || ''] = 1; });
+    return Object.keys(seen).length;
+  }
   function exportHref(base, regs) {
     if (!regs.length) return base;
     return base + (base.indexOf('?') < 0 ? '?' : '&') +
@@ -244,7 +252,7 @@ function togglePassword(btn) {
       if (cb.checked) picked[cb.value] = facts(cb);  // 状态可能变了：以页面上的为准
     });
     save(key, picked);
-    var regs = Object.keys(picked).sort(), n = regs.length;
+    var regs = Object.keys(picked).sort(), n = regs.length, firms = companies(picked, regs, false);
 
     var page = document.getElementById('pick-page');
     if (page) {
@@ -257,13 +265,19 @@ function togglePassword(btn) {
       note.hidden = !n;
       var count = note.querySelector('[data-pick-count]');
       if (count) count.textContent = n;
+      var firmsNote = note.querySelector('[data-pick-companies]');
+      if (firmsNote) firmsNote.textContent = firms > 1 ? '，涉及 ' + firms + ' 家企业' : '';
     }
     Array.prototype.forEach.call(b.querySelectorAll('a[data-export]'), function (a) {
       if (!a.dataset.base) a.dataset.base = a.getAttribute('href');
       a.setAttribute('href', exportHref(a.dataset.base, regs));
     });
+    // 「全部账号」下：台账只在勾了记录时出现，提示反过来
+    Array.prototype.forEach.call(b.querySelectorAll('[data-pick-only]'), function (el) { el.hidden = !n; });
+    Array.prototype.forEach.call(b.querySelectorAll('[data-pick-hint]'), function (el) { el.hidden = !!n; });
     Array.prototype.forEach.call(b.querySelectorAll('[data-pick-label]'), function (el) {
-      el.textContent = el.dataset.pickLabel + (n ? '（勾选的 ' + n + ' 条）' : '');
+      el.textContent = el.dataset.pickLabel +
+        (n ? '（勾选的 ' + n + ' 条' + (firms > 1 ? '，' + firms + ' 家各一份' : '') + '）' : '');
     });
     var ho = document.getElementById('handover-link');
     if (ho) {
@@ -277,8 +291,10 @@ function togglePassword(btn) {
       }
       ho.hidden = !reg;
       if (label) {
+        var regFirms = n ? companies(picked, regs, true) : 0;
         label.textContent = '交付包' + (n
-          ? '（勾选的 ' + reg + ' 条登记成功' + (open ? '，' + open + ' 条在审不列入' : '') + '）'
+          ? '（勾选的 ' + reg + ' 条登记成功' + (regFirms > 1 ? '，' + regFirms + ' 家' : '') +
+            (open ? '，' + open + ' 条在审不列入' : '') + '）'
           : (open ? '（尚有 ' + open + ' 条在审）' : ''));
       }
     }

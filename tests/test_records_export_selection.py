@@ -174,8 +174,9 @@ def test_page_links_carry_the_filters_and_rows_carry_tick_boxes(world, web_clien
     assert f'href="/records/ledger.xlsx?{query}"' in page
     assert f'href="/records/handover.zip?{query}"' in page
     assert 'data-registered="1" data-open="1"' in page and "交付包（尚有 1 条在审）" in page
-    assert 'data-pick-key="pick:ua1"' in page and 'id="pick-page"' in page
-    assert re.search(r'class="rec-pick" value="R4"[^>]*data-reg="1"\s+data-open="0"', page)
+    # one store of ticks for every company: they are kept across the chips
+    assert 'data-pick-key="pick"' in page and 'id="pick-page"' in page
+    assert re.search(r'class="rec-pick" value="R4"[^>]*data-user="ua1"\s+data-reg="1"\s+data-open="0"', page)
     assert re.search(r'class="rec-pick" value="R2"[^>]*data-reg="0"\s+data-open="1"', page)
     assert 'value="R1"' not in page  # 筛掉的不出现
 
@@ -183,5 +184,10 @@ def test_page_links_carry_the_filters_and_rows_carry_tick_boxes(world, web_clien
     in_review = web_client.get("/records?account=ua1&status=12").text
     assert 'data-registered="0" data-open="1" hidden' in in_review
 
+    # 全部账号：照样能勾（可以跨几家企业）；台账、交付包藏着，勾了记录页面脚本再显示
     everyone = web_client.get("/records").text
-    assert "rec-pick" not in everyone and "pick-page" not in everyone and "data-pick-key" not in everyone
+    assert 'data-pick-key="pick"' in everyone and 'id="pick-page"' in everyone
+    assert re.search(r'class="rec-pick" value="R4"[^>]*data-user="ua1"', everyone)
+    assert re.search(r'href="/records/ledger.xlsx" data-export data-pick-only hidden', everyone)
+    assert 'data-registered="0" data-open="0" hidden' in everyone
+    assert "选一家企业或勾选记录，可导出台账和交付包" in everyone
