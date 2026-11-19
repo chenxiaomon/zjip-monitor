@@ -316,7 +316,7 @@ def api_records(
     outside = 0
     needle = (q or "").strip().lower()
     me = _me(request)
-    rows: list[dict] = []
+    rows: list[tuple[dict, object, dict]] = []  # (JSON row, account, platform record)
 
     for acc, snap in _shown_pairs(request):
         if snap is None:
@@ -332,7 +332,7 @@ def api_records(
                 continue
             code = int_or_none(r.get("dataRegAuditStatus"))
             reg_no = r.get("dataRegNo", "")
-            rows.append({
+            rows.append(({
                 "company": snap_company,
                 "reg_no": reg_no,
                 "name": r.get("dataRegName", ""),
@@ -341,20 +341,29 @@ def api_records(
                 "status_label": decode_status(code),
                 "detail_url": detail_url(reg_no) if reg_no else "",
                 "mine": bool(me and acc.owner == me),
-                # 待补正 → the notice's deadline; 登记成功 → expiry inside the renewal window
-                "due": _due_json(todo.correction_for(acc, r)) if reg_no else None,
-                "cert": _cert_json(todo.renewal_for(acc, r)) if reg_no else None,
-            })
+            }, acc, r))
 
-    rows.sort(key=lambda r: r["apply_date"], reverse=True)
+    rows.sort(key=lambda t: t[0]["apply_date"], reverse=True)
+
+    def with_deadlines(chosen: list[tuple[dict, object, dict]]) -> list[dict]:
+        """due / cert read each record's .sync.json: only for the rows sent."""
+        out = []
+        for row, acc, r in chosen:
+            reg_no = row["reg_no"]
+            # 待补正 → the notice's deadline; 登记成功 → expiry inside the renewal window
+            row["due"] = _due_json(todo.correction_for(acc, r)) if reg_no else None
+            row["cert"] = _cert_json(todo.renewal_for(acc, r)) if reg_no else None
+            out.append(row)
+        return out
+
     # Only when years are being left out: the plain call keeps its old shape.
     years = {} if years_shown.is_all else {"outside": outside, "year_label": years_shown.label}
     if page is None:
-        return JSONResponse({"records": rows, "total": len(rows), **years})
+        return JSONResponse({"records": with_deadlines(rows), "total": len(rows), **years})
     pages = max(1, (len(rows) + PAGE_SIZE - 1) // PAGE_SIZE)
     current = min(_page_number(page), pages)
     return JSONResponse({
-        "records": rows[(current - 1) * PAGE_SIZE: current * PAGE_SIZE],
+        "records": with_deadlines(rows[(current - 1) * PAGE_SIZE: current * PAGE_SIZE]),
         "total": len(rows), "page": current, "pages": pages, **years,
     })
 

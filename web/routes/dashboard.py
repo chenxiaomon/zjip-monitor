@@ -238,6 +238,9 @@ def _dashboard_ctx(request: Request, year: str | None = None, range_days: int = 
         for u, ss in all_status.items()
         if isinstance(ss, dict) and (allowed is None or u in allowed)
     ]
+    # Every record's notice facts are read here; the banner reuses this when
+    # it counts the same accounts (全部, or nothing of one's own).
+    todo_data = todo.build(accounts)
 
     return {
         "account_count": len(accounts),
@@ -257,8 +260,8 @@ def _dashboard_ctx(request: Request, year: str | None = None, range_days: int = 
         "login_alerts": login_alerts,
         # Scoped to what this user may see: a group user must never learn from
         # the banner that another group's company is failing.
-        "ops_alerts": ops_alerts.collect_alerts(allowed_usernames(request)),
-        "todo": todo.build(accounts),
+        "ops_alerts": ops_alerts.collect_alerts(allowed_usernames(request), todo_of=(accounts, todo_data)),
+        "todo": todo_data,
         "events": events,
         "run": _run_ctx(request),
         "years": sorted(years, reverse=True),

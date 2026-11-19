@@ -268,13 +268,17 @@ def _check_dormant_overdue(entries: dict[str, dict], accounts: list[Account],
     )
 
 
-def _check_correction_due(accounts: list[Account], warn_days: int) -> Alert | None:
+def _check_correction_due(accounts: list[Account], warn_days: int,
+                          corrections: list[dict] | None = None) -> Alert | None:
     """8. 补正即将到期 — settings.yaml → ops_alerts.correction_warn_days.
 
     The deadline comes from the 补正通知书 itself (src/todo); a record whose
-    notice was never parsed has no deadline and cannot raise this alert."""
+    notice was never parsed has no deadline and cannot raise this alert.
+    `corrections`: todo.build(accounts)["corrections"] when the caller has it."""
+    if corrections is None:
+        corrections = todo.build(accounts)["corrections"]
     due = [
-        c for c in todo.build(accounts)["corrections"]
+        c for c in corrections
         if c["days_left"] is not None and c["days_left"] <= warn_days
     ]
     if not due:
@@ -437,13 +441,22 @@ def _check_company_collision(usernames: set[str] | None) -> Alert | None:
 # Collection
 # ---------------------------------------------------------------------------
 
-def collect_alerts(usernames: set[str] | None = None) -> list[Alert]:
+def collect_alerts(
+    usernames: set[str] | None = None,
+    *,
+    todo_of: tuple[list[Account], dict] | None = None,
+) -> list[Alert]:
     """Every ops alert currently standing, most severe first.
 
     `usernames=None` is the admin view. Given a set, only those accounts are
     counted — a group user must never learn from the banner that another
     group's company failed. System-wide alerts (disk, wedge, pause) carry no
     account name and stay visible to everyone.
+
+    `todo_of` is 待办 the caller already built, (accounts, todo.build(accounts)):
+    the dashboard builds it for its own card, and when those are exactly the
+    accounts counted here the banner reuses it instead of reading every
+    record's notice facts a second time.
     """
     entries = _safe_read(lambda: _visible_entries(usernames), {}, "账号状态")
     settings = _safe_read(ops_alert_settings, OpsAlertSettings(), "ops_alerts 配置")
@@ -453,12 +466,15 @@ def collect_alerts(usernames: set[str] | None = None) -> list[Alert]:
         lambda: [a for a in load_accounts() if usernames is None or a.username in usernames],
         [], "账号配置",
     )
+    corrections = None
+    if todo_of is not None and {a.username for a in todo_of[0]} == {a.username for a in accounts}:
+        corrections = todo_of[1].get("corrections")
 
     checks: tuple[Callable[[], Alert | None], ...] = (
         lambda: _check_failed_accounts(entries, settings.min_failed_accounts),
         lambda: _check_no_recent_success(entries, settings.stale_hours, run.dormant_sweep_days),
         lambda: _check_dormant_overdue(entries, accounts, run.dormant_sweep_days),
-        lambda: _check_correction_due(accounts, settings.correction_warn_days),
+        lambda: _check_correction_due(accounts, settings.correction_warn_days, corrections),
         lambda: _check_disk_low(stats),
         lambda: _check_attachments_over_limit(stats),
         _check_run_wedged,
